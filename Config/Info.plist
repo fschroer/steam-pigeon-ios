@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Partial plist: GENERATE_INFOPLIST_FILE is still YES, and Xcode merges the
+	     INFOPLIST_KEY_* build settings on top of this file. Only keys Xcode will
+	     NOT auto-promote belong here.
+
+	     UIBackgroundModes is one of them. It is required by ADR "iOS port —
+	     CoreBluetooth and platform parity": background operation is
+	     bluetooth-central + CoreBluetooth State Preservation & Restoration,
+	     since iOS has no equivalent of Android's foreground service. This is
+	     viable only because the receiver advertises FFE0 — iOS background
+	     scanning requires a service filter. -->
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>bluetooth-central</string>
+	</array>
+</dict>
+</plist>
