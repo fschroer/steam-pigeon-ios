@@ -24,7 +24,6 @@ import Foundation
 /// is never authorized) or open — both bad.
 enum LocatorAuth {
 
-    private static let poly: UInt16 = 0xA001
     private static let fnvOffsetBasis: UInt32 = 0x811c_9dc5
     private static let fnvPrime: UInt32 = 0x0100_0193
 
@@ -45,17 +44,6 @@ enum LocatorAuth {
         return key == 0 ? 1 : key
     }
 
-    private static func crc16(seed: UInt16, data: [UInt8], length: Int) -> UInt16 {
-        var crc = seed
-        for i in 0..<length {
-            crc ^= UInt16(data[i])
-            for _ in 0..<8 {
-                crc = (crc & 1) != 0 ? (crc >> 1) ^ poly : crc >> 1
-            }
-        }
-        return crc
-    }
-
     /// Recompute the expected `auth_tag` over a received `frame` whose base struct is
     /// `baseSize` bytes, using `passwordKey`. Returns nil if the frame is too short to
     /// contain the base struct — a truncated frame must fail closed rather than
@@ -70,8 +58,8 @@ enum LocatorAuth {
         region[4] = 0                                            // packet_header.crc,
         region[5] = 0                                            // rewritten by the receiver
         for i in (baseSize - 4)..<baseSize { region[i] = 0 }      // auth_tag (last 4 bytes)
-        let lo = crc16(seed: UInt16(truncatingIfNeeded: passwordKey), data: region, length: baseSize)
-        let hi = crc16(seed: UInt16(truncatingIfNeeded: passwordKey >> 16), data: region, length: baseSize)
+        let lo = Crc16.accumulate(UInt16(truncatingIfNeeded: passwordKey), region)
+        let hi = Crc16.accumulate(UInt16(truncatingIfNeeded: passwordKey >> 16), region)
         return (UInt32(hi) << 16) | UInt32(lo)
     }
 

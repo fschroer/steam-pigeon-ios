@@ -18,4 +18,24 @@ enum FlightDataSizes {
     /// splices in `target_locator_id`, so the firmware sees
     /// `sizeof(FlightDataAck) == 46`.
     static let flightDataAckSize = 42
+
+    /// Transfer window: 256 packets, so the ack bitmap is 32 bytes.
+    static let maxPackets = 256
+
+    /// PacketHeader 6 + record 2 + packet_index 2 + packet_count 2 + total_samples 4.
+    static let flightDataHeaderSize = WireProtocol.headerSize + 2 + 2 + 2 + 4   // 16
+
+    /// First sample in a packet is stored whole; the rest are deltas.
+    static let compressedHeaderSize = 4 + 4 + 12 + 12 + 8 + 8                   // 48
+    static let compressedDeltaSize  = 2 + 2 + 6 + 6 + 4 + 4                     // 24
+    static let samplesPerPacket = 8
+
+    /// Compressed payload capacity the locator reserves per packet (C++
+    /// `kPayloadSize`, `static_assert`ed at 239).
+    static let flightDataPayloadCapacity = 239
+
+    /// A parity frame always carries the full payload buffer, so unlike a data
+    /// packet its on-wire size is fixed. 16 + 239 = 255 =
+    /// `sizeof(FlightDataPacket)`.
+    static let flightDataParitySize = flightDataHeaderSize + flightDataPayloadCapacity
 }

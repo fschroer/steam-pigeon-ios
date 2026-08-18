@@ -68,6 +68,9 @@ enum WireProtocol {
     /// Locator: `sizeof(FlightEventsMessage) == 66`.
     static let flightEventsPayloadSize = 60
 
+    /// Countdown seconds. Locator: `sizeof(DeploymentTestCountdownMessage) == 7`.
+    static let deploymentTestPayloadSize = 1
+
     /// Maximum LoRa frame on the app side. The firmware pins
     /// `sizeof(FlightDataPacket) == 255`; the app buffers 256.
     static let maxPacketSize = 256
