@@ -1,0 +1,43 @@
+# --- macOS ---
+.DS_Store
+
+# --- Xcode: user/per-machine state ---
+xcuserdata/
+*.xcuserstate
+*.xcuserdatad/
+DerivedData/
+build/
+*.moved-aside
+*.pbxuser
+!default.pbxuser
+*.perspectivev3
+!default.perspectivev3
+
+# Xcode 9+ workspace/scheme noise. Shared schemes live under
+# xcshareddata/ and ARE tracked — a scheme is how the app builds.
+*.xcscmblueprint
+*.xccheckout
+
+# --- Swift Package Manager ---
+.build/
+.swiftpm/xcode/package.xcworkspace/xcuserdata/
+Packages/
+# Package.resolved IS tracked: it pins dependency versions (MapLibre et al.)
+# so a fresh clone builds against the same code.
+
+# --- CocoaPods / Carthage (only if ever adopted) ---
+Pods/
+Carthage/Build/
+
+# --- Secrets ---
+# Same rule as the Android app's gitignored secrets.properties: the Mapbox
+# PUBLIC (pk.) token lives here and is never committed; a SECRET (sk.) token
+# must never be in the tree at all. Scan `git diff --cached` for sk./pk./AIza
+# before every commit — a tracked gradle.properties once nearly leaked one.
+Secrets.xcconfig
+*.secrets.xcconfig
+
+# --- Provisioning / signing ---
+*.mobileprovision
+*.p12
+*.cer
