@@ -31,6 +31,15 @@ struct LocatorStatsPanel: View {
     /// Bounds the panel may be dragged within — the map's own size.
     let containerSize: CGSize
 
+    /// Bump to send the panel home.
+    ///
+    /// A deliberate safety net rather than a feature. This panel has now shipped
+    /// twice with a drag that let it leave the screen, and the failure is
+    /// unrecoverable without relaunching because the panel IS the telemetry. No unit
+    /// test can catch "the SwiftUI measurement did not fire", so the fallback is an
+    /// escape hatch that does not depend on the measurement being right.
+    var homeToken: Int = 0
+
     @State private var offset: CGSize = .zero
     @State private var accumulated: CGSize = .zero
     @State private var panelSize: CGSize = .zero
@@ -70,10 +79,11 @@ struct LocatorStatsPanel: View {
         .clipShape(RoundedRectangle(cornerRadius: 16))
         .background(                       // measure the panel so it can be clamped
             GeometryReader { proxy in
-                Color.clear.preference(key: PanelSizeKey.self, value: proxy.size)
+                Color.clear
+                    .onAppear { panelSize = proxy.size }
+                    .onChange(of: proxy.size) { panelSize = $0 }
             }
         )
-        .onPreferenceChange(PanelSizeKey.self) { panelSize = $0 }
         .offset(x: offset.width, y: offset.height)
         .gesture(
             DragGesture()
@@ -84,6 +94,10 @@ struct LocatorStatsPanel: View {
                 .onEnded { _ in accumulated = offset }
         )
         .onTapGesture { onTapSpeak?() }
+        .onChange(of: homeToken) { _ in
+            offset = .zero
+            accumulated = .zero
+        }
     }
 
     private func row(_ text: String) -> some View {
@@ -146,11 +160,6 @@ enum PanelDragBounds {
         return CGSize(width: proposed.width.clamped(to: minX...0),
                       height: proposed.height.clamped(to: minY...0))
     }
-}
-
-private struct PanelSizeKey: PreferenceKey {
-    static var defaultValue: CGSize = .zero
-    static func reduce(value: inout CGSize, nextValue: () -> CGSize) { value = nextValue() }
 }
 
 extension Comparable {

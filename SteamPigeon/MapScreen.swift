@@ -57,6 +57,9 @@ struct MapScreen: View {
     // MARK: - Overlays
 
     /// Bottom-right by default, dragged from there, clamped to the container.
+    /// Re-centre also sends the telemetry panel home. The two belong together: both
+    /// mean "put things back where I can see them", and it guarantees the panel is
+    /// always recoverable even if its drag bounds misbehave.
     private func statsPanel(in container: CGSize) -> some View {
         let p = model.prelaunch
         let t = model.telemetry
@@ -84,7 +87,8 @@ struct MapScreen: View {
                         }
                     } ?? [],
                     onTapSpeak: nil,
-                    containerSize: container
+                    containerSize: container,
+                    homeToken: recentre
                 )
             }
         }
@@ -114,7 +118,7 @@ struct MapScreen: View {
                     Image(systemName: "scope").font(.title2).padding(10)
                 }
                 .background(.ultraThinMaterial, in: Circle())
-                .accessibilityLabel("Re-centre on rocket and phone")
+                .accessibilityLabel("Re-centre map and return the telemetry panel")
                 Spacer()
             }
         }

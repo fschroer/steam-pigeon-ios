@@ -25,7 +25,13 @@ struct MapStatusPanel: View {
     /// The ADR-0019 verdict, when there is one. Prose, not a column entry.
     let linkNote: (text: String, color: Color)?
 
-    private let iconGutter: CGFloat = 26
+    // Android's metrics, not approximations of them (FlightMapScreen.kt:2142-2146).
+    // The name column is FIXED, not flexible: a flexible one grows into the icon
+    // gutter as soon as a name is long, which is exactly the crowding this avoids.
+    private let iconSize: CGFloat = 20
+    private let iconGutter: CGFloat = 40      // wide enough for rocket icon + satellite count
+    private let nameWidth: CGFloat = 190      // fits a 20-character device name at body size
+    private let batteryGutter: CGFloat = 24
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -50,13 +56,15 @@ struct MapStatusPanel: View {
     private var receiverRow: some View {
         HStack(spacing: 4) {
             Image(systemName: "dot.radiowaves.left.and.right")
+                .font(.system(size: iconSize * 0.8))
                 .frame(width: iconGutter, alignment: .leading)
                 .foregroundStyle(connectionState == .ready ? SPColor.primary : SPColor.outline)
             Text(receiverText)
                 .font(SPFont.telemetry)
                 .foregroundStyle(SPColor.onBackground)
                 .lineLimit(1)
-            Spacer(minLength: 4)
+                .truncationMode(.tail)
+                .frame(width: nameWidth, alignment: .leading)
             battery(receiverBatteryMv)
         }
     }
@@ -76,7 +84,8 @@ struct MapStatusPanel: View {
                 .font(SPFont.telemetry)
                 .foregroundStyle(armed ? SPColor.error : SPColor.onBackground)
                 .lineLimit(1)
-            Spacer(minLength: 4)
+                .truncationMode(.tail)
+                .frame(width: nameWidth, alignment: .leading)
             battery(locatorBatteryMv)
         }
     }
@@ -84,6 +93,7 @@ struct MapStatusPanel: View {
     private var linkRow: some View {
         HStack(spacing: 4) {
             Image(systemName: "cellularbars")
+                .font(.system(size: iconSize * 0.8))
                 .frame(width: iconGutter, alignment: .leading)
                 .foregroundStyle(rssi.map { RssiBand.color($0) } ?? SPColor.outline)
             if let r = rssi {
@@ -96,8 +106,8 @@ struct MapStatusPanel: View {
                     .font(SPFont.telemetry)
                     .foregroundStyle(SnrBand.color(s))
             }
-            Spacer(minLength: 4)
         }
+        .frame(width: iconGutter + nameWidth + batteryGutter, alignment: .leading)
     }
 
     /// Battery as a filled glyph plus volts, mirroring Android's battery icon column.
@@ -106,6 +116,7 @@ struct MapStatusPanel: View {
             let volts = Double(mv) / 1000
             HStack(spacing: 2) {
                 Image(systemName: batterySymbol(volts))
+                    .font(.system(size: iconSize * 0.8))
                     .foregroundStyle(volts < 3.5 ? SPColor.error : SPColor.onSurfaceVariant)
                 Text(String(format: "%.2fV", volts))
                     .font(SPFont.labelSmall)
