@@ -59,13 +59,17 @@ struct PacketFramer {
         /// What we computed over `claimedLength` bytes.
         let computedCrc: UInt16
 
-        /// Does the CRC match if the frame is one byte shorter or longer? If so the
-        /// disagreement is a LENGTH error on our side, not corruption on the wire —
-        /// and those need opposite fixes.
+        /// The length at which the sender's CRC actually verifies, if any.
+        ///
+        /// Scans every plausible prefix, not just a couple either side. A match well
+        /// short of the expected length means the sender computed its CRC over a
+        /// SHORTER message than we expect — which is not corruption at all, but a
+        /// wire-format version difference: the device is running firmware from before
+        /// a field was added. Those need completely different responses, and the
+        /// narrow ±2 scan could not tell them apart.
         var matchesAtOtherLength: Int? {
-            for delta in [-2, -1, 1, 2] {
-                let n = bytes.count + delta
-                guard n >= WireProtocol.headerSize, n <= bytes.count else { continue }
+            guard bytes.count >= WireProtocol.headerSize else { return nil }
+            for n in WireProtocol.headerSize...bytes.count where n != claimedLength {
                 if PacketFramer.computeCrc(Array(bytes.prefix(n))) == embeddedCrc { return n }
             }
             return nil
@@ -113,7 +117,9 @@ struct PacketFramer {
                 ?? "unknown(\(msgTypeByte))"
             let hex = bytes.map { String(format: "%02x", $0) }.joined(separator: " ")
             let crcs = String(format: "crc got=%04x calc=%04x", embeddedCrc, computedCrc)
-            let alt = matchesAtOtherLength.map { " MATCHES-AT-LEN=\($0)" } ?? ""
+            let alt = matchesAtOtherLength.map {
+                " MATCHES-AT-LEN=\($0) (sender used a \($0)-byte message)"
+            } ?? ""
             var marks = ""
             let heads = embeddedHeaders
             if !heads.isEmpty {

@@ -293,6 +293,29 @@ final class PacketFramerTests: XCTestCase {
         XCTAssertNil(f.recentRejects.first?.singleByteFix)
     }
 
+    /// A device running firmware from before a field was added sends a SHORTER
+    /// message with a CRC over that shorter length. That is a version difference,
+    /// not corruption, and the length scan is what distinguishes them.
+    func testOlderShorterMessageIsIdentifiedByItsLength() {
+        // A 27-byte receiverInfo: header + lora_channel + device_name, i.e. the
+        // message as it stood before ADR-0019 added noise_floor and bad_frames.
+        var old27 = (0..<27).map { UInt8(truncatingIfNeeded: $0 &* 3 &+ 1) }
+        old27[0] = WireProtocol.systemId
+        old27[1] = MsgType.receiverInfo.rawValue
+        old27[4] = 0; old27[5] = 0
+        let crc = PacketFramer.computeCrc(old27)          // sender CRCs 27 bytes
+        old27[4] = UInt8(truncatingIfNeeded: crc)
+        old27[5] = UInt8(truncatingIfNeeded: crc >> 8)
+
+        var f = PacketFramer()
+        _ = f.append(old27 + telemetry())                 // we will frame it as 30
+
+        let reject = f.recentRejects.first { $0.msgTypeByte == MsgType.receiverInfo.rawValue }
+        XCTAssertNotNil(reject)
+        XCTAssertEqual(27, reject?.matchesAtOtherLength,
+                       "the sender's CRC must be shown to verify at 27 bytes")
+    }
+
     /// A truncated frame followed by the next one must be flagged as such: the
     /// giveaway is a second header sitting inside the frame we CRC-checked.
     func testTruncatedFrameShowsAnEmbeddedHeader() {
