@@ -293,6 +293,41 @@ final class PacketFramerTests: XCTestCase {
         XCTAssertNil(f.recentRejects.first?.singleByteFix)
     }
 
+    /// A truncated frame followed by the next one must be flagged as such: the
+    /// giveaway is a second header sitting inside the frame we CRC-checked.
+    func testTruncatedFrameShowsAnEmbeddedHeader() {
+        // 22 bytes of a receiverInfo, then the next frame starts early.
+        let short = Array(frame(.receiverInfo, totalSize: 30).prefix(22))
+        var f = PacketFramer()
+        _ = f.append(short + telemetry())
+
+        let reject = f.recentRejects.first { $0.msgTypeByte == MsgType.receiverInfo.rawValue }
+        XCTAssertNotNil(reject, "the truncated frame should be rejected")
+        XCTAssertEqual([22], reject?.embeddedHeaders,
+                       "the next frame's header sits at the truncation point")
+    }
+
+    /// A clean frame must NOT be flagged — otherwise the signal is worthless.
+    func testIntactFrameHasNoEmbeddedHeader() {
+        var corrupt = frame(.receiverInfo, totalSize: 30)
+        corrupt[10] = corrupt[10] &+ 1
+        corrupt[20] = corrupt[20] &+ 1
+        var f = PacketFramer()
+        _ = f.append(corrupt)
+        XCTAssertEqual([], f.recentRejects.first?.embeddedHeaders)
+    }
+
+    /// Consecutive rejects of the same type should report which bytes moved.
+    func testRejectDiffNamesTheBytesThatChanged() {
+        var f = PacketFramer()
+        var a = frame(.receiverInfo, totalSize: 30); a[27] = a[27] &+ 1; a[28] = a[28] &+ 1
+        var b = a; b[27] = b[27] &+ 5
+        _ = f.append(a)
+        _ = f.append(b)
+        XCTAssertEqual(2, f.recentRejects.count)
+        XCTAssertEqual([27], f.recentRejects[1].differsFromPreviousAt)
+    }
+
     /// The capture is a diagnostic, not a log — it must not grow without bound.
     func testRejectCaptureIsCapped() {
         var f = PacketFramer()

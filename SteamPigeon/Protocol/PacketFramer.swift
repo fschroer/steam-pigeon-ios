@@ -71,6 +71,24 @@ struct PacketFramer {
             return nil
         }
 
+        /// Indices > 0 where a system-id byte is followed by a plausible message type.
+        /// **This is the truncation signature.** If the sender's write was cut short,
+        /// the framer fills the shortfall from whatever came next — and what comes
+        /// next begins with a header. A clean frame has no second header inside it.
+        var embeddedHeaders: [Int] {
+            var found: [Int] = []
+            for i in 1..<max(1, bytes.count - 1)
+            where bytes[i] == WireProtocol.systemId && MsgType(rawValue: bytes[i + 1]) != nil {
+                found.append(i)
+            }
+            return found
+        }
+
+        /// Byte indices that differ from the previous reject of the same type. With a
+        /// repeating message, what varies is the evidence — a constant sender CRC over
+        /// varying bytes has to be explained by whichever bytes those are.
+        var differsFromPreviousAt: [Int] = []
+
         /// If changing exactly ONE byte would make the CRC verify, which byte and to
         /// what. A CRC-16 disagreement says only "these bytes are not those bytes";
         /// this says *where*, which usually names the field and therefore the cause.
@@ -96,12 +114,20 @@ struct PacketFramer {
             let hex = bytes.map { String(format: "%02x", $0) }.joined(separator: " ")
             let crcs = String(format: "crc got=%04x calc=%04x", embeddedCrc, computedCrc)
             let alt = matchesAtOtherLength.map { " MATCHES-AT-LEN=\($0)" } ?? ""
+            var marks = ""
+            let heads = embeddedHeaders
+            if !heads.isEmpty {
+                marks += "\n    TRUNCATION? header bytes inside frame at \(heads)"
+            }
+            if !differsFromPreviousAt.isEmpty {
+                marks += "\n    differs from previous at \(differsFromPreviousAt)"
+            }
             var fix = ""
             if let f = singleByteFix {
                 fix = String(format: "\n    ONE-BYTE: index %d is %02x, CRC wants %02x",
                              f.index, f.actual, f.expected)
             }
-            return "\(name) len=\(claimedLength) \(crcs)\(alt)\(fix)\n    [\(hex)]"
+            return "\(name) len=\(claimedLength) \(crcs)\(alt)\(marks)\(fix)\n    [\(hex)]"
         }
     }
 
@@ -159,13 +185,19 @@ struct PacketFramer {
             let frame = Array(buffer[0..<expected])
             guard Self.verifyCrc(frame) else {
                 badFrameCount += 1
-                recentRejects.append(Reject(
+                var reject = Reject(
                     msgTypeByte: frame[1],
                     claimedLength: expected,
                     bytes: Array(frame.prefix(Self.rejectCaptureBytes)),
                     embeddedCrc: Self.embeddedCrc(frame) ?? 0,
                     computedCrc: Self.computeCrc(frame)
-                ))
+                )
+                if let prev = recentRejects.last(where: { $0.msgTypeByte == frame[1] }) {
+                    reject.differsFromPreviousAt = zip(prev.bytes, reject.bytes).enumerated()
+                        .filter { $0.element.0 != $0.element.1 }
+                        .map(\.offset)
+                }
+                recentRejects.append(reject)
                 if recentRejects.count > Self.maxRejectsKept { recentRejects.removeFirst() }
                 buffer.removeFirst()                        // resync one byte on
                 continue
