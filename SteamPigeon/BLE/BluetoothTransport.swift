@@ -50,6 +50,11 @@ final class BluetoothTransport: NSObject {
     /// ADR-0012: send a `receiverInfoRequest`. Wired by the caller, because building
     /// that message is protocol work, not transport work.
     var onHealthProbe: (() -> Void)?
+    /// Running count of frames the framer rejected on CRC. The receiver reports its
+    /// own bad-frame count over the air; this is the app-side view of the same
+    /// problem, and a rising count is the signal that ended more than one debugging
+    /// loop on the Android side.
+    var onBadFrameCount: ((Int) -> Void)?
 
     // MARK: - State
 
@@ -276,8 +281,10 @@ extension BluetoothTransport: CBPeripheralDelegate {
         // even a corrupt frame still proves the link is carrying bytes.
         health.recordDataReceived()
 
+        let badBefore = framer.badFrameCount
         for frame in framer.append(data) {
             onFrame?(frame)
         }
+        if framer.badFrameCount != badBefore { onBadFrameCount?(framer.badFrameCount) }
     }
 }

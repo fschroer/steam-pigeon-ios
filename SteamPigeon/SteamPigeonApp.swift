@@ -4,7 +4,7 @@ import SwiftUI
 struct SteamPigeonApp: App {
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            LinkView()
         }
     }
 }
