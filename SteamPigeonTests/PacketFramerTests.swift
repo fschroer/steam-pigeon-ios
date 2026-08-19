@@ -260,7 +260,8 @@ final class PacketFramerTests: XCTestCase {
         let r = f.recentRejects[0]
         XCTAssertEqual(MsgType.preLaunchData.rawValue, r.msgTypeByte)
         XCTAssertEqual(147, r.claimedLength)
-        XCTAssertEqual(WireProtocol.systemId, r.head.first)
+        XCTAssertEqual(WireProtocol.systemId, r.bytes.first)
+        XCTAssertNotEqual(r.embeddedCrc, r.computedCrc, "a reject is by definition a CRC disagreement")
         XCTAssertTrue(r.summary.contains("preLaunchData"), r.summary)
         XCTAssertTrue(r.summary.contains("147"), r.summary)
     }

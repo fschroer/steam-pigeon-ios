@@ -51,21 +51,40 @@ struct PacketFramer {
         let msgTypeByte: UInt8
         /// The length the framer computed and then CRC-checked.
         let claimedLength: Int
-        /// Leading bytes, for identifying what this actually was.
-        let head: [UInt8]
+        /// The frame as received, capped. Whole for anything receiver-sized; a
+        /// prefix for the big relayed broadcasts.
+        let bytes: [UInt8]
+        /// What the sender put in the header.
+        let embeddedCrc: UInt16
+        /// What we computed over `claimedLength` bytes.
+        let computedCrc: UInt16
+
+        /// Does the CRC match if the frame is one byte shorter or longer? If so the
+        /// disagreement is a LENGTH error on our side, not corruption on the wire —
+        /// and those need opposite fixes.
+        var matchesAtOtherLength: Int? {
+            for delta in [-2, -1, 1, 2] {
+                let n = bytes.count + delta
+                guard n >= WireProtocol.headerSize, n <= bytes.count else { continue }
+                if PacketFramer.computeCrc(Array(bytes.prefix(n))) == embeddedCrc { return n }
+            }
+            return nil
+        }
 
         var summary: String {
             let name = MsgType(rawValue: msgTypeByte).map(String.init(describing:))
                 ?? "unknown(\(msgTypeByte))"
-            let hex = head.map { String(format: "%02x", $0) }.joined(separator: " ")
-            return "\(name) len=\(claimedLength) [\(hex)]"
+            let hex = bytes.map { String(format: "%02x", $0) }.joined(separator: " ")
+            let crcs = String(format: "crc got=%04x calc=%04x", embeddedCrc, computedCrc)
+            let alt = matchesAtOtherLength.map { " MATCHES-AT-LEN=\($0)" } ?? ""
+            return "\(name) len=\(claimedLength) \(crcs)\(alt)\n    [\(hex)]"
         }
     }
 
     /// Most recent rejects, newest last. Capped — this is a diagnostic, not a log.
     private(set) var recentRejects: [Reject] = []
     private static let maxRejectsKept = 12
-    private static let rejectHeadBytes = 12
+    private static let rejectCaptureBytes = 64
 
     init() {}
 
@@ -119,7 +138,9 @@ struct PacketFramer {
                 recentRejects.append(Reject(
                     msgTypeByte: frame[1],
                     claimedLength: expected,
-                    head: Array(frame.prefix(Self.rejectHeadBytes))
+                    bytes: Array(frame.prefix(Self.rejectCaptureBytes)),
+                    embeddedCrc: Self.embeddedCrc(frame) ?? 0,
+                    computedCrc: Self.computeCrc(frame)
                 ))
                 if recentRejects.count > Self.maxRejectsKept { recentRejects.removeFirst() }
                 buffer.removeFirst()                        // resync one byte on
