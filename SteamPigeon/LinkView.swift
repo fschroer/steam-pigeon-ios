@@ -36,6 +36,20 @@ struct LinkView: View {
                     }
                 }
 
+                if !model.rejects.isEmpty {
+                    Text("Rejected frames (bad CRC)")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.red)
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(Array(model.rejects.enumerated()), id: \.offset) { _, line in
+                            Text(line)
+                                .font(.caption2.monospaced())
+                                .foregroundStyle(.red)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                }
+
                 Text("Recent frames").font(.subheadline.weight(.semibold))
                 ScrollView {
                     VStack(alignment: .leading, spacing: 2) {

@@ -43,6 +43,30 @@ struct PacketFramer {
     /// a rising count is the signal that ended a debugging loop more than once.
     private(set) var badFrameCount = 0
 
+    /// A rejected frame, captured so a bad-CRC count can be explained rather than
+    /// guessed at. A count alone says only "something did not verify" — which of the
+    /// several possible causes it was needs the bytes.
+    struct Reject {
+        /// The msgType byte the framer read from the candidate header.
+        let msgTypeByte: UInt8
+        /// The length the framer computed and then CRC-checked.
+        let claimedLength: Int
+        /// Leading bytes, for identifying what this actually was.
+        let head: [UInt8]
+
+        var summary: String {
+            let name = MsgType(rawValue: msgTypeByte).map(String.init(describing:))
+                ?? "unknown(\(msgTypeByte))"
+            let hex = head.map { String(format: "%02x", $0) }.joined(separator: " ")
+            return "\(name) len=\(claimedLength) [\(hex)]"
+        }
+    }
+
+    /// Most recent rejects, newest last. Capped — this is a diagnostic, not a log.
+    private(set) var recentRejects: [Reject] = []
+    private static let maxRejectsKept = 12
+    private static let rejectHeadBytes = 12
+
     init() {}
 
     /// Feed one BLE notification (or any chunk) in; get back every complete,
@@ -92,6 +116,12 @@ struct PacketFramer {
             let frame = Array(buffer[0..<expected])
             guard Self.verifyCrc(frame) else {
                 badFrameCount += 1
+                recentRejects.append(Reject(
+                    msgTypeByte: frame[1],
+                    claimedLength: expected,
+                    head: Array(frame.prefix(Self.rejectHeadBytes))
+                ))
+                if recentRejects.count > Self.maxRejectsKept { recentRejects.removeFirst() }
                 buffer.removeFirst()                        // resync one byte on
                 continue
             }

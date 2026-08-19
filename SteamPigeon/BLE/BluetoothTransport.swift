@@ -55,6 +55,9 @@ final class BluetoothTransport: NSObject {
     /// problem, and a rising count is the signal that ended more than one debugging
     /// loop on the Android side.
     var onBadFrameCount: ((Int) -> Void)?
+    /// The rejected frames themselves. A count says only that something failed to
+    /// verify; identifying which of several possible causes it was needs the bytes.
+    var onReject: ((PacketFramer.Reject) -> Void)?
 
     // MARK: - State
 
@@ -285,6 +288,9 @@ extension BluetoothTransport: CBPeripheralDelegate {
         for frame in framer.append(data) {
             onFrame?(frame)
         }
-        if framer.badFrameCount != badBefore { onBadFrameCount?(framer.badFrameCount) }
+        if framer.badFrameCount != badBefore {
+            onBadFrameCount?(framer.badFrameCount)
+            for r in framer.recentRejects.suffix(framer.badFrameCount - badBefore) { onReject?(r) }
+        }
     }
 }

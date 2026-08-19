@@ -12,6 +12,7 @@ final class LinkViewModel: ObservableObject {
     @Published private(set) var badFrames = 0
     @Published private(set) var countsByType: [MsgType: Int] = [:]
     @Published private(set) var recent: [String] = []
+    @Published private(set) var rejects: [String] = []
     @Published private(set) var probesSent = 0
 
     private let transport = BluetoothTransport()
@@ -26,6 +27,14 @@ final class LinkViewModel: ObservableObject {
         }
         transport.onBadFrameCount = { [weak self] n in
             Task { @MainActor in self?.badFrames = n }
+        }
+        transport.onReject = { [weak self] r in
+            Task { @MainActor in
+                guard let self else { return }
+                let stamp = String(format: "%7.1fs", Date().timeIntervalSince(self.started))
+                self.rejects.insert("\(stamp)  \(r.summary)", at: 0)
+                if self.rejects.count > 12 { self.rejects.removeLast() }
+            }
         }
         // ADR-0012: the probe must be a message the RECEIVER answers on its own
         // behalf. Anything locator-bound would depend on the locator being powered

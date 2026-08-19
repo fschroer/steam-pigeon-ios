@@ -247,6 +247,54 @@ final class PacketFramerTests: XCTestCase {
         XCTAssertTrue(out.isEmpty)
     }
 
+    // MARK: - Reject capture
+
+    /// A bad-CRC count on its own cannot be explained after the fact. The bytes can.
+    func testRejectedFrameIsCapturedWithEnoughToIdentifyIt() {
+        var corrupt = prelaunch()
+        corrupt[80] = corrupt[80] &+ 1
+        var f = PacketFramer()
+        _ = f.append(corrupt + telemetry())
+
+        XCTAssertEqual(1, f.recentRejects.count)
+        let r = f.recentRejects[0]
+        XCTAssertEqual(MsgType.preLaunchData.rawValue, r.msgTypeByte)
+        XCTAssertEqual(147, r.claimedLength)
+        XCTAssertEqual(WireProtocol.systemId, r.head.first)
+        XCTAssertTrue(r.summary.contains("preLaunchData"), r.summary)
+        XCTAssertTrue(r.summary.contains("147"), r.summary)
+    }
+
+    /// The capture is a diagnostic, not a log — it must not grow without bound.
+    func testRejectCaptureIsCapped() {
+        var f = PacketFramer()
+        for _ in 0..<40 {
+            var corrupt = telemetry()
+            corrupt[40] = corrupt[40] &+ 1
+            _ = f.append(corrupt)
+        }
+        XCTAssertGreaterThan(f.badFrameCount, 12)
+        XCTAssertLessThanOrEqual(f.recentRejects.count, 12)
+    }
+
+    /// A Startup message is relayed to the app but not framed. Confirmed on the bench
+    /// that it does NOT explain bad-CRC counts: walking it costs nothing, because the
+    /// resync path discards non-system-id bytes without counting them.
+    func testStartupMessageDoesNotProduceBadCrcCounts() {
+        var startup = [UInt8](repeating: 0, count: 74)
+        startup[0] = WireProtocol.systemId
+        startup[1] = MsgType.startup.rawValue
+        for i in 10..<74 { startup[i] = UInt8(truncatingIfNeeded: 0x41 + (i % 26)) }  // ASCII version
+        let crc = PacketFramer.computeCrc(startup)
+        startup[4] = UInt8(truncatingIfNeeded: crc)
+        startup[5] = UInt8(truncatingIfNeeded: crc >> 8)
+
+        var f = PacketFramer()
+        let out = f.append(startup + telemetry())
+        XCTAssertEqual(0, f.badFrameCount, "startup must not pollute the bad-frame signal")
+        XCTAssertEqual([telemetry()], out, "the frame behind it must still arrive")
+    }
+
     /// The buffer must not grow without bound when the stream is pure noise.
     func testGarbageOnlyStreamDoesNotAccumulate() {
         var f = PacketFramer()
