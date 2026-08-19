@@ -21,19 +21,23 @@ struct LocatorStatsPanel: View {
     let gyro: Vec3f?
     let latitude: Double
     let longitude: Double
-    let rssi: Int?
-    let snr: Int?
     let deployChannelText: [String]
-    /// The interference verdict, when there is one. Prose, not a column entry.
-    let linkNote: (text: String, color: Color)?
 
     /// Tapping the panel speaks state and altitude — the same affordance Android has,
     /// and for the same reason: a rocket in flight is exactly when someone wants that
     /// without looking. Not gated on arm state (#36).
     var onTapSpeak: (() -> Void)?
 
+    /// Bounds the panel may be dragged within — the map's own size.
+    let containerSize: CGSize
+
     @State private var offset: CGSize = .zero
     @State private var accumulated: CGSize = .zero
+    @State private var panelSize: CGSize = .zero
+
+    private func clamp(_ proposed: CGSize) -> CGSize {
+        PanelDragBounds.clamp(proposed, panel: panelSize, container: containerSize)
+    }
 
     private static let g = 9.80665
     private static let rad2deg = 180.0 / Double.pi
@@ -60,27 +64,22 @@ struct LocatorStatsPanel: View {
                 row(text)
             }
             coordinates
-            linkRow
-            if let note = linkNote {
-                Text(note.text)
-                    .font(SPFont.labelSmall)
-                    .foregroundStyle(note.color)
-                    // Fixed width so a long verdict wraps instead of widening the
-                    // panel — unconstrained it laid out on one line and dragged the
-                    // whole block wider whenever the verdict changed.
-                    .frame(width: 190, alignment: .leading)
-                    .padding(.trailing, 4)
-            }
         }
         .padding(8)
         .background(SPColor.mapOverlay)
         .clipShape(RoundedRectangle(cornerRadius: 16))
+        .background(                       // measure the panel so it can be clamped
+            GeometryReader { proxy in
+                Color.clear.preference(key: PanelSizeKey.self, value: proxy.size)
+            }
+        )
+        .onPreferenceChange(PanelSizeKey.self) { panelSize = $0 }
         .offset(x: offset.width, y: offset.height)
         .gesture(
             DragGesture()
                 .onChanged { g in
-                    offset = CGSize(width: accumulated.width + g.translation.width,
-                                    height: accumulated.height + g.translation.height)
+                    offset = clamp(CGSize(width: accumulated.width + g.translation.width,
+                                          height: accumulated.height + g.translation.height))
                 }
                 .onEnded { _ in accumulated = offset }
         )
@@ -115,19 +114,40 @@ struct LocatorStatsPanel: View {
                 }
             }
     }
+}
 
-    @ViewBuilder private var linkRow: some View {
-        HStack(spacing: 6) {
-            if let r = rssi {
-                Text(String(format: "RSSI %4d", r))
-                    .font(SPFont.telemetry)
-                    .foregroundStyle(RssiBand.color(r))
-            }
-            if let s = snr {
-                Text(String(format: "SNR %3d", s))
-                    .font(SPFont.telemetry)
-                    .foregroundStyle(SnrBand.color(s))
-            }
-        }
+
+/// Keeps the stats panel inside the map, as Android does with `coerceIn` on both axes.
+///
+/// Without it the panel drags off screen and cannot be recovered without relaunching —
+/// and the panel *is* the telemetry, so losing it loses the readout. Extracted from the
+/// view so the arithmetic is testable: this shipped once without bounds precisely
+/// because it was buried in a gesture handler where nothing could check it.
+///
+/// The panel is laid out bottom-right, so its drag offsets travel **negative** from
+/// there. The floors are the distance back to the top-left edge.
+enum PanelDragBounds {
+    static let margin: CGFloat = 8
+
+    static func clamp(_ proposed: CGSize, panel: CGSize, container: CGSize) -> CGSize {
+        // Nothing measured yet. Android guards the same degenerate case with
+        // `maxOf(marginPx, …)` because a not-yet-measured scaffold produced a lower
+        // bound above the upper one and threw on returning to the map screen.
+        guard container.width > 0, container.height > 0,
+              panel.width > 0, panel.height > 0 else { return proposed }
+
+        let minX = min(-(container.width - panel.width - margin * 2), 0)
+        let minY = min(-(container.height - panel.height - margin * 2), 0)
+        return CGSize(width: proposed.width.clamped(to: minX...0),
+                      height: proposed.height.clamped(to: minY...0))
     }
+}
+
+private struct PanelSizeKey: PreferenceKey {
+    static var defaultValue: CGSize = .zero
+    static func reduce(value: inout CGSize, nextValue: () -> CGSize) { value = nextValue() }
+}
+
+extension Comparable {
+    func clamped(to r: ClosedRange<Self>) -> Self { min(max(self, r.lowerBound), r.upperBound) }
 }

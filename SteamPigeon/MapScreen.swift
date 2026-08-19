@@ -9,6 +9,8 @@ import SwiftUI
 struct MapScreen: View {
     @ObservedObject var model: LinkViewModel
 
+    @State private var mapSize: CGSize = .zero
+
     var body: some View {
         ZStack(alignment: .top) {
             FlightMapView(
@@ -20,6 +22,12 @@ struct MapScreen: View {
                 recentreToken: recentre
             )
             .ignoresSafeArea(edges: .bottom)
+            .background(
+                GeometryReader { proxy in
+                    Color.clear.onAppear { mapSize = proxy.size }
+                        .onChange(of: proxy.size) { mapSize = $0 }
+                }
+            )
 
             banner
                 .padding(.horizontal, 12)
@@ -72,6 +80,13 @@ struct MapScreen: View {
         }
     }
 
+    private var rssi: Int? {
+        model.telemetry.map { Int($0.rssi) } ?? model.prelaunch.map { Int($0.rssi) }
+    }
+    private var snr: Int? {
+        model.telemetry.map { Int($0.snr) } ?? model.prelaunch.map { Int($0.snr) }
+    }
+
     @ViewBuilder private var statsPanel: some View {
         let p = model.prelaunch
         let t = model.telemetry
@@ -89,13 +104,11 @@ struct MapScreen: View {
             gyro: p?.gyro,
             latitude: t?.latitude ?? p?.latitude ?? 0,
             longitude: t?.longitude ?? p?.longitude ?? 0,
-            rssi: t.map { Int($0.rssi) } ?? p.map { Int($0.rssi) },
-            snr: t.map { Int($0.snr) } ?? p.map { Int($0.snr) },
             deployChannelText: (p?.deployChannelModes ?? []).enumerated().map { i, mode in
                 DeployChannelText.line(channel: i + 1, mode: mode, config: p ?? PreLaunchData())
             },
-            linkNote: nil,
-            onTapSpeak: nil
+            onTapSpeak: nil,
+            containerSize: mapSize
         )
     }
 
@@ -116,8 +129,22 @@ struct MapScreen: View {
                     .font(SPFont.bodySmall)
             }
             Spacer()
+            // Link quality lives on the TOP panel, as in Android's MapControlsColumn
+            // — not in the stats panel below.
+            if let r = rssi {
+                HStack(spacing: 3) {
+                    Image(systemName: "cellularbars").font(.caption)
+                    Text("\(r) dBm").font(SPFont.telemetry(size: 11))
+                }
+                .foregroundStyle(RssiBand.color(r))
+            }
+            if let sn = snr {
+                Text("SNR \(sn) dB")
+                    .font(SPFont.telemetry(size: 11))
+                    .foregroundStyle(SnrBand.color(sn))
+            }
             if let acc = model.phone.horizontalAccuracyM {
-                Text(String(format: "phone ±%.0f m", acc))
+                Text(String(format: "±%.0f m", acc))
                     .font(SPFont.telemetry(size: 11))
                     .foregroundStyle(acc <= 10 ? Color.secondary : Color.orange)
             }
