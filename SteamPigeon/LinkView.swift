@@ -6,8 +6,37 @@ import SwiftUI
 /// exists to answer one question against real hardware: does the transport connect to
 /// the receiver and deliver correctly framed packets? So it shows what would otherwise
 /// only be visible in a debugger — what arrived, how big, and how the link is behaving.
-struct LinkView: View {
+/// Flight display plus the diagnostic screen, in tabs.
+///
+/// The bring-up screen stays reachable on purpose: it is what turned a bad-CRC count
+/// into a firmware version skew, and that class of problem does not stop happening.
+struct RootView: View {
     @StateObject private var model = LinkViewModel()
+
+    var body: some View {
+        TabView {
+            FlightView(model: model)
+                .tabItem { Label("Flight", systemImage: "location.north.circle") }
+            LinkView(model: model)
+                .tabItem { Label("Link", systemImage: "antenna.radiowaves.left.and.right") }
+        }
+        .preferredColorScheme(.dark)     // matches Android: read outdoors, not in a browser
+        .onAppear { model.start() }
+        .sheet(item: Binding(
+            get: { model.challenge },
+            set: { if $0 == nil { model.declineChallenge() } }
+        )) { c in
+            PasswordChallengeView(
+                challenge: c,
+                onSubmit: { model.submitPassword($0) },
+                onCancel: { model.declineChallenge() }
+            )
+        }
+    }
+}
+
+struct LinkView: View {
+    @ObservedObject var model: LinkViewModel
 
     var body: some View {
         NavigationView {
@@ -123,17 +152,6 @@ struct LinkView: View {
             .navigationTitle("Steam Pigeon")
         }
         .navigationViewStyle(.stack)     // iOS 16: NavigationView, not NavigationStack
-        .onAppear { model.start() }
-        .sheet(item: Binding(
-            get: { model.challenge },
-            set: { if $0 == nil { model.declineChallenge() } }
-        )) { c in
-            PasswordChallengeView(
-                challenge: c,
-                onSubmit: { model.submitPassword($0) },
-                onCancel: { model.declineChallenge() }
-            )
-        }
     }
 
     private func grid(_ rows: [(String, String)]) -> some View {

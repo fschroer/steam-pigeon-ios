@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import CoreLocation
 
 /// Drives the link screen. Deliberately thin: it owns the transport, counts what
 /// arrives, and answers health probes. No telemetry parsing yet — the point of this
@@ -41,6 +42,19 @@ final class LinkViewModel: ObservableObject {
     /// frame whose fields have since moved on.
     private var challengeFrame: [UInt8]?
 
+    /// The phone's own position — the other end of every quoted vector.
+    let phone = PhoneLocation()
+
+    /// Distance and bearing to the connected locator, or nil when ADR-0022 says the
+    /// app cannot stand behind the figure. Suppressed together, because both come out
+    /// of one vector: a rejected position aims a bearing just as wrongly.
+    @Published private(set) var vector: LocatorVector?
+    /// Why the vector is missing, when it is — so the screen can say something more
+    /// useful than a blank.
+    @Published private(set) var vectorSuppressedReason: String?
+
+    private var plausibility = DistancePlausibility()
+
     private let transport = BluetoothTransport()
     private let started = Date()
 
@@ -73,7 +87,42 @@ final class LinkViewModel: ObservableObject {
         }
     }
 
-    func start() { transport.startScan() }
+    func start() {
+        transport.startScan()
+        phone.start()
+    }
+
+    /// Recompute the vector to the connected locator after a new broadcast.
+    ///
+    /// ADR-0022: the range ceiling applies to every quoted distance whatever the
+    /// locator claims about its own fix, and a fixless reading is judged on having
+    /// jumped rather than on being fixless.
+    private func updateVector(lat: Double, lon: Double, satellites: UInt8,
+                              gpsStatus: SensorHealth, state: FlightStates,
+                              altitudeAglM: Float) {
+        guard let me = phone.coordinate, phone.hasUsableFix else {
+            vector = nil
+            vectorSuppressedReason = phone.authorized
+                ? "waiting for this phone's GPS fix"
+                : "location permission needed for distance and bearing"
+            return
+        }
+
+        let v = LocatorVector.between(from: (me.latitude, me.longitude),
+                                      to: (lat, lon),
+                                      altitudeAglM: altitudeAglM)
+        let hasFix = DistancePlausibility.hasFix(satellites: satellites, gpsStatus: gpsStatus)
+
+        if plausibility.accept(distanceM: v.distanceM, hasFix: hasFix, state: state) != nil {
+            vector = v
+            vectorSuppressedReason = nil
+        } else {
+            vector = nil
+            vectorSuppressedReason = hasFix
+                ? "reported position is beyond radio range"
+                : "position moved further than the rocket could have travelled"
+        }
+    }
     func disconnect() { transport.disconnect() }
 
     private func ingest(_ frame: [UInt8]) {
@@ -94,12 +143,20 @@ final class LinkViewModel: ObservableObject {
                     prelaunch = m
                     // A connected locator that has disarmed is no longer in flight.
                     if telemetry?.locatorId == m.locatorId { telemetry = nil }
+                    updateVector(lat: m.latitude, lon: m.longitude,
+                                 satellites: m.satellites, gpsStatus: m.gpsStatus,
+                                 state: .waitingLaunch, altitudeAglM: m.altitudeAgl)
                 }
             }
         case .telemetryData:
             if let m = TelemetryData.parse(frame) {
                 lastLocatorId = m.locatorId
-                if admit(frame, m.locatorId, WireProtocol.telemetryBaseStructSize) { telemetry = m }
+                if admit(frame, m.locatorId, WireProtocol.telemetryBaseStructSize) {
+                    telemetry = m
+                    updateVector(lat: m.latitude, lon: m.longitude,
+                                 satellites: m.satellites, gpsStatus: m.gpsStatus,
+                                 state: m.flightState, altitudeAglM: m.altitudeAgl)
+                }
             }
         default:
             break
@@ -176,6 +233,8 @@ final class LinkViewModel: ObservableObject {
     /// The explicit user switch — ADR-0006's conflict-banner Connect action. The only
     /// thing besides holder silence that moves a live connection.
     func switchTo(_ locatorId: UInt32) {
+        plausibility.reset()      // a new rocket is not judged against the old one's track
+        vector = nil
         policy.reconsider(locatorId)
         gate.connect(to: locatorId)
         connectedLocatorId = locatorId
