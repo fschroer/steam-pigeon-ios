@@ -23,6 +23,8 @@ struct RootView: View {
                 .tabItem { Label("Link", systemImage: "antenna.radiowaves.left.and.right") }
         }
         .preferredColorScheme(.dark)     // matches Android: read outdoors, not in a browser
+        .tint(SPColor.primary)
+        .background(SPColor.background)
         .onAppear { model.start() }
         .sheet(item: Binding(
             get: { model.challenge },

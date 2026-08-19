@@ -29,19 +29,21 @@ struct FlightView: View {
             Spacer()
         }
         .padding()
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(SPColor.background)
     }
 
     // MARK: - Pieces
 
     private var header: some View {
         HStack(alignment: .firstTextBaseline) {
-            Text(name).font(.title3.weight(.semibold))
+            Text(name).font(SPFont.titleLarge).foregroundStyle(SPColor.onBackground)
             Spacer()
             if let s = state {
                 Text(s)
-                    .font(.caption.weight(.semibold))
+                    .font(SPFont.labelMedium)
                     .padding(.horizontal, 8).padding(.vertical, 3)
-                    .background(armed ? Color.red.opacity(0.25) : Color.secondary.opacity(0.2))
+                    .background(armed ? SPColor.errorContainer : SPColor.surfaceContainerHigh)
                     .clipShape(Capsule())
             }
         }
@@ -51,27 +53,26 @@ struct FlightView: View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(alignment: .lastTextBaseline, spacing: 6) {
                 Text("\(v.distanceM)")
-                    .font(.system(size: 64, weight: .semibold, design: .rounded))
-                    .monospacedDigit()
-                Text("m").font(.title3).foregroundStyle(.secondary)
+                    .font(SPFont.telemetryBold(size: 64))
+                Text("m").font(SPFont.titleLarge).foregroundStyle(SPColor.onSurfaceVariant)
             }
             HStack(spacing: 8) {
                 Image(systemName: "location.north.fill")
                     .rotationEffect(.degrees(v.azimuthDeg))
                 Text(String(format: "%.0f° %@", v.azimuthDeg, v.ordinal))
-                    .font(.title3.monospacedDigit())
+                    .font(SPFont.telemetry(size: 22))
             }
-            .foregroundStyle(.tint)
+            .foregroundStyle(SPColor.secondary)
         }
     }
 
     private var suppressed: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text("Distance unavailable")
-                .font(.title3.weight(.semibold))
-                .foregroundStyle(.secondary)
+                .font(SPFont.titleLarge)
+                .foregroundStyle(SPColor.onSurfaceVariant)
             if let why = model.vectorSuppressedReason {
-                Text(why).font(.footnote).foregroundStyle(.secondary)
+                Text(why).font(SPFont.bodySmall).foregroundStyle(SPColor.onSurfaceVariant)
             }
         }
     }
@@ -89,7 +90,7 @@ struct FlightView: View {
                 row("battery", String(format: "%.2f V", Double(p.locatorBatteryMv) / 1000))
                 if p.padAlert != .quiet { row("pad alert", "\(p.padAlert)") }
             } else {
-                Text("No locator connected").foregroundStyle(.secondary)
+                Text("No locator connected").font(SPFont.bodyMedium).foregroundStyle(SPColor.onSurfaceVariant)
             }
 
             if let acc = model.phone.horizontalAccuracyM {
@@ -100,9 +101,9 @@ struct FlightView: View {
 
     private func row(_ label: String, _ value: String) -> some View {
         HStack {
-            Text(label).font(.caption).foregroundStyle(.secondary)
+            Text(label).font(SPFont.labelMedium).foregroundStyle(SPColor.onSurfaceVariant)
                 .frame(width: 84, alignment: .leading)
-            Text(value).font(.body.monospacedDigit())
+            Text(value).font(SPFont.telemetry).foregroundStyle(SPColor.onBackground)
             Spacer()
         }
     }

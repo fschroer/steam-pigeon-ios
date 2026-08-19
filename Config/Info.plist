@@ -12,6 +12,20 @@
 	     since iOS has no equivalent of Android's foreground service. This is
 	     viable only because the receiver advertises FFE0 — iOS background
 	     scanning requires a service filter. -->
+	<!-- Bundled fonts. UIAppFonts is NOT one of the keys Xcode promotes from an
+	     INFOPLIST_KEY_* build setting, so like UIBackgroundModes it has to live here.
+	     These are the same .ttf files the Android app ships in res/font/ - per
+	     ADR-0016's 2026-08-19 clarification the theme is a shared asset, not a
+	     platform decision. -->
+	<key>UIAppFonts</key>
+	<array>
+		<string>poppins_regular.ttf</string>
+		<string>poppins_bold.ttf</string>
+		<string>roboto_regular.ttf</string>
+		<string>roboto_bold.ttf</string>
+		<string>robotomono_regular.ttf</string>
+		<string>robotomono_bold.ttf</string>
+	</array>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>bluetooth-central</string>

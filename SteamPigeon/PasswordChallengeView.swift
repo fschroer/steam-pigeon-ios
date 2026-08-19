@@ -19,11 +19,11 @@ struct PasswordChallengeView: View {
                 Text(challenge.deviceName.isEmpty
                      ? String(format: "Locator %08x found.", challenge.locatorId)
                      : "\(challenge.deviceName) found.")
-                    .font(.headline)
+                    .font(SPFont.titleMedium).foregroundStyle(SPColor.onBackground)
 
                 Text(String(format: "ID %08x — enter its password to connect.", challenge.locatorId))
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .font(SPFont.bodySmall)
+                    .foregroundStyle(SPColor.onSurfaceVariant)
 
                 HStack {
                     Group {
@@ -49,13 +49,13 @@ struct PasswordChallengeView: View {
                     .accessibilityLabel(revealed ? "Hide password" : "Show password")
                 }
                 .padding(10)
-                .background(Color.secondary.opacity(0.12))
+                .background(SPColor.surfaceContainerHigh)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
 
                 if challenge.rejected {
                     Label("That password was not accepted. Try again.", systemImage: "xmark.circle")
-                        .font(.footnote)
-                        .foregroundStyle(.red)
+                        .font(SPFont.bodySmall)
+                        .foregroundStyle(SPColor.error)
                 }
 
                 Spacer()

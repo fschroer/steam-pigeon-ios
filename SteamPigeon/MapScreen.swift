@@ -33,7 +33,7 @@ struct MapScreen: View {
                           ? "Compass unreliable — bearing withheld"
                           : "Compass needs calibration — figure-eight the phone",
                           systemImage: "location.slash")
-                        .font(.caption)
+                        .font(SPFont.labelMedium)
                         .padding(8)
                         .background(.ultraThinMaterial, in: Capsule())
                         .padding(.bottom, 16)
@@ -67,17 +67,17 @@ struct MapScreen: View {
         HStack(spacing: 14) {
             if let v = model.vector {
                 Label("\(v.distanceM) m", systemImage: "arrow.left.and.right")
-                    .font(.callout.monospacedDigit().weight(.semibold))
+                    .font(SPFont.telemetryBold(size: 16))
                 Text(String(format: "%.0f° %@", v.azimuthDeg, v.ordinal))
-                    .font(.callout.monospacedDigit())
+                    .font(SPFont.telemetry(size: 16))
             } else {
                 Text(model.vectorSuppressedReason ?? "no fix")
-                    .font(.caption)
+                    .font(SPFont.bodySmall)
             }
             Spacer()
             if let acc = model.phone.horizontalAccuracyM {
                 Text(String(format: "phone ±%.0f m", acc))
-                    .font(.caption2.monospacedDigit())
+                    .font(SPFont.telemetry(size: 11))
                     .foregroundStyle(acc <= 10 ? Color.secondary : Color.orange)
             }
         }
