@@ -25,6 +25,34 @@ struct LinkView: View {
                     stat("probes", "\(model.probesSent)")
                 }
 
+                if let p = model.prelaunch {
+                    Text("Locator — \(p.deviceName.isEmpty ? "(unnamed)" : p.deviceName)")
+                        .font(.subheadline.weight(.semibold))
+                    grid([
+                        ("id", String(format: "%08x", p.locatorId)),
+                        ("armed", p.armed ? "YES" : "no"),
+                        ("GPS", "\(p.gpsStatus) · \(p.satellites) sats"),
+                        ("position", String(format: "%.5f, %.5f", p.latitude, p.longitude)),
+                        ("AGL", String(format: "%.1f m", p.altitudeAgl)),
+                        ("battery", "\(p.locatorBatteryMv) mV"),
+                        ("pad alert", "\(p.padAlert)"),
+                        ("link", "rssi \(p.rssi) · snr \(p.snr) · floor \(p.noiseFloor)"),
+                        ("receiver", "\(p.receiverName) ch \(p.channel)"),
+                    ])
+                }
+
+                if let t = model.telemetry {
+                    Text("Telemetry (armed)").font(.subheadline.weight(.semibold))
+                    grid([
+                        ("state", "\(t.flightState)"),
+                        ("AGL", String(format: "%.1f m", t.altitudeAgl)),
+                        ("vert speed", String(format: "%.1f m/s", -t.velocityNed.z)),
+                        ("position", String(format: "%.5f, %.5f", t.latitude, t.longitude)),
+                        ("GPS", "\(t.gpsStatus) · \(t.satellites) sats"),
+                        ("link", "rssi \(t.rssi) · snr \(t.snr)"),
+                    ])
+                }
+
                 if !model.countsByType.isEmpty {
                     Text("By message type").font(.subheadline.weight(.semibold))
                     ForEach(model.countsByType.sorted { $0.value > $1.value }, id: \.key) { type, n in
@@ -75,6 +103,21 @@ struct LinkView: View {
         }
         .navigationViewStyle(.stack)     // iOS 16: NavigationView, not NavigationStack
         .onAppear { model.start() }
+    }
+
+    private func grid(_ rows: [(String, String)]) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            ForEach(rows, id: \.0) { label, value in
+                HStack(alignment: .firstTextBaseline) {
+                    Text(label)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .frame(width: 76, alignment: .leading)
+                    Text(value).font(.caption.monospaced())
+                    Spacer()
+                }
+            }
+        }
     }
 
     private func stat(_ label: String, _ value: String) -> some View {

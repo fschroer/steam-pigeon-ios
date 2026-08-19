@@ -15,6 +15,11 @@ final class LinkViewModel: ObservableObject {
     @Published private(set) var rejects: [String] = []
     @Published private(set) var probesSent = 0
 
+    /// Latest decoded broadcast from the locator, whichever kind arrived.
+    @Published private(set) var prelaunch: PreLaunchData?
+    @Published private(set) var telemetry: TelemetryData?
+    @Published private(set) var lastLocatorId: UInt32?
+
     private let transport = BluetoothTransport()
     private let started = Date()
 
@@ -53,6 +58,19 @@ final class LinkViewModel: ObservableObject {
         frameCount += 1
         let type = MsgType(rawValue: frame[1])
         if let type { countsByType[type, default: 0] += 1 }
+
+        // Decode the two authenticated broadcasts. Note these arrive from EVERY
+        // locator on the channel, not just one we are connected to — ADR-0020 —
+        // so anything derived from them must eventually be gated on locator_id.
+        // Nothing here is gated yet; this screen reports what arrived, whoever sent it.
+        switch type {
+        case .preLaunchData:
+            if let m = PreLaunchData.parse(frame) { prelaunch = m; lastLocatorId = m.locatorId }
+        case .telemetryData:
+            if let m = TelemetryData.parse(frame) { telemetry = m; lastLocatorId = m.locatorId }
+        default:
+            break
+        }
 
         let stamp = String(format: "%7.1fs", Date().timeIntervalSince(started))
         let name = type.map(String.init(describing:)) ?? "unknown(\(frame[1]))"
