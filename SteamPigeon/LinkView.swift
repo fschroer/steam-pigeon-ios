@@ -124,6 +124,16 @@ struct LinkView: View {
         }
         .navigationViewStyle(.stack)     // iOS 16: NavigationView, not NavigationStack
         .onAppear { model.start() }
+        .sheet(item: Binding(
+            get: { model.challenge },
+            set: { if $0 == nil { model.declineChallenge() } }
+        )) { c in
+            PasswordChallengeView(
+                challenge: c,
+                onSubmit: { model.submitPassword($0) },
+                onCancel: { model.declineChallenge() }
+            )
+        }
     }
 
     private func grid(_ rows: [(String, String)]) -> some View {

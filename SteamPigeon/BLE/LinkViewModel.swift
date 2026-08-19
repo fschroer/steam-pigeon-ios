@@ -31,10 +31,21 @@ final class LinkViewModel: ObservableObject {
     /// guarantee. Passwords are not enterable yet; that needs the challenge dialog.
     private var gate = LocatorGate()
 
+    /// The open password prompt, if any (ADR-0006 Decision 6).
+    @Published var challenge: LocatorChallenge?
+
+    private var policy = ChallengePolicy()
+    private var store = KnownLocatorStore()
+    /// The most recent frame from the challenged locator, kept fresh while the dialog
+    /// is open so the password is checked against current bytes rather than a stale
+    /// frame whose fields have since moved on.
+    private var challengeFrame: [UInt8]?
+
     private let transport = BluetoothTransport()
     private let started = Date()
 
     init() {
+        for (id, key) in store.keysById { gate.remember(locatorId: id, passwordKey: key) }
         transport.onStateChange = { [weak self] s in
             Task { @MainActor in self?.state = s }
         }
@@ -78,7 +89,8 @@ final class LinkViewModel: ObservableObject {
         case .preLaunchData:
             if let m = PreLaunchData.parse(frame) {
                 lastLocatorId = m.locatorId
-                if admit(frame, m.locatorId, WireProtocol.prelaunchBaseStructSize) {
+                if admit(frame, m.locatorId, WireProtocol.prelaunchBaseStructSize,
+                         deviceName: m.deviceName) {
                     prelaunch = m
                     // A connected locator that has disarmed is no longer in flight.
                     if telemetry?.locatorId == m.locatorId { telemetry = nil }
@@ -105,7 +117,8 @@ final class LinkViewModel: ObservableObject {
     /// close range even from locators on other channels — off-channel capture is
     /// expected physics that no firmware change can fix, which is precisely why the
     /// identity gate rather than the radio has to keep the wrong rocket off screen.
-    private func admit(_ frame: [UInt8], _ locatorId: UInt32, _ baseSize: Int) -> Bool {
+    private func admit(_ frame: [UInt8], _ locatorId: UInt32, _ baseSize: Int,
+                       deviceName: String? = nil) -> Bool {
         switch gate.evaluate(frame: frame, locatorId: locatorId, baseSize: baseSize) {
         case .accepted(let id):
             connectedLocatorId = id
@@ -117,13 +130,53 @@ final class LinkViewModel: ObservableObject {
             return false
         case .unauthorized(let id):
             unauthorizedLocatorIds.insert(id)
+            // Keep the challenge frame current while its dialog is open.
+            if challenge?.locatorId == id { challengeFrame = frame }
+            if policy.shouldChallenge(locatorId: id,
+                                      hasDeviceName: deviceName != nil,
+                                      connected: connectedLocatorId,
+                                      challengeOpen: challenge != nil,
+                                      trigger: .passive) {
+                challengeFrame = frame
+                challenge = LocatorChallenge(locatorId: id, deviceName: deviceName ?? "")
+            }
             return false
         }
+    }
+
+    /// Submit a typed password. Returns true if it authenticated.
+    ///
+    /// A wrong password leaves the dialog open to retry, per ADR-0006 — retyping is
+    /// far more likely than the user having the wrong locator.
+    @discardableResult
+    func submitPassword(_ password: String) -> Bool {
+        guard let c = challenge, let frame = challengeFrame,
+              let key = KnownLocatorStore.verify(password: password, frame: frame,
+                                                 baseSize: WireProtocol.prelaunchBaseStructSize)
+        else {
+            challenge?.rejected = true
+            return false
+        }
+        store.remember(locatorId: c.locatorId, passwordKey: key)
+        gate.remember(locatorId: c.locatorId, passwordKey: key)
+        policy.reconsider(c.locatorId)
+        unauthorizedLocatorIds.remove(c.locatorId)
+        challenge = nil
+        challengeFrame = nil
+        return true
+    }
+
+    /// Dismiss without connecting. Remembered so it is not re-asked every broadcast.
+    func declineChallenge() {
+        if let c = challenge { policy.decline(c.locatorId) }
+        challenge = nil
+        challengeFrame = nil
     }
 
     /// The explicit user switch — ADR-0006's conflict-banner Connect action. The only
     /// thing besides holder silence that moves a live connection.
     func switchTo(_ locatorId: UInt32) {
+        policy.reconsider(locatorId)
         gate.connect(to: locatorId)
         connectedLocatorId = locatorId
         conflictingLocatorIds.remove(locatorId)
