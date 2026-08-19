@@ -266,6 +266,33 @@ final class PacketFramerTests: XCTestCase {
         XCTAssertTrue(r.summary.contains("147"), r.summary)
     }
 
+    /// The brute force must actually find a known single-byte corruption, and name
+    /// the right index — otherwise it would mislead rather than diagnose.
+    func testSingleByteFixLocatesAKnownCorruption() {
+        var f = PacketFramer()
+        var corrupt = frame(.receiverInfo, totalSize: 30)
+        let original = corrupt[27]
+        corrupt[27] = original &+ 0x40          // simulate one field arriving wrong
+        _ = f.append(corrupt)
+
+        XCTAssertEqual(1, f.recentRejects.count)
+        let fix = f.recentRejects[0].singleByteFix
+        XCTAssertNotNil(fix, "a single-byte corruption must be locatable")
+        XCTAssertEqual(27, fix?.index)
+        XCTAssertEqual(original, fix?.expected)
+        XCTAssertEqual(original &+ 0x40, fix?.actual)
+    }
+
+    /// Multi-byte corruption must report nothing rather than a plausible-looking lie.
+    func testSingleByteFixReportsNothingForMultiByteCorruption() {
+        var f = PacketFramer()
+        var corrupt = frame(.receiverInfo, totalSize: 30)
+        corrupt[20] = corrupt[20] &+ 1
+        corrupt[27] = corrupt[27] &+ 1
+        _ = f.append(corrupt)
+        XCTAssertNil(f.recentRejects.first?.singleByteFix)
+    }
+
     /// The capture is a diagnostic, not a log — it must not grow without bound.
     func testRejectCaptureIsCapped() {
         var f = PacketFramer()

@@ -71,13 +71,37 @@ struct PacketFramer {
             return nil
         }
 
+        /// If changing exactly ONE byte would make the CRC verify, which byte and to
+        /// what. A CRC-16 disagreement says only "these bytes are not those bytes";
+        /// this says *where*, which usually names the field and therefore the cause.
+        /// Truncation lands on the last bytes, a stale accumulator on its own field.
+        var singleByteFix: (index: Int, expected: UInt8, actual: UInt8)? {
+            guard bytes.count == claimedLength else { return nil }   // need the whole frame
+            for i in 0..<bytes.count where i != 4 && i != 5 {        // crc field is excluded
+                let actual = bytes[i]
+                for candidate in UInt8.min...UInt8.max where candidate != actual {
+                    var trial = bytes
+                    trial[i] = candidate
+                    if PacketFramer.computeCrc(trial) == embeddedCrc {
+                        return (i, candidate, actual)
+                    }
+                }
+            }
+            return nil
+        }
+
         var summary: String {
             let name = MsgType(rawValue: msgTypeByte).map(String.init(describing:))
                 ?? "unknown(\(msgTypeByte))"
             let hex = bytes.map { String(format: "%02x", $0) }.joined(separator: " ")
             let crcs = String(format: "crc got=%04x calc=%04x", embeddedCrc, computedCrc)
             let alt = matchesAtOtherLength.map { " MATCHES-AT-LEN=\($0)" } ?? ""
-            return "\(name) len=\(claimedLength) \(crcs)\(alt)\n    [\(hex)]"
+            var fix = ""
+            if let f = singleByteFix {
+                fix = String(format: "\n    ONE-BYTE: index %d is %02x, CRC wants %02x",
+                             f.index, f.actual, f.expected)
+            }
+            return "\(name) len=\(claimedLength) \(crcs)\(alt)\(fix)\n    [\(hex)]"
         }
     }
 
