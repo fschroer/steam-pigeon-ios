@@ -25,6 +25,27 @@ struct LinkView: View {
                     stat("probes", "\(model.probesSent)")
                 }
 
+                if !model.conflictingLocatorIds.isEmpty || !model.unauthorizedLocatorIds.isEmpty {
+                    Text("Other locators on this channel")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.orange)
+                    ForEach(Array(model.conflictingLocatorIds).sorted(), id: \.self) { id in
+                        HStack {
+                            Text(String(format: "%08x  authorized, not connected", id))
+                                .font(.caption2.monospaced())
+                            Spacer()
+                            Button("Connect") { model.switchTo(id) }
+                                .font(.caption2)
+                                .buttonStyle(.bordered)
+                        }
+                    }
+                    ForEach(Array(model.unauthorizedLocatorIds).sorted(), id: \.self) { id in
+                        Text(String(format: "%08x  no password held", id))
+                            .font(.caption2.monospaced())
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
                 if let p = model.prelaunch {
                     Text("Locator — \(p.deviceName.isEmpty ? "(unnamed)" : p.deviceName)")
                         .font(.subheadline.weight(.semibold))

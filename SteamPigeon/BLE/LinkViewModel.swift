@@ -19,6 +19,17 @@ final class LinkViewModel: ObservableObject {
     @Published private(set) var prelaunch: PreLaunchData?
     @Published private(set) var telemetry: TelemetryData?
     @Published private(set) var lastLocatorId: UInt32?
+    /// The locator whose data is on screen. Nothing else reaches the display.
+    @Published private(set) var connectedLocatorId: UInt32?
+    /// Authorized locators heard while ours holds the connection — shared channel.
+    @Published private(set) var conflictingLocatorIds: Set<UInt32> = []
+    /// Locators we hold no password for. Cannot be displayed or commanded.
+    @Published private(set) var unauthorizedLocatorIds: Set<UInt32> = []
+
+    /// ADR-0006 recognition gate. Open locators authenticate unconditionally, so an
+    /// unprovisioned locator works with no prompt — the backward-compatibility
+    /// guarantee. Passwords are not enterable yet; that needs the challenge dialog.
+    private var gate = LocatorGate()
 
     private let transport = BluetoothTransport()
     private let started = Date()
@@ -65,9 +76,19 @@ final class LinkViewModel: ObservableObject {
         // Nothing here is gated yet; this screen reports what arrived, whoever sent it.
         switch type {
         case .preLaunchData:
-            if let m = PreLaunchData.parse(frame) { prelaunch = m; lastLocatorId = m.locatorId }
+            if let m = PreLaunchData.parse(frame) {
+                lastLocatorId = m.locatorId
+                if admit(frame, m.locatorId, WireProtocol.prelaunchBaseStructSize) {
+                    prelaunch = m
+                    // A connected locator that has disarmed is no longer in flight.
+                    if telemetry?.locatorId == m.locatorId { telemetry = nil }
+                }
+            }
         case .telemetryData:
-            if let m = TelemetryData.parse(frame) { telemetry = m; lastLocatorId = m.locatorId }
+            if let m = TelemetryData.parse(frame) {
+                lastLocatorId = m.locatorId
+                if admit(frame, m.locatorId, WireProtocol.telemetryBaseStructSize) { telemetry = m }
+            }
         default:
             break
         }
@@ -76,6 +97,38 @@ final class LinkViewModel: ObservableObject {
         let name = type.map(String.init(describing:)) ?? "unknown(\(frame[1]))"
         recent.insert("\(stamp)  \(name)  \(frame.count)B", at: 0)
         if recent.count > 40 { recent.removeLast() }
+    }
+
+    /// Run one broadcast past the gate. Returns true if its data may be displayed.
+    ///
+    /// Both broadcasts arrive from EVERY locator on the channel (ADR-0020), and at
+    /// close range even from locators on other channels — off-channel capture is
+    /// expected physics that no firmware change can fix, which is precisely why the
+    /// identity gate rather than the radio has to keep the wrong rocket off screen.
+    private func admit(_ frame: [UInt8], _ locatorId: UInt32, _ baseSize: Int) -> Bool {
+        switch gate.evaluate(frame: frame, locatorId: locatorId, baseSize: baseSize) {
+        case .accepted(let id):
+            connectedLocatorId = id
+            conflictingLocatorIds.remove(id)
+            unauthorizedLocatorIds.remove(id)
+            return true
+        case .conflict(let id):
+            conflictingLocatorIds.insert(id)
+            return false
+        case .unauthorized(let id):
+            unauthorizedLocatorIds.insert(id)
+            return false
+        }
+    }
+
+    /// The explicit user switch — ADR-0006's conflict-banner Connect action. The only
+    /// thing besides holder silence that moves a live connection.
+    func switchTo(_ locatorId: UInt32) {
+        gate.connect(to: locatorId)
+        connectedLocatorId = locatorId
+        conflictingLocatorIds.remove(locatorId)
+        prelaunch = nil
+        telemetry = nil
     }
 
     var stateLabel: String {
