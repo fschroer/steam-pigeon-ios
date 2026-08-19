@@ -25,6 +25,20 @@ struct MapScreen: View {
                 .padding(.horizontal, 12)
                 .padding(.top, 8)
 
+            // The telemetry panel, over the map as on Android. Positioned
+            // lower-right by default and draggable, because whichever corner it
+            // starts in will sometimes be the corner the rocket is in.
+            if model.connectedLocatorId != nil {
+                VStack {
+                    Spacer()
+                    HStack {
+                        Spacer()
+                        statsPanel
+                    }
+                }
+                .padding(8)
+            }
+
             // ADR-0023 §5: LOW raises the prompt, it does not take the bearing away.
             if model.phone.compassTrust != .high {
                 VStack {
@@ -56,6 +70,33 @@ struct MapScreen: View {
                 }
             }
         }
+    }
+
+    @ViewBuilder private var statsPanel: some View {
+        let p = model.prelaunch
+        let t = model.telemetry
+        LocatorStatsPanel(
+            deviceName: p?.deviceName ?? "",
+            flightState: t?.flightState ?? .waitingLaunch,
+            armed: t?.armed ?? p?.armed ?? false,
+            distanceM: model.vector?.distanceM,
+            altitudeAglM: t?.altitudeAgl ?? p?.altitudeAgl ?? 0,
+            // NED: down is positive, so a climb is the negation.
+            velocityMs: t.map { -$0.velocityNed.z },
+            inclinationDeg: nil,
+            headingDeg: nil,
+            accel: p?.accel,
+            gyro: p?.gyro,
+            latitude: t?.latitude ?? p?.latitude ?? 0,
+            longitude: t?.longitude ?? p?.longitude ?? 0,
+            rssi: t.map { Int($0.rssi) } ?? p.map { Int($0.rssi) },
+            snr: t.map { Int($0.snr) } ?? p.map { Int($0.snr) },
+            deployChannelText: (p?.deployChannelModes ?? []).enumerated().map { i, mode in
+                DeployChannelText.line(channel: i + 1, mode: mode, config: p ?? PreLaunchData())
+            },
+            linkNote: nil,
+            onTapSpeak: nil
+        )
     }
 
     /// Bumped to ask the map to re-frame. A counter rather than a Bool so repeated
