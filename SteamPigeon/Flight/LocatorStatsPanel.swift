@@ -130,11 +130,16 @@ enum PanelDragBounds {
     static let margin: CGFloat = 8
 
     static func clamp(_ proposed: CGSize, panel: CGSize, container: CGSize) -> CGSize {
-        // Nothing measured yet. Android guards the same degenerate case with
-        // `maxOf(marginPx, …)` because a not-yet-measured scaffold produced a lower
-        // bound above the upper one and threw on returning to the map screen.
+        // Nothing measured yet: REFUSE TO MOVE rather than passing the drag through.
+        // The first version returned `proposed` here, which fails open — and when the
+        // container size arrived late that was every drag, so the panel could be
+        // pushed off screen and never recovered. Failing closed costs at worst a
+        // panel that will not drag for one frame.
+        //
+        // Android guards the same degenerate case with `maxOf(marginPx, …)`, where an
+        // unmeasured scaffold produced a lower bound above the upper one and threw.
         guard container.width > 0, container.height > 0,
-              panel.width > 0, panel.height > 0 else { return proposed }
+              panel.width > 0, panel.height > 0 else { return .zero }
 
         let minX = min(-(container.width - panel.width - margin * 2), 0)
         let minY = min(-(container.height - panel.height - margin * 2), 0)

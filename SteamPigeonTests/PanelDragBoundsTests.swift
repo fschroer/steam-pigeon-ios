@@ -46,13 +46,30 @@ final class PanelDragBoundsTests: XCTestCase {
     /// The degenerate case Android guards explicitly: before measurement the available
     /// extent goes negative, and a naive range would put the lower bound above the
     /// upper one — which threw on Android when returning to the map screen.
-    func testUnmeasuredSizesDoNotProduceAnInvalidRange() {
-        XCTAssertEqual(CGSize(width: -5, height: -5),
-                       PanelDragBounds.clamp(CGSize(width: -5, height: -5),
+    /// FAILS CLOSED. The first version returned the proposed offset unchanged when a
+    /// size was missing, which is fail-open — and with the container measured late
+    /// that was every drag, so the panel left the screen and could not be recovered.
+    func testUnmeasuredSizesRefuseToMove() {
+        XCTAssertEqual(CGSize.zero,
+                       PanelDragBounds.clamp(CGSize(width: -5000, height: -5000),
                                              panel: .zero, container: container))
-        XCTAssertEqual(CGSize(width: -5, height: -5),
-                       PanelDragBounds.clamp(CGSize(width: -5, height: -5),
+        XCTAssertEqual(CGSize.zero,
+                       PanelDragBounds.clamp(CGSize(width: -5000, height: -5000),
                                              panel: panel, container: .zero))
+    }
+
+    /// Whatever the inputs, the result must never leave the container.
+    func testNoInputCanEscapeTheContainer() {
+        for w in stride(from: -5000.0, through: 5000.0, by: 250) {
+            for h in stride(from: -5000.0, through: 5000.0, by: 250) {
+                let out = PanelDragBounds.clamp(CGSize(width: w, height: h),
+                                                panel: panel, container: container)
+                XCTAssertLessThanOrEqual(out.width, 0)
+                XCTAssertLessThanOrEqual(out.height, 0)
+                XCTAssertGreaterThanOrEqual(out.width, -(container.width - panel.width))
+                XCTAssertGreaterThanOrEqual(out.height, -(container.height - panel.height))
+            }
+        }
     }
 
     /// A panel larger than its container must still clamp to something valid rather
