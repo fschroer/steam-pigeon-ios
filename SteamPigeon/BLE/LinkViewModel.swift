@@ -55,6 +55,46 @@ final class LinkViewModel: ObservableObject {
 
     private var plausibility = DistancePlausibility()
 
+    /// Recorded ground track of the connected locator, oldest first.
+    ///
+    /// Deduped and capped: at 1 Hz an unbounded array would grow all afternoon, and
+    /// consecutive fixes from a rocket sitting on the pad differ only by GPS noise,
+    /// which would draw a scribble rather than a track.
+    @Published private(set) var track: [CLLocationCoordinate2D] = []
+    private static let trackMinSeparationM = 2.0
+    private static let trackMaxPoints = 2_000
+
+    private func recordTrack(lat: Double, lon: Double, hasFix: Bool) {
+        // Only fixed positions join the track. A fixless reading may be good enough to
+        // keep quoting a stale distance (ADR-0022) but not to draw as ground truth.
+        guard hasFix, lat != 0 || lon != 0 else { return }
+        let point = CLLocationCoordinate2D(latitude: lat, longitude: lon)
+        if let last = track.last {
+            let step = LocatorVector.between(from: (last.latitude, last.longitude),
+                                             to: (lat, lon)).distanceM
+            guard Double(step) >= Self.trackMinSeparationM else { return }
+        }
+        track.append(point)
+        if track.count > Self.trackMaxPoints { track.removeFirst(track.count - Self.trackMaxPoints) }
+    }
+
+    /// The connected locator's latest position, if it reported one.
+    var rocketCoordinate: CLLocationCoordinate2D? {
+        if let t = telemetry, t.latitude != 0 || t.longitude != 0 {
+            return CLLocationCoordinate2D(latitude: t.latitude, longitude: t.longitude)
+        }
+        if let p = prelaunch, p.latitude != 0 || p.longitude != 0 {
+            return CLLocationCoordinate2D(latitude: p.latitude, longitude: p.longitude)
+        }
+        return nil
+    }
+
+    var rocketAccuracyM: Double? {
+        if let t = telemetry { return Double(t.horizontalAccuracy) }
+        if let p = prelaunch { return Double(p.horizontalAccuracy) }
+        return nil
+    }
+
     private let transport = BluetoothTransport()
     private let started = Date()
 
@@ -112,6 +152,7 @@ final class LinkViewModel: ObservableObject {
                                       to: (lat, lon),
                                       altitudeAglM: altitudeAglM)
         let hasFix = DistancePlausibility.hasFix(satellites: satellites, gpsStatus: gpsStatus)
+        recordTrack(lat: lat, lon: lon, hasFix: hasFix)
 
         if plausibility.accept(distanceM: v.distanceM, hasFix: hasFix, state: state) != nil {
             vector = v
@@ -235,6 +276,7 @@ final class LinkViewModel: ObservableObject {
     func switchTo(_ locatorId: UInt32) {
         plausibility.reset()      // a new rocket is not judged against the old one's track
         vector = nil
+        track.removeAll()
         policy.reconsider(locatorId)
         gate.connect(to: locatorId)
         connectedLocatorId = locatorId

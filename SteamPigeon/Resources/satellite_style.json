@@ -1,0 +1,32 @@
+{
+  "version": 8,
+  "name": "Satellite (offline prototype)",
+  "//": "MapLibre style JSON. This replaces Google's MapType.SATELLITE enum.",
+  "//sources": "A single raster source = the satellite imagery tiles. THIS url is what the offline pack downloads and caches on-device.",
+  "sources": {
+    "satellite": {
+      "type": "raster",
+      "//": "PROTOTYPE tile source: Esri World Imagery. Free for evaluation but has usage terms — see PROTOTYPE_README.md before shipping. Swap this URL for a licensed provider (Mapbox raster, MapTiler, Bing, or your own tile server) for production.",
+      "tiles": [
+        "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+      ],
+      "tileSize": 256,
+      "minzoom": 0,
+      "maxzoom": 19,
+      "attribution": "Imagery: Esri, Maxar, Earthstar Geographics, and the GIS User Community"
+    }
+  },
+  "layers": [
+    {
+      "id": "background",
+      "type": "background",
+      "paint": { "background-color": "#0b0f14" }
+    },
+    {
+      "id": "satellite",
+      "type": "raster",
+      "source": "satellite",
+      "paint": { "raster-opacity": 1.0 }
+    }
+  ]
+}

@@ -17,6 +17,8 @@ struct RootView: View {
         TabView {
             FlightView(model: model)
                 .tabItem { Label("Flight", systemImage: "location.north.circle") }
+            MapScreen(model: model)
+                .tabItem { Label("Map", systemImage: "map") }
             LinkView(model: model)
                 .tabItem { Label("Link", systemImage: "antenna.radiowaves.left.and.right") }
         }
