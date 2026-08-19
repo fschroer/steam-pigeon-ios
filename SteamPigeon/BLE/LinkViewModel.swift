@@ -156,7 +156,14 @@ final class LinkViewModel: ObservableObject {
 
         if plausibility.accept(distanceM: v.distanceM, hasFix: hasFix, state: state) != nil {
             vector = v
-            vectorSuppressedReason = nil
+            // ADR-0023 gives ADR-0022's suppression a SECOND, independent cause. The
+            // bearing is a subtraction of the locator bearing and the phone's compass
+            // heading, so an uncalibrated magnetometer breaks the other half of it —
+            // a position ADR-0022 is perfectly happy with is still withheld when the
+            // compass reports UNRELIABLE.
+            vectorSuppressedReason = phone.compassTrust == .unreliable
+                ? "compass unreliable — move away from metal, or figure-eight the phone"
+                : nil
         } else {
             vector = nil
             vectorSuppressedReason = hasFix

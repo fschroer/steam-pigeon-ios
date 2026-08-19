@@ -28,6 +28,9 @@ struct FlightMapView: UIViewRepresentable {
     let phoneAccuracyM: Double?
     /// Recorded ground track, oldest first.
     let track: [CLLocationCoordinate2D]
+    /// Increment to request a re-frame. The camera otherwise fits once and then stays
+    /// out of the way.
+    var recentreToken: Int = 0
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -49,7 +52,7 @@ struct FlightMapView: UIViewRepresentable {
         context.coordinator.apply(to: map, rocket: rocket, phone: phone,
                                   rocketAccuracyM: rocketAccuracyM,
                                   phoneAccuracyM: phoneAccuracyM,
-                                  track: track)
+                                  track: track, recentreToken: recentreToken)
     }
 
     final class Coordinator: NSObject, MLNMapViewDelegate {
@@ -59,6 +62,7 @@ struct FlightMapView: UIViewRepresentable {
         /// Fit the camera once on the first real pair, then leave the camera to the
         /// user. Re-fitting on every 1 Hz update would fight anyone panning.
         private var didFit = false
+        private var lastRecentreToken = 0
 
         func mapView(_ map: MLNMapView, didFinishLoading style: MLNStyle) {
             styleReady = true
@@ -71,7 +75,12 @@ struct FlightMapView: UIViewRepresentable {
                    phone: CLLocationCoordinate2D?,
                    rocketAccuracyM: Double?,
                    phoneAccuracyM: Double?,
-                   track: [CLLocationCoordinate2D]) {
+                   track: [CLLocationCoordinate2D],
+                   recentreToken: Int = 0) {
+            if recentreToken != lastRecentreToken {
+                lastRecentreToken = recentreToken
+                didFit = false                      // an explicit ask re-arms the fit
+            }
             let work = { [weak self] in
                 guard let self, let style = map.style else { return }
                 self.draw(style: style, rocket: rocket, phone: phone,
@@ -89,7 +98,12 @@ struct FlightMapView: UIViewRepresentable {
                           phone: CLLocationCoordinate2D?,
                           rocketAccuracyM: Double?,
                           phoneAccuracyM: Double?,
-                          track: [CLLocationCoordinate2D]) {
+                          track: [CLLocationCoordinate2D],
+                   recentreToken: Int = 0) {
+            if recentreToken != lastRecentreToken {
+                lastRecentreToken = recentreToken
+                didFit = false                      // an explicit ask re-arms the fit
+            }
 
             // Accuracy rings first, so the markers sit on top of them.
             upsertCircle(style, id: "phone-acc", centre: phone, radiusM: phoneAccuracyM,

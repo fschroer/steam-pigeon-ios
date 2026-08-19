@@ -16,15 +16,52 @@ struct MapScreen: View {
                 phone: model.phone.coordinate,
                 rocketAccuracyM: model.rocketAccuracyM,
                 phoneAccuracyM: model.phone.horizontalAccuracyM,
-                track: model.track
+                track: model.track,
+                recentreToken: recentre
             )
             .ignoresSafeArea(edges: .bottom)
 
             banner
                 .padding(.horizontal, 12)
                 .padding(.top, 8)
+
+            // ADR-0023 §5: LOW raises the prompt, it does not take the bearing away.
+            if model.phone.compassTrust != .high {
+                VStack {
+                    Spacer()
+                    Label(model.phone.compassTrust == .unreliable
+                          ? "Compass unreliable — bearing withheld"
+                          : "Compass needs calibration — figure-eight the phone",
+                          systemImage: "location.slash")
+                        .font(.caption)
+                        .padding(8)
+                        .background(.ultraThinMaterial, in: Capsule())
+                        .padding(.bottom, 16)
+                }
+            }
+
+            VStack {
+                Spacer()
+                HStack {
+                    Spacer()
+                    Button {
+                        recentre += 1
+                    } label: {
+                        Image(systemName: "scope").font(.title2).padding(10)
+                    }
+                    .background(.ultraThinMaterial, in: Circle())
+                    .padding(.trailing, 14)
+                    .padding(.bottom, 60)
+                    .accessibilityLabel("Re-centre on rocket and phone")
+                }
+            }
         }
     }
+
+    /// Bumped to ask the map to re-frame. A counter rather than a Bool so repeated
+    /// taps each take effect — the camera otherwise fits once and then leaves the
+    /// user's panning alone.
+    @State private var recentre = 0
 
     private var banner: some View {
         HStack(spacing: 14) {
