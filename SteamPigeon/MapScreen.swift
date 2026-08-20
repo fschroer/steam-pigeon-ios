@@ -20,6 +20,7 @@ struct MapScreen: View {
     @State private var autoZoom = false
     @State private var headingUp = false
     @State private var showMenu = false
+    @State private var openDestination: MenuDestination?
 
     var body: some View {
         // Measured HERE, at the top, rather than from the map's background. The panel
@@ -124,6 +125,31 @@ struct MapScreen: View {
             }
         }
         .ignoresSafeArea(edges: .bottom)
+        .sheet(isPresented: $showMenu) {
+            MenuView(
+                destinations: MenuGating.destinations(
+                    linkReady: model.state == .ready,
+                    locatorActive: model.connectedLocatorId != nil,
+                    armed: model.armed),
+                onSelect: { destination in
+                    showMenu = false
+                    openDestination = destination
+                },
+                onDismiss: { showMenu = false })
+        }
+        .sheet(item: $openDestination) { destination in
+            NavigationView {
+                NotYetBuiltView(destination: destination)
+                    .navigationTitle(destination.title)
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .navigationBarLeading) {
+                            Button("Done") { openDestination = nil }
+                        }
+                    }
+            }
+            .navigationViewStyle(.stack)
+        }
     }
 
     // MARK: - Overlays
