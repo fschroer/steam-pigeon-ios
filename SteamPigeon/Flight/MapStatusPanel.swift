@@ -60,7 +60,7 @@ struct MapStatusPanel: View {
             linkRow
             if let note = linkNote {
                 Text(note.text)
-                    .font(SPFont.telemetry)
+                    .font(SPFont.bodySmall)
                     .foregroundStyle(note.color)
                     // Fixed width so a long verdict wraps instead of widening the
                     // panel — unconstrained it lays out on one line and drags the
@@ -87,36 +87,45 @@ struct MapStatusPanel: View {
         }
     }
 
+    /// A Material filled button: EXACTLY 48 pt tall, stadium-shaped, with the
+    /// container/content colour pair from the scheme rather than a tint over white.
+    /// Building it explicitly rather than styling `.borderedProminent`, whose padding
+    /// added to the frame height and whose content colour is not `onPrimary`.
+    private func actionButton(_ title: String,
+                              container: Color,
+                              content: Color,
+                              enabled: Bool = true,
+                              action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(SPFont.labelLarge)
+                .foregroundStyle(enabled ? content : content.opacity(0.5))
+                .frame(maxWidth: .infinity)
+                .frame(height: 48)
+                .background(enabled ? container : container.opacity(0.35))
+                .clipShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+    }
+
     /// Large, clearly labelled targets — this is pressed outdoors, often in a hurry.
     private var actionButtons: some View {
         VStack(spacing: 8) {
-            Button {
+            actionButton("Rescan", container: SPColor.primary, content: SPColor.onPrimary) {
                 actionsExpanded = false
                 onRescan?()
-            } label: {
-                Text("Rescan")
-                    .font(SPFont.labelLarge)
-                    .frame(maxWidth: .infinity, minHeight: 48)
             }
-            .buttonStyle(.borderedProminent)
-            // Material buttons are STADIUM-shaped. SwiftUI's default corner radius is
-            // much tighter, which is what made these read as a different control.
-            .buttonBorderShape(.capsule)
 
-            Button {
-                actionsExpanded = false
-                onToggleArmed?()
-            } label: {
-                Text(armed ? "Disarm" : "Arm")
-                    .font(SPFont.labelLarge)
-                    .frame(maxWidth: .infinity, minHeight: 48)
-            }
-            .buttonStyle(.borderedProminent)
-            .buttonBorderShape(.capsule)
             // Disarm is error-coloured, as on Android: the consequences of the two
             // are not symmetric.
-            .tint(armed ? SPColor.error : SPColor.primary)
-            .disabled(!canArm)
+            actionButton(armed ? "Disarm" : "Arm",
+                         container: armed ? SPColor.error : SPColor.primary,
+                         content: armed ? SPColor.onError : SPColor.onPrimary,
+                         enabled: canArm) {
+                actionsExpanded = false
+                onToggleArmed?()
+            }
         }
         .frame(width: iconGutter + nameWidth + batteryGutter)
         .padding(.top, 8)
@@ -131,7 +140,7 @@ struct MapStatusPanel: View {
                 .frame(width: iconGutter, alignment: .leading)
                 .foregroundStyle(connectionState == .ready ? SPColor.primary : SPColor.outline)
             Text(receiverText)
-                .font(SPFont.telemetry)
+                .font(SPFont.bodyLarge)
                 .foregroundStyle(SPColor.onBackground)
                 .lineLimit(1)
                 .truncationMode(.tail)
@@ -159,13 +168,16 @@ struct MapStatusPanel: View {
                                : .default, value: blinkOn)
                     .onChange(of: armPending) { pending in blinkOn = !pending }
                 if let s = satellites {
-                    Text("\(s)").font(SPFont.telemetry).foregroundStyle(rocketTint)
+                    Text("\(s)")
+                        .font(.custom("Poppins-Regular", size: 10, relativeTo: .caption2))
+                        .baselineOffset(7)          // superscript, as Android sets
+                        .foregroundStyle(rocketTint)
                 }
             }
             .frame(width: iconGutter, alignment: .leading)
 
             Text(locatorText)
-                .font(SPFont.telemetry)
+                .font(SPFont.bodyLarge)
                 .foregroundStyle(SPColor.onBackground)
                 .lineLimit(1)
                 .truncationMode(.tail)
@@ -182,30 +194,28 @@ struct MapStatusPanel: View {
                 .foregroundStyle(rssi.map { RssiBand.color($0) } ?? SPColor.outline)
             if let r = rssi {
                 Text("\(r) dBm")
-                    .font(SPFont.telemetry)
+                    .font(SPFont.bodyLarge)
                     .foregroundStyle(RssiBand.color(r))
             }
             if let s = snr {
                 Text("SNR \(s) dB")
-                    .font(SPFont.telemetry)
+                    .font(SPFont.bodyLarge)
                     .foregroundStyle(SnrBand.color(s))
             }
         }
         .frame(width: iconGutter + nameWidth + batteryGutter, alignment: .leading)
     }
 
-    /// Battery as a filled glyph plus volts, mirroring Android's battery icon column.
+    /// Battery as a glyph alone. The voltage text is deliberately absent — that
+    /// column is wanted for something else, and the glyph already carries the level.
     @ViewBuilder private func battery(_ mv: UInt16?) -> some View {
         if let mv, mv > 0 {
             let volts = Double(mv) / 1000
-            HStack(spacing: 2) {
-                Image(systemName: batterySymbol(volts))
-                    .font(.system(size: iconSize * 0.8))
-                    .foregroundStyle(volts < 3.5 ? SPColor.error : SPColor.onSurfaceVariant)
-                Text(String(format: "%.2fV", volts))
-                    .font(SPFont.telemetry)
-                    .foregroundStyle(SPColor.onSurfaceVariant)
-            }
+            Image(systemName: batterySymbol(volts))
+                .font(.system(size: iconSize * 0.8))
+                .foregroundStyle(volts < 3.5 ? SPColor.error : SPColor.onSurfaceVariant)
+                .frame(width: batteryGutter, alignment: .leading)
+                .accessibilityLabel(String(format: "Battery %.2f volts", volts))
         }
     }
 
