@@ -13,14 +13,30 @@ import SwiftUI
 struct RootView: View {
     @StateObject private var model = LinkViewModel()
 
+    @State private var showDiagnostics = false
+
     var body: some View {
-        TabView {
-            FlightView(model: model)
-                .tabItem { Label("Flight", systemImage: "location.north.circle") }
+        // ONE main screen, as Android has: the map with its overlays. The earlier
+        // Flight/Map/Link tab bar was scaffolding — Android has no tab bar, and its
+        // other destinations live behind a navigation drawer, which maps to a
+        // settings list rather than tabs.
+        ZStack(alignment: .bottomTrailing) {
             MapScreen(model: model)
-                .tabItem { Label("Map", systemImage: "map") }
-            LinkView(model: model)
-                .tabItem { Label("Link", systemImage: "antenna.radiowaves.left.and.right") }
+
+            // TEMPORARY: the diagnostics screen has no Android counterpart. It stays
+            // reachable because it is what turned a bad-CRC count into a firmware
+            // version skew, but it belongs behind the settings list once that exists,
+            // not on a control of its own.
+            Button { showDiagnostics = true } label: {
+                Image(systemName: "stethoscope").font(.footnote).padding(8)
+            }
+            .background(.ultraThinMaterial, in: Circle())
+            .padding(.trailing, 12)
+            .padding(.bottom, 12)
+            .accessibilityLabel("Link diagnostics (temporary)")
+        }
+        .sheet(isPresented: $showDiagnostics) {
+            NavigationView { LinkView(model: model) }.navigationViewStyle(.stack)
         }
         .preferredColorScheme(.dark)     // matches Android: read outdoors, not in a browser
         .tint(SPColor.primary)

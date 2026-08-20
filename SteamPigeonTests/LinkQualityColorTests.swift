@@ -74,3 +74,46 @@ final class LinkQualityColorTests: XCTestCase {
                        DeployChannelText.line(channel: 1, mode: .droguePrimary, config: cfg))
     }
 }
+
+/// ADR-0017 marker trust states, mirroring Android's `RocketMarkerState`.
+final class RocketMarkerStateTests: XCTestCase {
+
+    private func hex(_ c: UIColor) -> UInt32 {
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        c.getRed(&r, green: &g, blue: &b, alpha: &a)
+        return (UInt32((r * 255).rounded()) << 16)
+             | (UInt32((g * 255).rounded()) << 8)
+             |  UInt32((b * 255).rounded())
+    }
+
+    func testColoursMatchAndroidsConstants() {
+        XCTAssertEqual(0x00FF00, hex(RocketMarkerState.live.color))
+        XCTAssertEqual(0x9E9E9E, hex(RocketMarkerState.degraded.color))
+        XCTAssertEqual(0xFF0000, hex(RocketMarkerState.stale.color))
+    }
+
+    func testFreshnessTimeoutMatchesAndroid() {
+        XCTAssertEqual(2.0, RocketMarkerState.messageTimeout)
+    }
+
+    func testLivePacketWithGoodGpsIsLive() {
+        XCTAssertEqual(.live, RocketMarkerState.from(lastMessageAge: 1.9, gpsStatus: .ok))
+    }
+
+    func testLivePacketWithBadGpsIsDegraded() {
+        XCTAssertEqual(.degraded, RocketMarkerState.from(lastMessageAge: 1.0, gpsStatus: .warning))
+        XCTAssertEqual(.degraded, RocketMarkerState.from(lastMessageAge: 1.0, gpsStatus: nil))
+    }
+
+    /// **Link age is checked first.** With no recent packet the locator's last
+    /// reported gpsStatus is itself stale and cannot qualify anything — so a stale
+    /// link reads stale even when the last packet claimed a healthy fix.
+    func testStaleLinkOutranksAHealthyGpsClaim() {
+        XCTAssertEqual(.stale, RocketMarkerState.from(lastMessageAge: 2.0, gpsStatus: .ok))
+        XCTAssertEqual(.stale, RocketMarkerState.from(lastMessageAge: 60, gpsStatus: .ok))
+    }
+
+    func testNeverHeardIsStale() {
+        XCTAssertEqual(.stale, RocketMarkerState.from(lastMessageAge: .infinity, gpsStatus: nil))
+    }
+}

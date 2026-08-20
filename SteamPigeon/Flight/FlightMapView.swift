@@ -31,6 +31,8 @@ struct FlightMapView: UIViewRepresentable {
     /// Increment to request a re-frame. The camera otherwise fits once and then stays
     /// out of the way.
     var recentreToken: Int = 0
+    /// Drives marker and accuracy-ring colour, as on Android.
+    var markerState: RocketMarkerState = .live
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -39,8 +41,11 @@ struct FlightMapView: UIViewRepresentable {
         let map = MLNMapView(frame: .zero, styleURL: url)
         map.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         map.delegate = context.coordinator
-        map.logoView.isHidden = false          // Esri attribution stays visible
-        map.compassView.isHidden = false
+        // Match Android's uiSettings (MapLibreCompat.kt:423-431) exactly.
+        map.logoView.isHidden = true            // avoids overlap with the app's overlays
+        map.attributionButton.isHidden = true
+        map.compassView.isHidden = true         // the app draws its own compass
+        map.allowsTilting = false               // isTiltGesturesEnabled = false
         // North-up and flat. ADR-0014: tilt is compensated separately, so letting the
         // SDK account for it too corrects twice.
         map.setCenter(phone ?? rocket ?? CLLocationCoordinate2D(latitude: 0, longitude: 0),
@@ -52,7 +57,8 @@ struct FlightMapView: UIViewRepresentable {
         context.coordinator.apply(to: map, rocket: rocket, phone: phone,
                                   rocketAccuracyM: rocketAccuracyM,
                                   phoneAccuracyM: phoneAccuracyM,
-                                  track: track, recentreToken: recentreToken)
+                                  track: track, recentreToken: recentreToken,
+                                  markerState: markerState)
     }
 
     final class Coordinator: NSObject, MLNMapViewDelegate {
@@ -76,7 +82,8 @@ struct FlightMapView: UIViewRepresentable {
                    rocketAccuracyM: Double?,
                    phoneAccuracyM: Double?,
                    track: [CLLocationCoordinate2D],
-                   recentreToken: Int = 0) {
+                   recentreToken: Int = 0,
+                   markerState: RocketMarkerState = .live) {
             if recentreToken != lastRecentreToken {
                 lastRecentreToken = recentreToken
                 didFit = false                      // an explicit ask re-arms the fit
@@ -85,7 +92,7 @@ struct FlightMapView: UIViewRepresentable {
                 guard let self, let style = map.style else { return }
                 self.draw(style: style, rocket: rocket, phone: phone,
                           rocketAccuracyM: rocketAccuracyM, phoneAccuracyM: phoneAccuracyM,
-                          track: track)
+                          track: track, markerState: markerState)
                 self.fitIfNeeded(map, rocket: rocket, phone: phone)
             }
             if styleReady { work() } else { pending = work }
@@ -99,20 +106,16 @@ struct FlightMapView: UIViewRepresentable {
                           rocketAccuracyM: Double?,
                           phoneAccuracyM: Double?,
                           track: [CLLocationCoordinate2D],
-                   recentreToken: Int = 0) {
-            if recentreToken != lastRecentreToken {
-                lastRecentreToken = recentreToken
-                didFit = false                      // an explicit ask re-arms the fit
-            }
+                          markerState: RocketMarkerState) {
 
             // Accuracy rings first, so the markers sit on top of them.
             upsertCircle(style, id: "phone-acc", centre: phone, radiusM: phoneAccuracyM,
                          colour: .systemBlue, opacity: 0.18)
             upsertCircle(style, id: "rocket-acc", centre: rocket, radiusM: rocketAccuracyM,
-                         colour: .systemOrange, opacity: 0.18)
+                         colour: markerState.color, opacity: 0.18)
 
             // The ground track.
-            upsertLine(style, id: "track", coords: track, colour: .systemOrange, width: 2)
+            upsertLine(style, id: "track", coords: track, colour: RocketMarkerState.live.color, width: 2)
 
             // The straight line between phone and rocket — the bearing, drawn. With a
             // loose phone fix this is the thing that shows how loose: the line swings
@@ -123,7 +126,7 @@ struct FlightMapView: UIViewRepresentable {
                 removeLayer(style, id: "bearing")
             }
 
-            upsertPoint(style, id: "rocket", at: rocket, colour: .systemOrange, radius: 7)
+            upsertPoint(style, id: "rocket", at: rocket, colour: markerState.color, radius: 7)
             upsertPoint(style, id: "phone", at: phone, colour: .systemBlue, radius: 5)
         }
 

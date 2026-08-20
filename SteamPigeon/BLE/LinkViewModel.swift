@@ -20,6 +20,8 @@ final class LinkViewModel: ObservableObject {
     @Published private(set) var prelaunch: PreLaunchData?
     @Published private(set) var telemetry: TelemetryData?
     @Published private(set) var lastLocatorId: UInt32?
+    /// When the connected locator last spoke. Drives the marker's trust colour.
+    @Published private(set) var lastLocatorMessage: Date?
     /// The locator whose data is on screen. Nothing else reaches the display.
     @Published private(set) var connectedLocatorId: UInt32?
     /// Authorized locators heard while ours holds the connection — shared channel.
@@ -87,6 +89,13 @@ final class LinkViewModel: ObservableObject {
             return CLLocationCoordinate2D(latitude: p.latitude, longitude: p.longitude)
         }
         return nil
+    }
+
+    /// ADR-0017 trust state for the drawn position.
+    var markerState: RocketMarkerState {
+        RocketMarkerState.from(
+            lastMessageAge: lastLocatorMessage.map { Date().timeIntervalSince($0) } ?? .infinity,
+            gpsStatus: telemetry?.gpsStatus ?? prelaunch?.gpsStatus)
     }
 
     var rocketAccuracyM: Double? {
@@ -227,6 +236,7 @@ final class LinkViewModel: ObservableObject {
         switch gate.evaluate(frame: frame, locatorId: locatorId, baseSize: baseSize) {
         case .accepted(let id):
             connectedLocatorId = id
+            lastLocatorMessage = Date()
             conflictingLocatorIds.remove(id)
             unauthorizedLocatorIds.remove(id)
             return true

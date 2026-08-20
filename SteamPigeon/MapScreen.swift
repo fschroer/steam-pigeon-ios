@@ -22,7 +22,8 @@ struct MapScreen: View {
                     rocketAccuracyM: model.rocketAccuracyM,
                     phoneAccuracyM: model.phone.horizontalAccuracyM,
                     track: model.track,
-                    recentreToken: recentre
+                    recentreToken: recentre,
+                    markerState: model.markerState
                 )
 
                 MapStatusPanel(
@@ -45,10 +46,8 @@ struct MapScreen: View {
                 }
 
                 if model.phone.compassTrust != .high {
-                    compassNote
+                    compassGlyph
                 }
-
-                recentreButton
             }
         }
         .ignoresSafeArea(edges: .bottom)
@@ -95,35 +94,30 @@ struct MapScreen: View {
         .padding(8)
     }
 
-    private var compassNote: some View {
+    /// Android marks a doubted compass with an **∞ glyph** on its own compass rose —
+    /// red when unreliable, yellow when merely disturbed — not a text banner
+    /// (FlightMapScreen.kt:1395-1412).
+    ///
+    /// The rose itself is part of the map control column, which is not built yet, so
+    /// this sits where the rose will go. The glyph reads as "infinity" to a screen
+    /// reader, which is not what it means, so it carries an explicit label — as
+    /// Android's does.
+    private var compassGlyph: some View {
         VStack {
-            Spacer()
-            Label(model.phone.compassTrust == .unreliable
-                  ? "Compass unreliable — bearing withheld"
-                  : "Compass needs calibration — figure-eight the phone",
-                  systemImage: "location.slash")
-                .font(SPFont.labelMedium)
-                .padding(8)
-                .background(.ultraThinMaterial, in: Capsule())
-                .padding(.bottom, 16)
-        }
-        .frame(maxWidth: .infinity)
-    }
-
-    private var recentreButton: some View {
-        VStack {
-            Spacer()
             HStack {
-                Button { recentre += 1 } label: {
-                    Image(systemName: "scope").font(.title2).padding(10)
-                }
-                .background(.ultraThinMaterial, in: Circle())
-                .accessibilityLabel("Re-centre map and return the telemetry panel")
                 Spacer()
+                Text("∞")
+                    .font(.system(size: 20, weight: .bold))
+                    .foregroundStyle(model.phone.compassTrust == .unreliable
+                                     ? Color.red : Color.yellow)
+                    .padding(10)
+                    .accessibilityLabel(model.phone.compassTrust == .unreliable
+                        ? "Compass unreliable — sweep the phone in a figure-eight to recalibrate"
+                        : "Compass disturbed — sweep the phone in a figure-eight to recalibrate")
             }
+            Spacer()
         }
-        .padding(.leading, 14)
-        .padding(.bottom, 60)
+        .padding(.top, 100)
     }
 
     private var rssi: Int? {
