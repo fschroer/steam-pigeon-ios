@@ -35,6 +35,14 @@ struct FlightMapView: UIViewRepresentable {
     var markerState: RocketMarkerState = .live
     /// Reports the live camera out, so the compass rose can counter-rotate and the
     /// scale bar can size itself. Both are wrong at every zoom but one without it.
+    /// Camera bearing to hold, or nil to leave rotation to the user. Non-nil is
+    /// heading-up mode.
+    var headingUpDeg: Double?
+    /// Camera pitch, from the tilt mode.
+    var pitchDeg: Double = 0
+    /// Keep this coordinate centred, or nil to leave panning to the user.
+    var autoCentreOn: CLLocationCoordinate2D?
+
     var onCameraChange: ((_ bearing: Double, _ zoom: Double, _ centre: CLLocationCoordinate2D) -> Void)?
 
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -63,6 +71,8 @@ struct FlightMapView: UIViewRepresentable {
                                   phoneAccuracyM: phoneAccuracyM,
                                   track: track, recentreToken: recentreToken,
                                   markerState: markerState)
+        context.coordinator.applyCamera(to: map, heading: headingUpDeg,
+                                        pitch: pitchDeg, centre: autoCentreOn)
     }
 
     final class Coordinator: NSObject, MLNMapViewDelegate {
@@ -84,6 +94,34 @@ struct FlightMapView: UIViewRepresentable {
         func mapView(_ map: MLNMapView, regionDidChangeWith reason: MLNCameraChangeReason,
                      animated: Bool) {
             report(map)
+        }
+
+        /// Drive the camera from the control toggles.
+        ///
+        /// Rotation and centring are only asserted when their mode is ON, so a user
+        /// who pans or twists with them off is never fought. Small deltas are ignored
+        /// because writing the camera on every 1 Hz packet cancels an in-progress
+        /// gesture — the same reason Android filters rather than snapping.
+        func applyCamera(to map: MLNMapView, heading: Double?, pitch: Double,
+                         centre: CLLocationCoordinate2D?) {
+            var camera = map.camera
+            var changed = false
+
+            if let heading {
+                let delta = abs(((heading - map.direction) + 540).truncatingRemainder(dividingBy: 360) - 180)
+                if delta > 2 { camera.heading = heading; changed = true }
+            }
+            if abs(map.camera.pitch - pitch) > 1 {
+                camera.pitch = pitch
+                changed = true
+            }
+            if let centre {
+                let moved = LocatorVector.between(from: (map.centerCoordinate.latitude,
+                                                         map.centerCoordinate.longitude),
+                                                  to: (centre.latitude, centre.longitude)).distanceM
+                if moved > 5 { camera.centerCoordinate = centre; changed = true }
+            }
+            if changed { map.setCamera(camera, withDuration: 0.35, animationTimingFunction: nil) }
         }
 
         private func report(_ map: MLNMapView) {

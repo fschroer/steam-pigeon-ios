@@ -20,6 +20,10 @@ final class PhoneLocation: NSObject, ObservableObject {
     /// and the locator bearing are both referenced to.
     @Published private(set) var trueHeadingDeg: Double?
 
+    /// How far the phone is pitched from upright, degrees. Drives the follow-device
+    /// tilt mode: raise the phone toward the horizon and the map leans with it.
+    @Published private(set) var devicePitchDeg: Double?
+
     /// Effective compass trust after the ADR-0023 §4 hold.
     @Published private(set) var compassTrust: CompassTrust = .high
 
@@ -47,17 +51,31 @@ final class PhoneLocation: NSObject, ObservableObject {
         manager.startUpdatingLocation()
         if CLLocationManager.headingAvailable() { manager.startUpdatingHeading() }
         startFieldMonitor()
+        startAttitudeMonitor()
     }
 
     func stop() {
         manager.stopUpdatingLocation()
         manager.stopUpdatingHeading()
         motion.stopMagnetometerUpdates()
+        motion.stopDeviceMotionUpdates()
     }
 
     /// ADR-0023 §3b: total field strength, the source that asks the physics rather
     /// than the vendor. Raw magnetometer — only the MAGNITUDE is used, never as a
     /// heading, so an uncalibrated hard-iron offset does not matter here.
+    /// Device attitude, for the follow-device tilt mode.
+    private func startAttitudeMonitor() {
+        guard motion.isDeviceMotionAvailable else { return }
+        motion.deviceMotionUpdateInterval = 0.1
+        motion.startDeviceMotionUpdates(to: .main) { [weak self] data, _ in
+            guard let pitch = data?.attitude.pitch else { return }
+            // 0 is flat on a table, 90 is upright. Android measures from upright, so
+            // this reports the same way.
+            self?.devicePitchDeg = 90 - abs(pitch * 180 / .pi)
+        }
+    }
+
     private func startFieldMonitor() {
         guard motion.isMagnetometerAvailable else { return }
         motion.magnetometerUpdateInterval = 0.2

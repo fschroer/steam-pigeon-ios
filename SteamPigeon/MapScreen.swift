@@ -15,6 +15,11 @@ struct MapScreen: View {
     @State private var cameraCentre = CLLocationCoordinate2D(latitude: 0, longitude: 0)
     /// Hoisted so a tap on the MAP closes the action panel.
     @State private var actionsExpanded = false
+    @State private var tiltMode: MapTiltMode = .flat
+    @State private var autoCentre = true
+    @State private var autoZoom = false
+    @State private var headingUp = false
+    @State private var showMenu = false
 
     var body: some View {
         // Measured HERE, at the top, rather than from the map's background. The panel
@@ -31,6 +36,12 @@ struct MapScreen: View {
                     track: model.track,
                     recentreToken: recentre,
                     markerState: model.markerState,
+                    headingUpDeg: headingUp && model.phone.compassTrust != .unreliable
+                                  ? model.phone.trueHeadingDeg : nil,
+                    pitchDeg: tiltMode.pitch(
+                        altitudeAglM: Double(model.telemetry?.altitudeAgl ?? 0),
+                        devicePitchDeg: model.phone.devicePitchDeg ?? 0),
+                    autoCentreOn: autoCentre ? model.rocketCoordinate : nil,
                     onCameraChange: { bearing, zoom, centre in
                         cameraBearing = bearing
                         cameraZoom = zoom
@@ -42,26 +53,28 @@ struct MapScreen: View {
                 // trap on a screen where every other gesture belongs to the map.
                 .onTapGesture { actionsExpanded = false }
 
-                MapStatusPanel(
-                    // Relayed inside PreLaunchData by the receiver. It was hardcoded
-                    // nil here, so the row only ever showed a connection state.
-                    receiverName: model.prelaunch?.receiverName,
-                    connectionState: model.state,
-                    receiverBatteryMv: model.prelaunch?.receiverBatteryMv,
-                    locatorName: model.prelaunch?.deviceName,
-                    satellites: model.telemetry?.satellites ?? model.prelaunch?.satellites,
-                    gpsStatus: model.telemetry?.gpsStatus ?? model.prelaunch?.gpsStatus,
-                    armed: model.armed,
-                    locatorBatteryMv: model.prelaunch?.locatorBatteryMv,
-                    rssi: rssi,
-                    snr: snr,
-                    linkNote: linkNote,
-                    canArm: model.canSendArmCommand,
-                    armPending: model.armCommandPending,
-                    onRescan: { model.rescan() },
-                    onToggleArmed: { model.toggleArmed() },
-                    actionsExpanded: $actionsExpanded
-                )
+                HStack(alignment: .top, spacing: 8) {
+                    Button { showMenu = true } label: {
+                        Image(systemName: "line.3.horizontal")
+                            .font(.system(size: 24))
+                            .foregroundStyle(SPColor.onPrimaryContainer)
+                            .frame(width: 48, height: 48)
+                            .background(SPColor.primaryContainer,
+                                        in: RoundedRectangle(cornerRadius: 12))
+                    }
+                    .accessibilityLabel("Menu")
+
+                    Spacer(minLength: 0)
+                    statusPanel
+                    Spacer(minLength: 0)
+
+                    MapControlsColumn(
+                        tiltMode: $tiltMode,
+                        autoCentre: $autoCentre,
+                        autoZoom: $autoZoom,
+                        headingUp: $headingUp,
+                        compassTrusted: model.phone.compassTrust != .unreliable)
+                }
                 .padding(8)
 
                 if model.connectedLocatorId != nil {
@@ -156,7 +169,29 @@ struct MapScreen: View {
     }
 
 
-    /// Offered when discovery finds receivers and none is the one used last.
+    /// The status rows plus the action dropdown, centred in the top row.
+    private var statusPanel: some View {
+        MapStatusPanel(
+                    receiverName: model.prelaunch?.receiverName,
+                    connectionState: model.state,
+                    receiverBatteryMv: model.prelaunch?.receiverBatteryMv,
+                    locatorName: model.prelaunch?.deviceName,
+                    satellites: model.telemetry?.satellites ?? model.prelaunch?.satellites,
+                    gpsStatus: model.telemetry?.gpsStatus ?? model.prelaunch?.gpsStatus,
+                    armed: model.armed,
+                    locatorBatteryMv: model.prelaunch?.locatorBatteryMv,
+                    rssi: rssi,
+                    snr: snr,
+                    linkNote: linkNote,
+                    canArm: model.canSendArmCommand,
+                    armPending: model.armCommandPending,
+                    onRescan: { model.rescan() },
+                    onToggleArmed: { model.toggleArmed() },
+                    actionsExpanded: $actionsExpanded
+                )
+    }
+
+    /// Offered when discovery finds receivers.
     @ViewBuilder private var receiverPicker: some View {
         if !model.discoveredReceivers.isEmpty {
             VStack(spacing: 0) {

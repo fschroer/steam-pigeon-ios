@@ -111,3 +111,63 @@ final class MapScaleTests: XCTestCase {
         XCTAssertNil(MapScale.niceScale(maxWidthPoints: 100, metersPerPoint: 0))
     }
 }
+
+/// Tilt modes, mirroring Android's `MapTiltMode`.
+final class MapTiltModeTests: XCTestCase {
+
+    func testFlatIsStraightDown() {
+        XCTAssertEqual(0, MapTiltMode.flat.pitch(altitudeAglM: 5_000, devicePitchDeg: 0))
+    }
+
+    /// Opens up as the rocket climbs, from 45° and clamped at MapLibre's ceiling of
+    /// 60 — a higher value is rejected by the SDK outright.
+    func testAltitudeOpensUpWithHeightAndClamps() {
+        XCTAssertEqual(45, MapTiltMode.altitude.pitch(altitudeAglM: 0, devicePitchDeg: 0))
+        XCTAssertEqual(55, MapTiltMode.altitude.pitch(altitudeAglM: 300, devicePitchDeg: 0))
+        XCTAssertEqual(60, MapTiltMode.altitude.pitch(altitudeAglM: 10_000, devicePitchDeg: 0))
+    }
+
+    /// Upright phone leans the map toward the horizon; past 80° from upright it lies
+    /// flat again. 80, not 60 — a phone at a natural reading angle is already past 60.
+    func testFollowDeviceMapsPitch() {
+        XCTAssertEqual(60, MapTiltMode.followDevice.pitch(altitudeAglM: 0, devicePitchDeg: 0),
+                       accuracy: 0.01)
+        XCTAssertEqual(30, MapTiltMode.followDevice.pitch(altitudeAglM: 0, devicePitchDeg: 40),
+                       accuracy: 0.01)
+        XCTAssertEqual(0, MapTiltMode.followDevice.pitch(altitudeAglM: 0, devicePitchDeg: 80))
+        XCTAssertEqual(0, MapTiltMode.followDevice.pitch(altitudeAglM: 0, devicePitchDeg: 90))
+    }
+
+    /// Sign must not matter — the phone can lean either way.
+    func testFollowDeviceIsSymmetric() {
+        XCTAssertEqual(MapTiltMode.followDevice.pitch(altitudeAglM: 0, devicePitchDeg: 40),
+                       MapTiltMode.followDevice.pitch(altitudeAglM: 0, devicePitchDeg: -40))
+    }
+
+    /// Never past MapLibre's ceiling, whatever comes in.
+    func testPitchNeverExceedsTheSdkCeiling() {
+        for alt in stride(from: 0.0, through: 20_000, by: 500) {
+            for pitch in stride(from: -180.0, through: 180, by: 15) {
+                for mode in MapTiltMode.allCases {
+                    let p = mode.pitch(altitudeAglM: alt, devicePitchDeg: pitch)
+                    XCTAssertGreaterThanOrEqual(p, 0)
+                    XCTAssertLessThanOrEqual(p, MapTiltMode.maxPitch)
+                }
+            }
+        }
+    }
+
+    func testCycleOrderMatchesAndroid() {
+        XCTAssertEqual(.altitude, MapTiltMode.flat.next)
+        XCTAssertEqual(.followDevice, MapTiltMode.altitude.next)
+        XCTAssertEqual(.flat, MapTiltMode.followDevice.next)
+    }
+
+    /// The label names what a tap SWITCHES TO, not the mode in effect — the icon
+    /// shows that. Getting it backwards makes the control feel like it lies.
+    func testLabelNamesTheNextMode() {
+        XCTAssertEqual("3D view", MapTiltMode.flat.nextDescription)
+        XCTAssertEqual("phone-tilt view", MapTiltMode.altitude.nextDescription)
+        XCTAssertEqual("2D view", MapTiltMode.followDevice.nextDescription)
+    }
+}
