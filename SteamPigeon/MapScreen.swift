@@ -43,9 +43,13 @@ struct MapScreen: View {
                         devicePitchDeg: model.phone.devicePitchDeg ?? 0),
                     autoCentreOn: autoCentre ? model.rocketCoordinate : nil,
                     onCameraChange: { bearing, zoom, centre in
-                        cameraBearing = bearing
-                        cameraZoom = zoom
-                        cameraCentre = centre
+                        // MapLibre reports this from inside its own update, which can
+                        // land mid-layout. Deferring keeps it an ordinary state change.
+                        DispatchQueue.main.async {
+                            cameraBearing = bearing
+                            cameraZoom = zoom
+                            cameraCentre = centre
+                        }
                     }
                 )
                 // A tap anywhere on the map dismisses the action panel. Without this

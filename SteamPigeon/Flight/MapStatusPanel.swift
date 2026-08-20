@@ -40,8 +40,14 @@ struct MapStatusPanel: View {
     // gutter as soon as a name is long, which is exactly the crowding this avoids.
     private let iconSize: CGFloat = 20
     private let iconGutter: CGFloat = 40      // wide enough for rocket icon + satellite count
-    private let nameWidth: CGFloat = 190      // fits a 20-character device name at body size
     private let batteryGutter: CGFloat = 24
+
+    /// Android's name column is a fixed 190 dp, which fits its 411 dp reference phone
+    /// with the menu button and the controls column either side. On a 375 pt iPhone
+    /// the same total overflows and pushes the controls off screen entirely, so the
+    /// name column is a MAXIMUM here and shrinks first. It is the only part of the
+    /// row that can give: the gutters are sized to their glyphs.
+    private let maxNameWidth: CGFloat = 190
 
     /// Hoisted, so tapping the MAP can collapse it too — Android hoists this for the
     /// same reason. A dropdown that can only be dismissed by hitting the same small
@@ -65,7 +71,7 @@ struct MapStatusPanel: View {
                     // Fixed width so a long verdict wraps instead of widening the
                     // panel — unconstrained it lays out on one line and drags the
                     // whole block wider whenever the verdict changes.
-                    .frame(width: iconGutter + nameWidth + batteryGutter, alignment: .leading)
+                    .frame(maxWidth: iconGutter + maxNameWidth + batteryGutter, alignment: .leading)
             }
             if actionsExpanded { actionButtons }
         }
@@ -127,7 +133,7 @@ struct MapStatusPanel: View {
                 onToggleArmed?()
             }
         }
-        .frame(width: iconGutter + nameWidth + batteryGutter)
+        .frame(maxWidth: iconGutter + maxNameWidth + batteryGutter)
         .padding(.top, 8)
     }
 
@@ -144,7 +150,7 @@ struct MapStatusPanel: View {
                 .foregroundStyle(SPColor.onBackground)
                 .lineLimit(1)
                 .truncationMode(.tail)
-                .frame(width: nameWidth, alignment: .leading)
+                .frame(maxWidth: maxNameWidth, alignment: .leading)
             battery(receiverBatteryMv)
         }
     }
@@ -181,7 +187,7 @@ struct MapStatusPanel: View {
                 .foregroundStyle(SPColor.onBackground)
                 .lineLimit(1)
                 .truncationMode(.tail)
-                .frame(width: nameWidth, alignment: .leading)
+                .frame(maxWidth: maxNameWidth, alignment: .leading)
             battery(locatorBatteryMv)
         }
     }
@@ -203,7 +209,7 @@ struct MapStatusPanel: View {
                     .foregroundStyle(SnrBand.color(s))
             }
         }
-        .frame(width: iconGutter + nameWidth + batteryGutter, alignment: .leading)
+        .frame(maxWidth: iconGutter + maxNameWidth + batteryGutter, alignment: .leading)
     }
 
     /// Battery as a glyph alone. The voltage text is deliberately absent — that

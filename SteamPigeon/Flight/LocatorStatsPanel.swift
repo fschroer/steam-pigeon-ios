@@ -50,6 +50,11 @@ struct LocatorStatsPanel: View {
     @State private var accumulated: CGSize = .zero
     @State private var panelSize: CGSize = .zero
 
+    private func setPanelSize(_ size: CGSize) {
+        guard size != panelSize else { return }      // no-op writes still invalidate
+        DispatchQueue.main.async { panelSize = size }
+    }
+
     private func clamp(_ proposed: CGSize) -> CGSize {
         PanelDragBounds.clamp(proposed, panel: panelSize, container: containerSize)
     }
@@ -97,9 +102,12 @@ struct LocatorStatsPanel: View {
         .clipShape(RoundedRectangle(cornerRadius: 16))
         .background(                       // measure the panel so it can be clamped
             GeometryReader { proxy in
+                // Assigning State directly here writes it DURING the layout pass that
+                // produced the size, which SwiftUI warns about as undefined behaviour.
+                // Deferring by one runloop turn makes it an ordinary update.
                 Color.clear
-                    .onAppear { panelSize = proxy.size }
-                    .onChange(of: proxy.size) { panelSize = $0 }
+                    .onAppear { setPanelSize(proxy.size) }
+                    .onChange(of: proxy.size) { setPanelSize($0) }
             }
         )
         .offset(x: offset.width, y: offset.height)
