@@ -37,7 +37,11 @@ struct MapScreen: View {
                     locatorBatteryMv: model.prelaunch?.locatorBatteryMv,
                     rssi: rssi,
                     snr: snr,
-                    linkNote: linkNote
+                    linkNote: linkNote,
+                    canArm: model.canSendArmCommand,
+                    armPending: model.armCommandPending,
+                    onRescan: { model.rescan() },
+                    onToggleArmed: { model.toggleArmed() }
                 )
                 .padding(8)
 
@@ -45,9 +49,17 @@ struct MapScreen: View {
                     statsPanel(in: proxy.size)
                 }
 
-                if model.phone.compassTrust != .high {
-                    compassGlyph
+                // The app's own compass rose, carrying the ADR-0023 calibration mark,
+                // and the scale bar — both bottom-left, clear of the stats panel.
+                VStack(alignment: .leading, spacing: 6) {
+                    Spacer()
+                    CompassRose(bearingDeg: 0, trust: model.phone.compassTrust)
+                    MapScaleBar(zoom: 15,
+                                latitude: model.phone.coordinate?.latitude
+                                       ?? model.rocketCoordinate?.latitude ?? 0)
                 }
+                .padding(.leading, 10)
+                .padding(.bottom, 16)
             }
         }
         .ignoresSafeArea(edges: .bottom)
@@ -69,7 +81,8 @@ struct MapScreen: View {
                 LocatorStatsPanel(
                     deviceName: p?.deviceName ?? "",
                     flightState: t?.flightState ?? .waitingLaunch,
-                    armed: t?.armed ?? p?.armed ?? false,
+                    armed: model.armed,
+                    inFlight: model.isInFlight,
                     distanceM: model.vector?.distanceM,
                     altitudeAglM: t?.altitudeAgl ?? p?.altitudeAgl ?? 0,
                     // NED: down is positive, so a climb is the negation.
@@ -96,31 +109,6 @@ struct MapScreen: View {
         .padding(8)
     }
 
-    /// Android marks a doubted compass with an **∞ glyph** on its own compass rose —
-    /// red when unreliable, yellow when merely disturbed — not a text banner
-    /// (FlightMapScreen.kt:1395-1412).
-    ///
-    /// The rose itself is part of the map control column, which is not built yet, so
-    /// this sits where the rose will go. The glyph reads as "infinity" to a screen
-    /// reader, which is not what it means, so it carries an explicit label — as
-    /// Android's does.
-    private var compassGlyph: some View {
-        VStack {
-            HStack {
-                Spacer()
-                Text("∞")
-                    .font(.system(size: 20, weight: .bold))
-                    .foregroundStyle(model.phone.compassTrust == .unreliable
-                                     ? Color.red : Color.yellow)
-                    .padding(10)
-                    .accessibilityLabel(model.phone.compassTrust == .unreliable
-                        ? "Compass unreliable — sweep the phone in a figure-eight to recalibrate"
-                        : "Compass disturbed — sweep the phone in a figure-eight to recalibrate")
-            }
-            Spacer()
-        }
-        .padding(.top, 100)
-    }
 
     /// ADR-0019 verdict as prose. `Congested` is the quieter of the two: the channel
     /// is occupied but our packets are still arriving clean.

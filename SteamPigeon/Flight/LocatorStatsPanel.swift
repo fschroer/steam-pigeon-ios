@@ -12,6 +12,10 @@ struct LocatorStatsPanel: View {
     let deviceName: String
     let flightState: FlightStates
     let armed: Bool
+    /// Android's `isInFlight`: armed, or a flight state other than WaitingLaunch.
+    /// Gates speed, attitude and the state row — a disarmed rocket on the pad shows
+    /// accelerometer readings instead.
+    let inFlight: Bool
     let distanceM: Int?
     let altitudeAglM: Float
     let velocityMs: Float?
@@ -55,20 +59,25 @@ struct LocatorStatsPanel: View {
         VStack(alignment: .leading, spacing: 1) {
             row("Dist: \(distanceM.map(String.init) ?? "--")")
             row(String(format: "AGL : %15.1f m", altitudeAglM))
-            if let v = velocityMs { row(String(format: "Spd: %6.1f m/s", v)) }
-            if let inc = inclinationDeg, let hdg = headingDeg {
-                row(String(format: "Inc:%5.1f° Hdg:%5.1f°", inc, hdg))
+            // In flight: speed and attitude. On the pad: what the IMU is reading.
+            // Android switches between the two rather than showing both.
+            if inFlight {
+                if let v = velocityMs { row(String(format: "Spd: %6.1f m/s", v)) }
+                if let inc = inclinationDeg, let hdg = headingDeg {
+                    row(String(format: "Inc:%5.1f° Hdg:%5.1f°", inc, hdg))
+                }
+                row("\(flightState)")
+            } else {
+                if let a = accel {
+                    row(String(format: "Accl: %5.1f %5.1f %5.1f",
+                               Double(a.x) / Self.g, Double(a.y) / Self.g, Double(a.z) / Self.g))
+                }
+                if let g = gyro {
+                    row(String(format: "Gyro: %5.0f %5.0f %5.0f",
+                               Double(g.x) * Self.rad2deg, Double(g.y) * Self.rad2deg,
+                               Double(g.z) * Self.rad2deg))
+                }
             }
-            if let a = accel {
-                row(String(format: "Accl: %5.1f %5.1f %5.1f",
-                           Double(a.x) / Self.g, Double(a.y) / Self.g, Double(a.z) / Self.g))
-            }
-            if let g = gyro {
-                row(String(format: "Gyro: %5.0f %5.0f %5.0f",
-                           Double(g.x) * Self.rad2deg, Double(g.y) * Self.rad2deg,
-                           Double(g.z) * Self.rad2deg))
-            }
-            row(stateText)
             ForEach(Array(deployChannelText.enumerated()), id: \.offset) { _, text in
                 row(text)
             }
@@ -105,10 +114,6 @@ struct LocatorStatsPanel: View {
             .font(SPFont.telemetry)
             .foregroundStyle(SPColor.onBackground)
             .lineLimit(1)
-    }
-
-    private var stateText: String {
-        armed ? "\(flightState)" : "Disarmed"
     }
 
     /// Tapping the coordinates opens them in Maps, as Android does.

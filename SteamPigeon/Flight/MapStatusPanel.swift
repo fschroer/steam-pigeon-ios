@@ -22,8 +22,18 @@ struct MapStatusPanel: View {
 
     let rssi: Int?
     let snr: Int?
+
     /// The ADR-0019 verdict, when there is one. Prose, not a column entry.
     let linkNote: (text: String, color: Color)?
+
+    // ── Actions ──────────────────────────────────────────────────────────────
+    // The status rows are small on purpose, so rather than hunting for a fine tap
+    // target the user taps ANYWHERE on the panel to drop down large buttons. It
+    // auto-collapses after an idle period.
+    var canArm: Bool = false
+    var armPending: Bool = false
+    var onRescan: (() -> Void)?
+    var onToggleArmed: (() -> Void)?
 
     // Android's metrics, not approximations of them (FlightMapScreen.kt:2142-2146).
     // The name column is FIXED, not flexible: a flexible one grows into the icon
@@ -32,6 +42,13 @@ struct MapStatusPanel: View {
     private let iconGutter: CGFloat = 40      // wide enough for rocket icon + satellite count
     private let nameWidth: CGFloat = 190      // fits a 20-character device name at body size
     private let batteryGutter: CGFloat = 24
+
+    @State private var actionsExpanded = false
+    @State private var collapseTask: Task<Void, Never>?
+    @State private var blinkOn = true
+
+    /// Android: `actionPanelCollapseDelay`.
+    private static let collapseDelay: Duration = .seconds(5)
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -47,10 +64,51 @@ struct MapStatusPanel: View {
                     // whole block wider whenever the verdict changes.
                     .frame(width: 220, alignment: .leading)
             }
+            if actionsExpanded { actionButtons }
         }
         .padding(8)
         .background(SPColor.mapOverlay)
         .clipShape(RoundedRectangle(cornerRadius: 16))
+        .contentShape(Rectangle())
+        .onTapGesture { toggleActions() }
+        .animation(.easeInOut(duration: 0.18), value: actionsExpanded)
+    }
+
+    private func toggleActions() {
+        actionsExpanded.toggle()
+        collapseTask?.cancel()
+        guard actionsExpanded else { return }
+        collapseTask = Task {
+            try? await Task.sleep(for: Self.collapseDelay)
+            if !Task.isCancelled { actionsExpanded = false }
+        }
+    }
+
+    /// Large, clearly labelled targets — this is pressed outdoors, often in a hurry.
+    private var actionButtons: some View {
+        VStack(spacing: 8) {
+            Button {
+                actionsExpanded = false
+                onRescan?()
+            } label: {
+                Text("Rescan").frame(maxWidth: .infinity, minHeight: 48)
+            }
+            .buttonStyle(.borderedProminent)
+
+            Button {
+                actionsExpanded = false
+                onToggleArmed?()
+            } label: {
+                Text(armed ? "Disarm" : "Arm").frame(maxWidth: .infinity, minHeight: 48)
+            }
+            .buttonStyle(.borderedProminent)
+            // Disarm is destructive-coloured, as on Android: the consequences of the
+            // two are not symmetric.
+            .tint(armed ? SPColor.error : SPColor.primary)
+            .disabled(!canArm)
+        }
+        .frame(width: iconGutter + nameWidth + batteryGutter)
+        .padding(.top, 8)
     }
 
     private var receiverRow: some View {
@@ -78,7 +136,17 @@ struct MapStatusPanel: View {
                     .renderingMode(.template)
                     .resizable().scaledToFit()
                     .frame(width: iconSize, height: iconSize)
-                    .foregroundStyle(rocketTint)
+                    // While a command is in flight the icon blinks toward its TARGET
+                    // colour — green when arming, white when disarming — so the user
+                    // sees the request was taken before the locator confirms.
+                    .foregroundStyle(armPending
+                                     ? (armed ? Color.white : Color.green)
+                                     : rocketTint)
+                    .opacity(armPending && !blinkOn ? 0.15 : 1)
+                    .animation(armPending
+                               ? .easeInOut(duration: 0.45).repeatForever(autoreverses: true)
+                               : .default, value: blinkOn)
+                    .onChange(of: armPending) { pending in blinkOn = !pending }
                 if let s = satellites {
                     Text("\(s)").font(SPFont.labelSmall).foregroundStyle(rocketTint)
                 }

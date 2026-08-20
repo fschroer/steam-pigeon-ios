@@ -126,6 +126,53 @@ final class LinkViewModel: ObservableObject {
         return nil
     }
 
+    /// Android's `isInFlight`: armed, OR a flight state other than WaitingLaunch.
+    ///
+    /// The second half matters after landing — the locator disarms and returns to
+    /// PreLaunchData, but the flight state stays `Landed`, so speed and attitude keep
+    /// showing. That is exactly when someone is walking out to the rocket.
+    var isInFlight: Bool {
+        let armed = telemetry?.armed ?? prelaunch?.armed ?? false
+        let state = telemetry?.flightState ?? .waitingLaunch
+        return armed || state != .waitingLaunch
+    }
+
+    /// Whether the locator is currently armed, from whichever broadcast is newest.
+    var armed: Bool { telemetry?.armed ?? prelaunch?.armed ?? false }
+
+    // MARK: - Commands (ADR-0020: gated on CONNECTED, not merely authorized)
+
+    /// True when an arm/disarm may be sent: a locator is connected and addressable.
+    var canSendArmCommand: Bool {
+        guard let id = connectedLocatorId else { return false }
+        return gate.mayCommand(id) && state == .ready
+    }
+
+    /// Toggle the locator's armed state. Addressed to the connected locator, because
+    /// an unaddressed Arm reaches every locator on the channel.
+    func toggleArmed() {
+        guard let id = connectedLocatorId, gate.mayCommand(id) else { return }
+        let type: MsgType = armed ? .disarmRequest : .armRequest
+        guard let msg = OutboundMessage.locatorDirected(type, targetLocatorId: id) else { return }
+        transport.send(msg)
+        armCommandPending = true
+        // The locator answers by changing what it broadcasts; if it never does, stop
+        // blinking rather than blinking forever.
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            armCommandPending = false
+        }
+    }
+
+    /// Drop the link and look for the receiver again.
+    func rescan() {
+        transport.disconnect()
+        transport.startScan()
+    }
+
+    /// True while an arm/disarm is in flight — drives the blinking rocket icon.
+    @Published private(set) var armCommandPending = false
+
     /// ADR-0017 trust state for the drawn position.
     var markerState: RocketMarkerState {
         RocketMarkerState.from(
@@ -233,8 +280,6 @@ final class LinkViewModel: ObservableObject {
                 if admit(frame, m.locatorId, WireProtocol.prelaunchBaseStructSize,
                          deviceName: m.deviceName) {
                     prelaunch = m
-                    // A connected locator that has disarmed is no longer in flight.
-                    if telemetry?.locatorId == m.locatorId { telemetry = nil }
                     updateVector(lat: m.latitude, lon: m.longitude,
                                  satellites: m.satellites, gpsStatus: m.gpsStatus,
                                  state: .waitingLaunch, altitudeAglM: m.altitudeAgl)

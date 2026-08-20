@@ -157,22 +157,44 @@ struct FlightMapView: UIViewRepresentable {
                 let layer = MLNSymbolStyleLayer(identifier: "rocket", source: source)
                 layer.iconImageName = NSExpression(forConstantValue: imageName)
                 layer.iconAllowsOverlap = NSExpression(forConstantValue: true)
-                layer.iconScale = NSExpression(forConstantValue: 1.0)
+                layer.iconScale = NSExpression(forConstantValue: 0.5)
+                layer.iconPitchAlignment = NSExpression(forConstantValue: "viewport")
                 style.addLayer(layer)
             }
         }
 
-        /// Bake the trust colour into the glyph, since a symbol layer cannot tint.
+        /// The rocket marker sprite, matching Android's `addRocketIcons`.
+        ///
+        /// Drawn TWICE: a white silhouette, then the tinted body inset by 8%, which
+        /// gives the marker an outline. That outline is not decoration — a green
+        /// marker over green tree canopy is invisible without it, and this map is used
+        /// to walk to a landed rocket.
+        private static let iconPx: CGFloat = 72
+
         private static func tintedRocket(_ colour: UIColor) -> UIImage? {
-            guard let base = UIImage(named: "rocket_md") else { return nil }
-            let size = CGSize(width: 28, height: 28)
-            return UIGraphicsImageRenderer(size: size).image { ctx in
-                colour.setFill()
-                base.withRenderingMode(.alwaysTemplate)
-                    .draw(in: CGRect(origin: .zero, size: size))
-                ctx.cgContext.setBlendMode(.sourceIn)
-                ctx.cgContext.fill(CGRect(origin: .zero, size: size))
+            guard let base = UIImage(named: "rocket") else { return nil }
+            let size = CGSize(width: iconPx, height: iconPx)
+            return UIGraphicsImageRenderer(size: size).image { _ in
+                draw(base, colour: .white, in: size, inset: 0)
+                draw(base, colour: colour, in: size, inset: iconPx * 0.08)
             }
+        }
+
+        /// Tint by drawing the glyph as a mask and filling through it — the equivalent
+        /// of Android's `PorterDuff.Mode.SRC_IN` colour filter.
+        private static func draw(_ image: UIImage, colour: UIColor, in size: CGSize, inset: CGFloat) {
+            let rect = CGRect(x: inset, y: inset,
+                              width: size.width - inset * 2, height: size.height - inset * 2)
+            guard let ctx = UIGraphicsGetCurrentContext(), let cg = image.cgImage else { return }
+            ctx.saveGState()
+            ctx.translateBy(x: 0, y: size.height)
+            ctx.scaleBy(x: 1, y: -1)
+            let flipped = CGRect(x: rect.minX, y: size.height - rect.maxY,
+                                 width: rect.width, height: rect.height)
+            ctx.clip(to: flipped, mask: cg)
+            colour.setFill()
+            ctx.fill(flipped)
+            ctx.restoreGState()
         }
 
         private func upsertPoint(_ style: MLNStyle, id: String,
@@ -215,15 +237,17 @@ struct FlightMapView: UIViewRepresentable {
                                   centre: CLLocationCoordinate2D?, radiusM: Double?,
                                   colour: UIColor, opacity: Double) {
             guard let centre, let radiusM, radiusM > 0 else { removeLayer(style, id: id); return }
-            let steps = 48
-            let metresPerDegLat = 111_320.0
-            let metresPerDegLon = metresPerDegLat * cos(centre.latitude * .pi / 180)
+            // 256 steps on the WGS84 equatorial radius, as Android uses. At 48 the
+            // facets are visible on a large ring even before tile simplification.
+            let steps = 256
+            let earthR = 6_378_137.0
+            let latRad = centre.latitude * .pi / 180
             var ring: [CLLocationCoordinate2D] = (0...steps).map { i in
-                let a = Double(i) / Double(steps) * 2 * .pi
-                return CLLocationCoordinate2D(
-                    latitude: centre.latitude + (radiusM * sin(a)) / metresPerDegLat,
-                    longitude: centre.longitude + (radiusM * cos(a)) / max(metresPerDegLon, 1)
-                )
+                let theta = 2 * Double.pi * Double(i) / Double(steps)
+                let dLat = (radiusM * sin(theta)) / earthR * (180 / .pi)
+                let dLng = (radiusM * cos(theta)) / (earthR * cos(latRad)) * (180 / .pi)
+                return CLLocationCoordinate2D(latitude: centre.latitude + dLat,
+                                              longitude: centre.longitude + dLng)
             }
             let feature = MLNPolygonFeature(coordinates: &ring, count: UInt(ring.count))
             let source = upsertSource(style, id: id, shape: feature)
@@ -235,12 +259,23 @@ struct FlightMapView: UIViewRepresentable {
             }
         }
 
+        /// A shape source with simplification **off**.
+        ///
+        /// The defaults quietly wreck small geometry at high zoom: maximum zoom 18
+        /// means past z18 the renderer rescales z18 tile geometry instead of
+        /// re-tiling, and the default tolerance runs Douglas-Peucker simplification in
+        /// tile units, dropping vertices. Together they turn the accuracy ring into a
+        /// visible POLYGON, and worse the further you zoom in. Android raises the
+        /// maximum zoom to 22 and disables simplification for exactly this reason.
         private func upsertSource(_ style: MLNStyle, id: String, shape: MLNShape) -> MLNShapeSource {
             if let existing = style.source(withIdentifier: id) as? MLNShapeSource {
                 existing.shape = shape
                 return existing
             }
-            let source = MLNShapeSource(identifier: id, shape: shape, options: nil)
+            let source = MLNShapeSource(identifier: id, shape: shape, options: [
+                .maximumZoomLevel: 22,
+                .simplificationTolerance: 0,
+            ])
             style.addSource(source)
             return source
         }
