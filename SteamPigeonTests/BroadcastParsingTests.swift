@@ -246,3 +246,61 @@ final class BroadcastParsingTests: XCTestCase {
         XCTAssertEqual(1234, m.locatorId)
     }
 }
+
+/// Deployment-channel continuity, which is encoded **differently** in the two
+/// broadcasts — bits 0–3 of one byte on the pad, bit 5 of each per-channel byte in
+/// flight. Two encodings for the same fact, so decoding one as the other would show
+/// a rocket with no igniters as fully armed, or the reverse.
+final class DeployContinuityTests: XCTestCase {
+
+    func testPrelaunchUsesBitsZeroToThree() {
+        var m = PreLaunchData()
+        m.deployStatus = 0b0000_0101          // channels 1 and 3
+        XCTAssertEqual([true, false, true, false], m.deployChannelContinuity)
+    }
+
+    func testPrelaunchNoContinuityAtAll() {
+        var m = PreLaunchData()
+        m.deployStatus = 0
+        XCTAssertEqual([false, false, false, false], m.deployChannelContinuity)
+    }
+
+    func testPrelaunchAllFour() {
+        var m = PreLaunchData()
+        m.deployStatus = 0b0000_1111
+        XCTAssertEqual([true, true, true, true], m.deployChannelContinuity)
+    }
+
+    /// Bits above 3 belong to other fields and must not read as a fifth channel.
+    func testPrelaunchIgnoresHigherBits() {
+        var m = PreLaunchData()
+        m.deployStatus = 0b1111_0000
+        XCTAssertEqual([false, false, false, false], m.deployChannelContinuity)
+    }
+
+    func testTelemetryUsesBitFiveOfEachChannelByte() {
+        var m = TelemetryData()
+        m.deploymentChannelStats = [0x20, 0x00, 0x20, 0x00]
+        XCTAssertEqual([true, false, true, false], m.deployChannelContinuity)
+    }
+
+    /// The other bits in that byte are mode, fired and pre-fire continuity — none of
+    /// which means post-fire continuity.
+    func testTelemetryIgnoresTheOtherBits() {
+        var m = TelemetryData()
+        m.deploymentChannelStats = [0x1F, 0x1F, 0x1F, 0x1F]   // everything except bit 5
+        XCTAssertEqual([false, false, false, false], m.deployChannelContinuity)
+    }
+
+    /// The two encodings must not be interchangeable — if they were, one decoder
+    /// would do and this test would be impossible to write.
+    func testTheTwoEncodingsGenuinelyDiffer() {
+        var pre = PreLaunchData()
+        pre.deployStatus = 0x20                    // bit 5: nothing, on the pad
+        XCTAssertEqual([false, false, false, false], pre.deployChannelContinuity)
+
+        var tel = TelemetryData()
+        tel.deploymentChannelStats = [0x01, 0x01, 0x01, 0x01]   // bit 0: nothing, in flight
+        XCTAssertEqual([false, false, false, false], tel.deployChannelContinuity)
+    }
+}

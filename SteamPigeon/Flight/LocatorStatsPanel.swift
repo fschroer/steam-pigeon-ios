@@ -26,6 +26,8 @@ struct LocatorStatsPanel: View {
     let latitude: Double
     let longitude: Double
     let deployChannelText: [String]
+    /// Continuity per channel. A channel without it is drawn in the error colour.
+    let deployChannelContinuity: [Bool]
 
     /// Tapping the panel speaks state and altitude — the same affordance Android has,
     /// and for the same reason: a rocket in flight is exactly when someone wants that
@@ -81,8 +83,12 @@ struct LocatorStatsPanel: View {
                                Double(g.z) * Self.rad2deg))
                 }
             }
-            ForEach(Array(deployChannelText.enumerated()), id: \.offset) { _, text in
-                row(text)
+            ForEach(Array(deployChannelText.enumerated()), id: \.offset) { i, text in
+                // Red where the app cannot see an igniter on that channel — which is
+                // what someone checks before walking away from an armed rocket.
+                row(text, colour: deployChannelContinuity.indices.contains(i)
+                                  && !deployChannelContinuity[i]
+                                  ? SPColor.error : SPColor.onBackground)
             }
             coordinates
         }
@@ -112,10 +118,10 @@ struct LocatorStatsPanel: View {
         }
     }
 
-    private func row(_ text: String) -> some View {
+    private func row(_ text: String, colour: Color = SPColor.onBackground) -> some View {
         Text(text)
             .font(SPFont.telemetry)
-            .foregroundStyle(SPColor.onBackground)
+            .foregroundStyle(colour)
             .lineLimit(1)
     }
 

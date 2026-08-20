@@ -144,6 +144,8 @@ struct MapScreen: View {
                             DeployChannelText.line(channel: i + 1, mode: mode, config: cfg)
                         }
                     } ?? [],
+                    deployChannelContinuity: t?.deployChannelContinuity
+                                          ?? p?.deployChannelContinuity ?? [],
                     onTapSpeak: nil,
                     containerSize: container,
                     homeToken: recentre

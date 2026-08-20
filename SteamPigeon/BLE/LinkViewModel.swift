@@ -204,6 +204,23 @@ final class LinkViewModel: ObservableObject {
 
     func dismissReceiverPicker() { discoveredReceivers = [] }
 
+    /// Drop everything that describes a link we no longer have.
+    private func clearLiveReadouts() {
+        prelaunch = nil
+        telemetry = nil
+        vector = nil
+        track.removeAll()
+        armed = false
+        connectedLocatorId = nil
+        conflictingLocatorIds.removeAll()
+        unauthorizedLocatorIds.removeAll()
+        linkVerdict = .normal
+        quietestFloor = LinkQuality.noiseFloorUnknown
+        lastLocatorMessage = nil
+        gate.disconnect()
+        plausibility.reset()
+    }
+
     /// ADR-0017 trust state for the drawn position.
     var markerState: RocketMarkerState {
         RocketMarkerState.from(
@@ -225,19 +242,28 @@ final class LinkViewModel: ObservableObject {
         transport.onDiscover = { [weak self] peripherals in
             Task { @MainActor in
                 guard let self else { return }
+                // ALWAYS offer the choice. Android shows its picker whenever
+                // discovery finds one or more devices, and silently reconnecting to
+                // the receiver used last means someone with two receivers cannot
+                // reach the other one without noticing why.
                 self.discoveredReceivers = peripherals.map {
                     ($0.identifier, $0.name ?? "Unnamed receiver")
-                }
-                // Reconnecting to the receiver used last is not a choice worth
-                // interrupting for; only ask when it is genuinely ambiguous.
-                if let known = self.transport.lastKnownPeripheral,
-                   let match = peripherals.first(where: { $0.identifier == known }) {
-                    self.transport.connect(to: match)
                 }
             }
         }
         transport.onStateChange = { [weak self] s in
-            Task { @MainActor in self?.state = s }
+            Task { @MainActor in
+                guard let self else { return }
+                self.state = s
+                // Readouts describe the link that produced them. Holding them across
+                // a disconnect leaves the panel asserting a locator, a battery and a
+                // link quality that belong to a receiver we are no longer talking to
+                // — during the seconds when the user is waiting to see whether the
+                // switch worked, which is exactly when it misleads.
+                if s == .disconnected || s == .scanning || s == .connecting {
+                    self.clearLiveReadouts()
+                }
+            }
         }
         transport.onFrame = { [weak self] frame in
             Task { @MainActor in self?.ingest(frame) }

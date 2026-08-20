@@ -60,7 +60,7 @@ struct MapStatusPanel: View {
             linkRow
             if let note = linkNote {
                 Text(note.text)
-                    .font(SPFont.labelSmall)
+                    .font(SPFont.telemetry)
                     .foregroundStyle(note.color)
                     // Fixed width so a long verdict wraps instead of widening the
                     // panel — unconstrained it lays out on one line and drags the
@@ -159,7 +159,7 @@ struct MapStatusPanel: View {
                                : .default, value: blinkOn)
                     .onChange(of: armPending) { pending in blinkOn = !pending }
                 if let s = satellites {
-                    Text("\(s)").font(SPFont.labelSmall).foregroundStyle(rocketTint)
+                    Text("\(s)").font(SPFont.telemetry).foregroundStyle(rocketTint)
                 }
             }
             .frame(width: iconGutter, alignment: .leading)
@@ -203,7 +203,7 @@ struct MapStatusPanel: View {
                     .font(.system(size: iconSize * 0.8))
                     .foregroundStyle(volts < 3.5 ? SPColor.error : SPColor.onSurfaceVariant)
                 Text(String(format: "%.2fV", volts))
-                    .font(SPFont.labelSmall)
+                    .font(SPFont.telemetry)
                     .foregroundStyle(SPColor.onSurfaceVariant)
             }
         }

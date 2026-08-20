@@ -18,6 +18,15 @@ struct PreLaunchData: Equatable {
     var baroStatus: SensorHealth = .stale
     var gpsStatus: SensorHealth = .stale
     var deployStatus: UInt8 = 0
+
+    /// Continuity per deployment channel, bits 0–3 of `deployStatus`.
+    ///
+    /// A channel with no continuity is drawn in the error colour: it means the app
+    /// cannot see an igniter on that channel, which is exactly what someone checks
+    /// before walking away from an armed rocket.
+    var deployChannelContinuity: [Bool] {
+        (0..<4).map { deployStatus & (1 << UInt8($0)) != 0 }
+    }
     var altitudeAgl: Float = 0
     var accel = Vec3f(x: 0, y: 0, z: 0)
     var gyro = Vec3f(x: 0, y: 0, z: 0)
@@ -131,6 +140,13 @@ struct TelemetryData: Equatable {
     var gpsStatus: SensorHealth = .stale
     var deploymentChannelStats: [UInt8] = []
     var physicalDeploymentStats: UInt8 = 0
+
+    /// Continuity per channel while armed — **bit 5** of each channel's stats byte,
+    /// not bits 0–3 of a single byte as in `PreLaunchData`. Two encodings for the
+    /// same fact, so they are decoded separately rather than assumed alike.
+    var deployChannelContinuity: [Bool] {
+        deploymentChannelStats.map { $0 & 0x20 != 0 }
+    }
     var altitudeAgl: Float = 0
     var velocityNed = Vec3f(x: 0, y: 0, z: 0)
     var attitude = Quaternionf(w: 0, x: 0, y: 0, z: 0)
