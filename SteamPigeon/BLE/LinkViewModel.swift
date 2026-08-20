@@ -57,6 +57,41 @@ final class LinkViewModel: ObservableObject {
 
     private var plausibility = DistancePlausibility()
 
+    /// Quietest idle floor seen this session — the baseline the ADR-0019 "risen"
+    /// test measures against. Relative rather than absolute because SX126x RSSI near
+    /// the noise floor is uncalibrated and varies unit to unit.
+    private var quietestFloor = LinkQuality.noiseFloorUnknown
+    /// When a broadcast from a locator OTHER than ours last arrived. A foreign id is
+    /// not evidence of occupancy, it IS occupancy — decoded and identified.
+    private var lastForeignBroadcast: Date?
+    /// Gap detection: a missed broadcast means the channel is costing us packets.
+    private var lastAcceptedBroadcast: Date?
+    private var lastLossy: Date?
+
+    /// The classified link verdict, or nil when there is nothing to say.
+    @Published private(set) var linkVerdict: LinkQuality.Verdict = .normal
+
+    private func updateLinkQuality(rssi: Int, snr: Int, noiseFloor: Int, now: Date = Date()) {
+        quietestFloor = LinkQuality.updateQuietestFloor(current: quietestFloor, sample: noiseFloor)
+
+        // A gap longer than one broadcast period means at least one was lost.
+        if let last = lastAcceptedBroadcast,
+           now.timeIntervalSince(last) >= LinkQuality.lossyGap {
+            lastLossy = now
+        }
+        lastAcceptedBroadcast = now
+
+        let lossy = lastLossy.map { now.timeIntervalSince($0) < LinkQuality.lossMemory } ?? false
+        let foreign = lastForeignBroadcast.map {
+            now.timeIntervalSince($0) < LinkQuality.lossMemory
+        } ?? false
+
+        linkVerdict = LinkQuality.classify(
+            rssi: rssi, snr: snr,
+            noiseFloor: noiseFloor, quietestFloor: quietestFloor,
+            lossy: lossy, foreignLocator: foreign)
+    }
+
     /// Recorded ground track of the connected locator, oldest first.
     ///
     /// Deduped and capped: at 1 Hz an unbounded array would grow all afternoon, and
@@ -203,6 +238,8 @@ final class LinkViewModel: ObservableObject {
                     updateVector(lat: m.latitude, lon: m.longitude,
                                  satellites: m.satellites, gpsStatus: m.gpsStatus,
                                  state: .waitingLaunch, altitudeAglM: m.altitudeAgl)
+                    updateLinkQuality(rssi: Int(m.rssi), snr: Int(m.snr),
+                                      noiseFloor: Int(m.noiseFloor))
                 }
             }
         case .telemetryData:
@@ -213,6 +250,8 @@ final class LinkViewModel: ObservableObject {
                     updateVector(lat: m.latitude, lon: m.longitude,
                                  satellites: m.satellites, gpsStatus: m.gpsStatus,
                                  state: m.flightState, altitudeAglM: m.altitudeAgl)
+                    updateLinkQuality(rssi: Int(m.rssi), snr: Int(m.snr),
+                                      noiseFloor: Int(m.noiseFloor))
                 }
             }
         default:
@@ -242,6 +281,7 @@ final class LinkViewModel: ObservableObject {
             return true
         case .conflict(let id):
             conflictingLocatorIds.insert(id)
+            lastForeignBroadcast = Date()
             return false
         case .unauthorized(let id):
             unauthorizedLocatorIds.insert(id)

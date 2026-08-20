@@ -37,7 +37,7 @@ struct MapScreen: View {
                     locatorBatteryMv: model.prelaunch?.locatorBatteryMv,
                     rssi: rssi,
                     snr: snr,
-                    linkNote: nil
+                    linkNote: linkNote
                 )
                 .padding(8)
 
@@ -73,9 +73,11 @@ struct MapScreen: View {
                     distanceM: model.vector?.distanceM,
                     altitudeAglM: t?.altitudeAgl ?? p?.altitudeAgl ?? 0,
                     // NED: down is positive, so a climb is the negation.
-                    velocityMs: t.map { -$0.velocityNed.z },
-                    inclinationDeg: nil,
-                    headingDeg: nil,
+                    // Android shows total speed from the NED vector, not just the
+                    // vertical component.
+                    velocityMs: t.map { $0.velocityNed.magnitude },
+                    inclinationDeg: t?.attitude.inclinationDeg,
+                    headingDeg: t?.attitude.headingDeg,
                     accel: p?.accel,
                     gyro: p?.gyro,
                     latitude: t?.latitude ?? p?.latitude ?? 0,
@@ -118,6 +120,16 @@ struct MapScreen: View {
             Spacer()
         }
         .padding(.top, 100)
+    }
+
+    /// ADR-0019 verdict as prose. `Congested` is the quieter of the two: the channel
+    /// is occupied but our packets are still arriving clean.
+    private var linkNote: (text: String, color: Color)? {
+        switch model.linkVerdict {
+        case .interference: return ("Interference on this channel", SPColor.error)
+        case .congested:    return ("Channel busy", SPColor.onSurfaceVariant)
+        case .normal:       return nil
+        }
     }
 
     private var rssi: Int? {
