@@ -1,83 +1,95 @@
 # Resume here — iOS port
 
-Written 2026-08-19 to hand off to a fresh conversation. Two known bugs to fix first,
-then the outstanding work. Repo state at iOS `99d269d`, **248 tests passing**, clean
-build with no warnings from our own sources.
+Updated 2026-08-20. The two bugs the previous handoff opened are closed: one was real
+and is fixed, one did not reproduce and is explained below. Repo state: **256 tests
+passing**, clean build with no warnings from our own sources.
 
 ---
 
-## Bug 1 — CRASH: two sheets presented at once
+## Bug 1 — CRASH: two sheets presented at once — FIXED (not yet confirmed on the phone)
 
-**Symptom (on the physical iPhone, from the runtime log):**
+**Was:** two `.sheet` modifiers on one view, which iOS 16 refuses.
 
 ```
 *** Terminating app due to uncaught exception 'NSInvalidArgumentException',
-reason: 'Application tried to present modally a view controller
-<PresentationHostingController: 0x10e118400> that is already being presented by
-<UIHostingController<ModifiedContent<AnyView, RootModifier>>: 0x10e01de00>.'
+reason: 'Application tried to present modally a view controller … that is already
+being presented by …'
 ```
 
-**Cause.** Two `.sheet` modifiers are attached to the same view, and both try to
-present in the same update. SwiftUI on iOS 16 supports **one** sheet per view; the
-second presentation throws.
+**Fixed by** giving each screen ONE sheet, named by a value in
+`SteamPigeon/SheetRouting.swift`:
 
-It happens in **two places**, and the second is the more dangerous:
+| File | Was | Now |
+|---|---|---|
+| `MapScreen.swift` | `.sheet(isPresented: $showMenu)` + `.sheet(item: $openDestination)` | one `.sheet(item: $sheet)` over `MapSheet.menu` / `.destination(_)` |
+| `LinkView.swift` (`RootView`) | `.sheet(isPresented: $showDiagnostics)` + `.sheet(item:)` for the challenge | one `.sheet(item: activeSheet)` over `RootSheet.challenge(_)` / `.diagnostics` |
 
-| File | Lines | Sheets | Trigger |
-|---|---|---|---|
-| `SteamPigeon/MapScreen.swift` | 129, 141 | menu, menu destination | **Reproducible**: tapping a menu item sets `showMenu = false` and `openDestination = …` in the same tick, so the destination sheet presents while the menu is still dismissing. |
-| `SteamPigeon/LinkView.swift` | 49, 56 | diagnostics, password challenge | **Latent but live**: a locator challenge can arrive at any moment, including while the diagnostics sheet is open. Not yet observed, same failure. |
+**The part that is easy to get wrong.** Collapsing to one `.sheet(item:)` is not enough
+on its own: if the item's `id` changes when the user picks a menu item, SwiftUI
+dismisses one sheet and presents another, which is the same sequence moved inside the
+modifier rather than removed. So **`MapSheet.id` and `RootSheet.id` are constant across
+their cases** on purpose, and the sheet's CONTENT changes instead. `SheetRoutingTests`
+pins this — it is the invariant, not a detail.
 
-**Suggested fix.** Collapse each pair into a **single** sheet driven by one enum-typed
-`@State` — e.g. `enum ActiveSheet: Identifiable { case menu, destination(MenuDestination) }`
-— so only one presentation exists and switching between them is a state change rather
-than a dismiss-and-present race. If two sheets must coexist, the second has to be
-presented only after the first has finished dismissing, which is fragile; one sheet is
-the honest structure.
+Behaviour that falls out of it, and is intended:
 
-**Verify with:** `Tools/devicelog.sh 60` while tapping a menu item, or drive the
-simulator (see *Tooling* below). The crash is immediate and unmissable.
+- A password challenge arriving while diagnostics is open **replaces the content** and
+  answering it **returns to diagnostics** (`RootSheet.active` decides; the challenge
+  outranks). This was the latent, more dangerous half — nothing about the user's
+  timing could have avoided it, because a locator raises it.
+- A rejected password changes the challenge VALUE but not its id, so the prompt shows
+  its error without being dismissed and re-presented.
+- Dismissing by swipe clears both reasons a sheet could be open, so nothing
+  re-presents itself while the sheet is going away.
+
+**Verified:** menu → Application Settings → Done, menu → Download maps → Done,
+diagnostics open, and swipe-to-dismiss, all on the iOS 26.5 simulator with no
+exception in the log and the app still alive.
+
+**Still to confirm on the phone**, and this is the only place it can be confirmed: an
+iOS 26 simulator **does not reproduce this crash** — the pre-fix build performs the
+menu → destination transition there quite happily, and only iOS 16 throws. Only iOS
+26.5 runtimes are installed on this Mac. So run `Tools/devicelog.sh 60` against
+Frank's iPhone (16.7.16) while tapping a menu item, and confirm the exception is gone.
 
 ---
 
-## Bug 2 — `LinkViewModel` is constructed more than once
+## Bug 2 — `LinkViewModel` constructed more than once — DID NOT REPRODUCE
 
-**Symptom (found in the simulator log during a menu interaction):** two
-`CLLocationManager` instances in one session, one starting updates and a *different*
-one stopping them.
+**It is constructed once.** Measured on 2026-08-20 by logging `LinkViewModel.init`
+directly (iOS 26.5 simulator, the same environment the original observation came
+from): **one** call at launch, and still one after opening the menu, opening a
+destination, closing it, and opening the diagnostics sheet.
 
-```
-0x103e38ac0  startUpdatingLocation
-0x103e391c0  stopUpdatingLocation, stopUpdatingHeading
-```
+**The evidence in the previous handoff was misread.** The two `CLLocationManager`s in
+the launch log are real, but only one of them is ours:
 
-**Cause.** `SteamPigeon/LinkView.swift:14`
+| instance | what it does | whose |
+|---|---|---|
+| first | `setDesiredAccuracy`, `setDistanceFilter`, then `requestWhenInUseAuthorization` + `startUpdatingLocation` | **ours** — exactly what `PhoneLocation.init` and `.start()` do |
+| second | `setDelegate` only, then `stopUpdatingLocation` + `stopUpdatingHeading` when authorization changes | **MapLibre's** |
 
-```swift
-@StateObject private var model = LinkViewModel()
-```
+That is the quoted "one starting updates and a *different* one stopping them": it is
+the map's own location manager reacting to the authorization prompt, not an abandoned
+copy of ours. Our `PhoneLocation` never has `stop()` called on it — nothing in the app
+calls it.
 
-The expression `LinkViewModel()` is evaluated **every time the `RootView` struct is
-initialised**. `@StateObject` keeps only the first instance and discards the rest — a
-well-known SwiftUI wart, and usually harmless.
+**The premise was also wrong about SwiftUI.** `@StateObject` wraps its initial value in
+an `@autoclosure` and evaluates it at most once per view lifetime. The wart where the
+expression re-runs on every `init` belongs to `@ObservedObject var x = X()`, which is a
+different declaration.
 
-It is not harmless here, because `LinkViewModel.init` has side effects: it constructs
-a `BluetoothTransport`, whose `init` immediately creates a **`CBCentralManager`** (with
-a restore identifier), and a `PhoneLocation`, which creates a `CLLocationManager` and
-starts CoreMotion. Every discarded instance therefore opens hardware sessions and
-abandons them. Abandoned centrals still hold sessions with `bluetoothd`.
+**Nothing was changed for this** beyond a note in `BluetoothTransport.init` recording
+the measurement — and recording why the suggested fix (create the `CBCentralManager`
+lazily on first scan) **must not be applied**: restoration requires the central to
+exist by the time launch finishes, because iOS calls `willRestoreState` on it during
+launch. Deferring it to the first scan, which a view drives, would work in the
+foreground and silently drop every background wake — the one case State Preservation &
+Restoration exists for.
 
-**Plausibly related:** the "much longer delay than Android" when switching receivers.
-Worth re-measuring after the fix rather than assuming.
-
-**Suggested fix.** Make construction cheap and open hardware on first real use:
-create the `CBCentralManager` lazily (on `startScan`) rather than in `init`, and the
-same for the location/motion managers. Alternatively hold the model as a singleton
-owned by the `App`, but lazy resources is the smaller and more honest change — the
-model should be safe to construct.
-
-**Verify with:** capture the simulator log during launch and count distinct
-`"self":"0x…"` values in the CoreLocation lines; there should be one.
+**Still worth re-measuring separately:** the "much longer delay than Android" when
+switching receivers was only ever *suspected* to be related to this. With this cause
+eliminated it is an open question with no candidate cause, and it needs the phone.
 
 ---
 
@@ -116,7 +128,9 @@ locator password gate. Others remain open.
 
 **Outstanding, roughly in value order:**
 
-1. The two bugs above.
+1. **Confirm the sheet fix on the phone** (Bug 1 above) — the only outstanding piece of
+   it, and the only machine that can show it. Then re-measure the receiver-switch
+   delay, which no longer has a candidate cause.
 2. **Auto-zoom deadband** — the toggle exists, the behaviour does not. Port
    `recenterDeadbandM`, `autoZoomDeadbandLevels`, `viewportLimitedDeadbandM` from
    `FlightMapScreen.kt`; approximating it produces a camera that hunts.

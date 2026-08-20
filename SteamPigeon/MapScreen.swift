@@ -20,8 +20,10 @@ struct MapScreen: View {
     @State private var autoCentre = true
     @State private var autoZoom = false
     @State private var headingUp = false
-    @State private var showMenu = false
-    @State private var openDestination: MenuDestination?
+    /// The menu and the screen it opens are ONE presentation — see `MapSheet`. They
+    /// were two `.sheet` modifiers, and selecting a menu item dismissed the first
+    /// while presenting the second in the same tick, which iOS 16 refuses.
+    @State private var sheet: MapSheet?
 
     var body: some View {
         // Measured HERE, at the top, rather than from the map's background. The panel
@@ -60,7 +62,7 @@ struct MapScreen: View {
                 .onTapGesture { actionsExpanded = false }
 
                 HStack(alignment: .top, spacing: 8) {
-                    Button { showMenu = true } label: {
+                    Button { sheet = .menu } label: {
                         Image(systemName: "line.3.horizontal")
                             .font(.system(size: 24))
                             .foregroundStyle(SPColor.onPrimaryContainer)
@@ -126,37 +128,47 @@ struct MapScreen: View {
             }
         }
         .ignoresSafeArea(edges: .bottom)
-        .sheet(isPresented: $showMenu) {
-            MenuView(
-                destinations: MenuGating.destinations(
-                    linkReady: model.state == .ready,
-                    locatorActive: model.connectedLocatorId != nil,
-                    armed: model.armed),
-                onSelect: { destination in
-                    showMenu = false
-                    openDestination = destination
-                },
-                onDismiss: { showMenu = false })
+        // THE screen's only sheet. Adding a second one here reintroduces the crash.
+        .sheet(item: $sheet) { current in
+            switch current {
+            case .menu:
+                MenuView(
+                    destinations: MenuGating.destinations(
+                        linkReady: model.state == .ready,
+                        locatorActive: model.connectedLocatorId != nil,
+                        armed: model.armed),
+                    // Swaps this sheet's content rather than dismissing it and
+                    // presenting another. `MapSheet.id` is constant, so SwiftUI has
+                    // nothing to tear down between the two.
+                    onSelect: { sheet = .destination($0) },
+                    onDismiss: { sheet = nil })
+            case .destination(let destination):
+                destinationView(destination)
+            }
         }
-        .sheet(item: $openDestination) { destination in
-            NavigationView {
-                Group {
-                    if destination == .appSettings {
-                        AppSettingsView(settings: settings)
-                    } else {
-                        NotYetBuiltView(destination: destination)
+    }
+
+    /// A screen reached from the menu. `Done` closes the sheet outright rather than
+    /// returning to the menu: the menu is a way in, not a place, and one tap back to
+    /// the map is what Android's drawer does too.
+    private func destinationView(_ destination: MenuDestination) -> some View {
+        NavigationView {
+            Group {
+                if destination == .appSettings {
+                    AppSettingsView(settings: settings)
+                } else {
+                    NotYetBuiltView(destination: destination)
+                }
+            }
+                .navigationTitle(destination.title)
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .navigationBarLeading) {
+                        Button("Done") { sheet = nil }
                     }
                 }
-                    .navigationTitle(destination.title)
-                    .navigationBarTitleDisplayMode(.inline)
-                    .toolbar {
-                        ToolbarItem(placement: .navigationBarLeading) {
-                            Button("Done") { openDestination = nil }
-                        }
-                    }
-            }
-            .navigationViewStyle(.stack)
         }
+        .navigationViewStyle(.stack)
     }
 
     // MARK: - Overlays

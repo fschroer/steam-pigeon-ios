@@ -11,6 +11,10 @@ import SwiftUI
 /// The bring-up screen stays reachable on purpose: it is what turned a bad-CRC count
 /// into a firmware version skew, and that class of problem does not stop happening.
 struct RootView: View {
+    // Constructed ONCE, and measured to be — see the note in `BluetoothTransport.init`.
+    // `@StateObject` wraps this expression in an autoclosure and evaluates it at most
+    // once per view lifetime; it is `@ObservedObject var x = X()` that re-runs on every
+    // init, which is a different declaration from this one.
     @StateObject private var model = LinkViewModel()
     @StateObject private var settings = AppSettings()
 
@@ -46,23 +50,47 @@ struct RootView: View {
             .padding(.bottom, 12)
             .accessibilityLabel("Link diagnostics (temporary)")
         }
-        .sheet(isPresented: $showDiagnostics) {
-            NavigationView { LinkView(model: model) }.navigationViewStyle(.stack)
-        }
         .preferredColorScheme(.dark)     // matches Android: read outdoors, not in a browser
         .tint(SPColor.primary)
         .background(SPColor.background)
         .onAppear { model.start() }
-        .sheet(item: Binding(
-            get: { model.challenge },
-            set: { if $0 == nil { model.declineChallenge() } }
-        )) { c in
-            PasswordChallengeView(
-                challenge: c,
-                onSubmit: { model.submitPassword($0) },
-                onCancel: { model.declineChallenge() }
-            )
+        // THE root view's only sheet. Diagnostics and the password challenge used to
+        // be two, and a challenge arriving while diagnostics was open would have
+        // presented both at once — the same crash as the map screen's menu, but
+        // triggered by a locator rather than by a tap, so nothing about the user's
+        // timing could avoid it.
+        .sheet(item: activeSheet) { current in
+            switch current {
+            case .challenge(let c):
+                PasswordChallengeView(
+                    challenge: c,
+                    onSubmit: { model.submitPassword($0) },
+                    onCancel: { model.declineChallenge() }
+                )
+            case .diagnostics:
+                NavigationView { LinkView(model: model) }.navigationViewStyle(.stack)
+            }
         }
+    }
+
+    /// One binding over both reasons a sheet might be open, so there is one
+    /// presentation to be in or out of.
+    ///
+    /// Answering a challenge does not dismiss anything: `model.challenge` goes nil,
+    /// `RootSheet.active` falls back to diagnostics if that is what was underneath,
+    /// and the sheet's content changes in place. Dismissing by hand clears BOTH — a
+    /// swipe down means "close this", and leaving one of them set would have the
+    /// sheet re-present itself as it was going away.
+    private var activeSheet: Binding<RootSheet?> {
+        Binding(
+            get: { RootSheet.active(challenge: model.challenge,
+                                    showDiagnostics: showDiagnostics) },
+            set: { newValue in
+                guard newValue == nil else { return }
+                showDiagnostics = false
+                model.declineChallenge()
+            }
+        )
     }
 }
 

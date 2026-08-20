@@ -95,6 +95,22 @@ final class BluetoothTransport: NSObject {
 
     override init() {
         super.init()
+        // The central is created HERE and not lazily on first scan. Deferring it is
+        // the obvious-looking cure for "the initialiser opens hardware", and it is
+        // wrong: restoration requires the central to exist by the time launch
+        // finishes, because iOS calls `willRestoreState` on it during launch. Moving
+        // creation to the first scan — which is driven by a view appearing — would
+        // work in the foreground and silently drop every background wake, the one
+        // case restoration exists for.
+        //
+        // The owner is constructed once, which is what makes one eager central safe.
+        // Measured on 2026-08-20, iOS 26.5 simulator, by logging `LinkViewModel.init`:
+        // one call at launch, and still one after opening the menu, a destination and
+        // the diagnostics sheet. The two `CLLocationManager`s visible in a launch log
+        // are OURS plus MapLibre's — MapLibre's is the one that never gets
+        // `setDesiredAccuracy`/`setDistanceFilter` and calls `stopUpdatingLocation`
+        // when authorization changes.
+        //
         // State Preservation & Restoration replaces Android's foreground service.
         // iOS has no always-running equivalent: the app is *woken* for BLE events.
         // This is viable only because the receiver advertises FFE0 — background
