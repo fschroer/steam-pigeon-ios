@@ -55,8 +55,10 @@ struct MapStatusPanel: View {
 
     private var receiverRow: some View {
         HStack(spacing: 4) {
-            Image(systemName: "dot.radiowaves.left.and.right")
-                .font(.system(size: iconSize * 0.8))
+            Image("radio")
+                .renderingMode(.template)
+                .resizable().scaledToFit()
+                .frame(width: iconSize, height: iconSize)
                 .frame(width: iconGutter, alignment: .leading)
                 .foregroundStyle(connectionState == .ready ? SPColor.primary : SPColor.outline)
             Text(receiverText)
@@ -72,7 +74,10 @@ struct MapStatusPanel: View {
     private var locatorRow: some View {
         HStack(spacing: 4) {
             HStack(spacing: 2) {
-                Image(systemName: "location.north.circle")
+                Image("rocket_md")
+                    .renderingMode(.template)
+                    .resizable().scaledToFit()
+                    .frame(width: iconSize, height: iconSize)
                     .foregroundStyle(rocketTint)
                 if let s = satellites {
                     Text("\(s)").font(SPFont.labelSmall).foregroundStyle(rocketTint)

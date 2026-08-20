@@ -126,8 +126,53 @@ struct FlightMapView: UIViewRepresentable {
                 removeLayer(style, id: "bearing")
             }
 
-            upsertPoint(style, id: "rocket", at: rocket, colour: markerState.color, radius: 7)
+            upsertRocket(style, map: nil, at: rocket, state: markerState)
             upsertPoint(style, id: "phone", at: phone, colour: .systemBlue, radius: 5)
+        }
+
+        /// The rocket marker: the app's own glyph, tinted by trust state.
+        ///
+        /// Android registers three pre-tinted sprites (`IMG_ROCKET_FRESH/DEGRADED/STALE`)
+        /// and switches `iconImage` between them, because MapLibre cannot tint a symbol
+        /// layer's image at draw time. The same applies here, so the tint is baked into
+        /// the registered image rather than set as a paint property.
+        private func upsertRocket(_ style: MLNStyle, map: MLNMapView?,
+                                  at coord: CLLocationCoordinate2D?,
+                                  state: RocketMarkerState) {
+            guard let coord else { removeLayer(style, id: "rocket"); return }
+
+            let imageName = "rocket-\(state)"
+            if style.image(forName: imageName) == nil,
+               let tinted = Self.tintedRocket(state.color) {
+                style.setImage(tinted, forName: imageName)
+            }
+
+            let feature = MLNPointFeature()
+            feature.coordinate = coord
+            let source = upsertSource(style, id: "rocket", shape: feature)
+
+            if let existing = style.layer(withIdentifier: "rocket") as? MLNSymbolStyleLayer {
+                existing.iconImageName = NSExpression(forConstantValue: imageName)
+            } else {
+                let layer = MLNSymbolStyleLayer(identifier: "rocket", source: source)
+                layer.iconImageName = NSExpression(forConstantValue: imageName)
+                layer.iconAllowsOverlap = NSExpression(forConstantValue: true)
+                layer.iconScale = NSExpression(forConstantValue: 1.0)
+                style.addLayer(layer)
+            }
+        }
+
+        /// Bake the trust colour into the glyph, since a symbol layer cannot tint.
+        private static func tintedRocket(_ colour: UIColor) -> UIImage? {
+            guard let base = UIImage(named: "rocket_md") else { return nil }
+            let size = CGSize(width: 28, height: 28)
+            return UIGraphicsImageRenderer(size: size).image { ctx in
+                colour.setFill()
+                base.withRenderingMode(.alwaysTemplate)
+                    .draw(in: CGRect(origin: .zero, size: size))
+                ctx.cgContext.setBlendMode(.sourceIn)
+                ctx.cgContext.fill(CGRect(origin: .zero, size: size))
+            }
         }
 
         private func upsertPoint(_ style: MLNStyle, id: String,
