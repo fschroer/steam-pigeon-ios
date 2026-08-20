@@ -14,6 +14,9 @@ struct RootView: View {
     @StateObject private var model = LinkViewModel()
 
     @State private var showDiagnostics = false
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
+
+    private var isLandscape: Bool { verticalSizeClass == .compact }
 
     var body: some View {
         // ONE main screen, as Android has: the map with its overlays. The earlier
@@ -21,7 +24,14 @@ struct RootView: View {
         // other destinations live behind a navigation drawer, which maps to a
         // settings list rather than tabs.
         ZStack(alignment: .bottomTrailing) {
-            MapScreen(model: model)
+            // Landscape swaps the map for the heads-up view, exactly as Android does
+            // (FlightMapScreen.kt:739). Rotating the phone is the gesture on both
+            // platforms, so the manual needs no per-OS instruction.
+            if isLandscape {
+                HeadsUpView(model: model)
+            } else {
+                MapScreen(model: model)
+            }
 
             // TEMPORARY: the diagnostics screen has no Android counterpart. It stays
             // reachable because it is what turned a bad-CRC count into a firmware

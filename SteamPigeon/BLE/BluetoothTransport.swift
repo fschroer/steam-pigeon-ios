@@ -131,6 +131,10 @@ final class BluetoothTransport: NSObject {
         central.stopScan()
     }
 
+    /// Forget the remembered receiver, so the next scan offers a choice instead of
+    /// reconnecting. Used by Rescan.
+    func forgetRememberedPeripheral() { lastKnownPeripheral = nil }
+
     /// Connect to one of the peripherals found this scan.
     func connectToDiscovered(_ id: UUID) {
         guard let p = discovered.first(where: { $0.identifier == id }) else { return }

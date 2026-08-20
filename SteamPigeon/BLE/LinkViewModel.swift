@@ -131,14 +131,15 @@ final class LinkViewModel: ObservableObject {
     /// The second half matters after landing — the locator disarms and returns to
     /// PreLaunchData, but the flight state stays `Landed`, so speed and attitude keep
     /// showing. That is exactly when someone is walking out to the rocket.
-    var isInFlight: Bool {
-        let armed = telemetry?.armed ?? prelaunch?.armed ?? false
-        let state = telemetry?.flightState ?? .waitingLaunch
-        return armed || state != .waitingLaunch
-    }
+    var isInFlight: Bool { armed || (telemetry?.flightState ?? .waitingLaunch) != .waitingLaunch }
 
-    /// Whether the locator is currently armed, from whichever broadcast is newest.
-    var armed: Bool { telemetry?.armed ?? prelaunch?.armed ?? false }
+    /// Armed state from the NEWEST broadcast.
+    ///
+    /// Not "telemetry if present": telemetry is deliberately retained across a disarm
+    /// so speed and attitude survive landing, which made that reading report armed
+    /// forever once a locator had ever been armed — and with it, in-flight forever.
+    /// A disarmed locator sends PreLaunchData, so the newest packet is the answer.
+    @Published private(set) var armed = false
 
     // MARK: - Commands (ADR-0020: gated on CONNECTED, not merely authorized)
 
@@ -175,9 +176,15 @@ final class LinkViewModel: ObservableObject {
         }
     }
 
-    /// Drop the link and look for the receiver again.
+    /// Drop the link and look for receivers again — offering a choice.
+    ///
+    /// Rescan exists precisely to reach a DIFFERENT receiver, so it must not
+    /// silently reconnect to the remembered one. Auto-reconnect is for app launch,
+    /// where not interrupting is the kindness; here it defeats the button.
     func rescan() {
         transport.disconnect()
+        transport.forgetRememberedPeripheral()
+        discoveredReceivers = []
         transport.startScan()
     }
 
@@ -318,6 +325,7 @@ final class LinkViewModel: ObservableObject {
                 if admit(frame, m.locatorId, WireProtocol.prelaunchBaseStructSize,
                          deviceName: m.deviceName) {
                     prelaunch = m
+                    armed = m.armed                     // newest broadcast wins
                     updateVector(lat: m.latitude, lon: m.longitude,
                                  satellites: m.satellites, gpsStatus: m.gpsStatus,
                                  state: .waitingLaunch, altitudeAglM: m.altitudeAgl)
@@ -330,6 +338,7 @@ final class LinkViewModel: ObservableObject {
                 lastLocatorId = m.locatorId
                 if admit(frame, m.locatorId, WireProtocol.telemetryBaseStructSize) {
                     telemetry = m
+                    armed = m.armed                     // newest broadcast wins
                     updateVector(lat: m.latitude, lon: m.longitude,
                                  satellites: m.satellites, gpsStatus: m.gpsStatus,
                                  state: m.flightState, altitudeAglM: m.altitudeAgl)

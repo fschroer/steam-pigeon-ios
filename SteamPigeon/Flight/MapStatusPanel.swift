@@ -65,7 +65,7 @@ struct MapStatusPanel: View {
                     // Fixed width so a long verdict wraps instead of widening the
                     // panel — unconstrained it lays out on one line and drags the
                     // whole block wider whenever the verdict changes.
-                    .frame(width: 220, alignment: .leading)
+                    .frame(width: iconGutter + nameWidth + batteryGutter, alignment: .leading)
             }
             if actionsExpanded { actionButtons }
         }

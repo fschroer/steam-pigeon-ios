@@ -43,13 +43,15 @@ struct MapScreen: View {
                 .onTapGesture { actionsExpanded = false }
 
                 MapStatusPanel(
-                    receiverName: nil,
+                    // Relayed inside PreLaunchData by the receiver. It was hardcoded
+                    // nil here, so the row only ever showed a connection state.
+                    receiverName: model.prelaunch?.receiverName,
                     connectionState: model.state,
                     receiverBatteryMv: model.prelaunch?.receiverBatteryMv,
                     locatorName: model.prelaunch?.deviceName,
                     satellites: model.telemetry?.satellites ?? model.prelaunch?.satellites,
                     gpsStatus: model.telemetry?.gpsStatus ?? model.prelaunch?.gpsStatus,
-                    armed: model.telemetry?.armed ?? model.prelaunch?.armed ?? false,
+                    armed: model.armed,
                     locatorBatteryMv: model.prelaunch?.locatorBatteryMv,
                     rssi: rssi,
                     snr: snr,
@@ -189,8 +191,11 @@ struct MapScreen: View {
     /// is occupied but our packets are still arriving clean.
     private var linkNote: (text: String, color: Color)? {
         switch model.linkVerdict {
-        case .interference: return ("Interference on this channel", SPColor.error)
-        case .congested:    return ("Channel busy", SPColor.onSurfaceVariant)
+        // Android's exact wording. "Channel busy" alone loses the reassurance that
+        // matters most when it appears mid-flight: the link is still clean.
+        case .interference: return ("Interference detected. Try another channel.", SPColor.error)
+        case .congested:    return ("Channel is busy, but your link is clean.",
+                                    SPColor.onSurfaceVariant)
         case .normal:       return nil
         }
     }
