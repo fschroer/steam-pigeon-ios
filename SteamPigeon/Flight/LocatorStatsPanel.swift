@@ -57,7 +57,10 @@ struct LocatorStatsPanel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 1) {
-            row("Dist: \(distanceM.map(String.init) ?? "--")")
+            // Right-justified in a fixed field with units, matching Android's
+            // "%15d" + " m" — the column is why the panel uses a mono face at all.
+            row(distanceM.map { String(format: "Dist: %15d m", $0) }
+                ?? String(format: "Dist: %15@ m", "unknown" as NSString))
             row(String(format: "AGL : %15.1f m", altitudeAglM))
             // In flight: speed and attitude. On the pad: what the IMU is reading.
             // Android switches between the two rather than showing both.

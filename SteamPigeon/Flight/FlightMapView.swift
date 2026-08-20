@@ -33,6 +33,9 @@ struct FlightMapView: UIViewRepresentable {
     var recentreToken: Int = 0
     /// Drives marker and accuracy-ring colour, as on Android.
     var markerState: RocketMarkerState = .live
+    /// Reports the live camera out, so the compass rose can counter-rotate and the
+    /// scale bar can size itself. Both are wrong at every zoom but one without it.
+    var onCameraChange: ((_ bearing: Double, _ zoom: Double, _ centre: CLLocationCoordinate2D) -> Void)?
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -41,6 +44,7 @@ struct FlightMapView: UIViewRepresentable {
         let map = MLNMapView(frame: .zero, styleURL: url)
         map.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         map.delegate = context.coordinator
+        context.coordinator.onCameraChange = onCameraChange
         // Match Android's uiSettings (MapLibreCompat.kt:423-431) exactly.
         map.logoView.isHidden = true            // avoids overlap with the app's overlays
         map.attributionButton.isHidden = true
@@ -69,6 +73,22 @@ struct FlightMapView: UIViewRepresentable {
         /// user. Re-fitting on every 1 Hz update would fight anyone panning.
         private var didFit = false
         private var lastRecentreToken = 0
+        var onCameraChange: ((Double, Double, CLLocationCoordinate2D) -> Void)?
+
+        /// Fires continuously while the camera moves, not only when it settles — the
+        /// scale bar has to track a pinch as it happens, not snap afterwards.
+        func mapView(_ map: MLNMapView, regionIsChangingWith reason: MLNCameraChangeReason) {
+            report(map)
+        }
+
+        func mapView(_ map: MLNMapView, regionDidChangeWith reason: MLNCameraChangeReason,
+                     animated: Bool) {
+            report(map)
+        }
+
+        private func report(_ map: MLNMapView) {
+            onCameraChange?(map.direction, map.zoomLevel, map.centerCoordinate)
+        }
 
         func mapView(_ map: MLNMapView, didFinishLoading style: MLNStyle) {
             styleReady = true
@@ -116,15 +136,6 @@ struct FlightMapView: UIViewRepresentable {
 
             // The ground track.
             upsertLine(style, id: "track", coords: track, colour: RocketMarkerState.live.color, width: 2)
-
-            // The straight line between phone and rocket — the bearing, drawn. With a
-            // loose phone fix this is the thing that shows how loose: the line swings
-            // while the rocket marker sits still.
-            if let p = phone, let r = rocket {
-                upsertLine(style, id: "bearing", coords: [p, r], colour: .systemBlue, width: 2)
-            } else {
-                removeLayer(style, id: "bearing")
-            }
 
             upsertRocket(style, map: nil, at: rocket, state: markerState)
             upsertPoint(style, id: "phone", at: phone, colour: .systemBlue, radius: 5)

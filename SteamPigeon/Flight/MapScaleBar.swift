@@ -56,14 +56,18 @@ struct CompassRose: View {
     /// Map bearing, degrees. The rose counter-rotates so north stays north.
     let bearingDeg: Double
     let trust: CompassTrust
-    var size: CGFloat = 48
+    /// Android: a 60 dp circle of the map-overlay colour holding a 48 dp rose.
+    var size: CGFloat = 60
+    private var roseSize: CGFloat { size * 0.8 }
 
     var body: some View {
         ZStack {
+            Circle().fill(SPColor.mapOverlay)
+
             Image("compass")
                 .resizable()
                 .scaledToFit()
-                .frame(width: size, height: size)
+                .frame(width: roseSize, height: roseSize)
                 .rotationEffect(.degrees(-bearingDeg))
 
             if trust != .high {
@@ -72,7 +76,10 @@ struct CompassRose: View {
                 Text("∞")
                     .font(.system(size: 20, weight: .bold))
                     .foregroundStyle(trust == .unreliable ? Color.red : Color.yellow)
-                    .offset(y: 9)
+                    // Below the rose's centre so it clears the rim and does not sit on
+                    // the south needle. Android measured this off a screenshot rather
+                    // than deriving it.
+                    .offset(y: roseSize / 2 + 4)
                     // The glyph alone reads as "infinity" to a screen reader, which is
                     // not what it means here.
                     .accessibilityLabel(trust == .unreliable

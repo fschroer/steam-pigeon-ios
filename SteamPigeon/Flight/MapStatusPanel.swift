@@ -43,7 +43,10 @@ struct MapStatusPanel: View {
     private let nameWidth: CGFloat = 190      // fits a 20-character device name at body size
     private let batteryGutter: CGFloat = 24
 
-    @State private var actionsExpanded = false
+    /// Hoisted, so tapping the MAP can collapse it too — Android hoists this for the
+    /// same reason. A dropdown that can only be dismissed by hitting the same small
+    /// panel again is a trap on a screen where everything else is a map gesture.
+    @Binding var actionsExpanded: Bool
     @State private var collapseTask: Task<Void, Never>?
     @State private var blinkOn = true
 
@@ -91,19 +94,27 @@ struct MapStatusPanel: View {
                 actionsExpanded = false
                 onRescan?()
             } label: {
-                Text("Rescan").frame(maxWidth: .infinity, minHeight: 48)
+                Text("Rescan")
+                    .font(SPFont.labelLarge)
+                    .frame(maxWidth: .infinity, minHeight: 48)
             }
             .buttonStyle(.borderedProminent)
+            // Material buttons are STADIUM-shaped. SwiftUI's default corner radius is
+            // much tighter, which is what made these read as a different control.
+            .buttonBorderShape(.capsule)
 
             Button {
                 actionsExpanded = false
                 onToggleArmed?()
             } label: {
-                Text(armed ? "Disarm" : "Arm").frame(maxWidth: .infinity, minHeight: 48)
+                Text(armed ? "Disarm" : "Arm")
+                    .font(SPFont.labelLarge)
+                    .frame(maxWidth: .infinity, minHeight: 48)
             }
             .buttonStyle(.borderedProminent)
-            // Disarm is destructive-coloured, as on Android: the consequences of the
-            // two are not symmetric.
+            .buttonBorderShape(.capsule)
+            // Disarm is error-coloured, as on Android: the consequences of the two
+            // are not symmetric.
             .tint(armed ? SPColor.error : SPColor.primary)
             .disabled(!canArm)
         }
@@ -155,7 +166,7 @@ struct MapStatusPanel: View {
 
             Text(locatorText)
                 .font(SPFont.telemetry)
-                .foregroundStyle(armed ? SPColor.error : SPColor.onBackground)
+                .foregroundStyle(SPColor.onBackground)
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .frame(width: nameWidth, alignment: .leading)
@@ -225,9 +236,11 @@ struct MapStatusPanel: View {
         }
     }
 
+    /// The device name alone. Armed state is carried by the rocket icon's tint, as on
+    /// Android — spelling it out again in the row is a second claim to keep in sync.
     private var locatorText: String {
         guard let n = locatorName, !n.isEmpty else { return "No Locator" }
-        return armed ? "\(n) — ARMED" : n
+        return n
     }
 
     private var rocketTint: Color {

@@ -152,6 +152,17 @@ final class LinkViewModel: ObservableObject {
     /// an unaddressed Arm reaches every locator on the channel.
     func toggleArmed() {
         guard let id = connectedLocatorId, gate.mayCommand(id) else { return }
+
+        // Mirror the locator's rule: a disarm is only honoured while the rocket is
+        // waiting for launch or has landed. Blocking it here — and SAYING WHY —
+        // beats sending a request the locator silently ignores, which reads as the
+        // app having done nothing.
+        let state = telemetry?.flightState ?? .waitingLaunch
+        if armed, state != .waitingLaunch, state != .landed {
+            transientMessage = "Can't disarm while the rocket is in flight. Wait until it has landed."
+            return
+        }
+
         let type: MsgType = armed ? .disarmRequest : .armRequest
         guard let msg = OutboundMessage.locatorDirected(type, targetLocatorId: id) else { return }
         transport.send(msg)
@@ -173,6 +184,19 @@ final class LinkViewModel: ObservableObject {
     /// True while an arm/disarm is in flight — drives the blinking rocket icon.
     @Published private(set) var armCommandPending = false
 
+    /// Receivers found this scan, offered to the user rather than picked for them.
+    @Published private(set) var discoveredReceivers: [(id: UUID, name: String)] = []
+
+    /// A message to show and dismiss — the equivalent of Android's Toast.
+    @Published var transientMessage: String?
+
+    func selectReceiver(_ id: UUID) {
+        transport.connectToDiscovered(id)
+        discoveredReceivers = []
+    }
+
+    func dismissReceiverPicker() { discoveredReceivers = [] }
+
     /// ADR-0017 trust state for the drawn position.
     var markerState: RocketMarkerState {
         RocketMarkerState.from(
@@ -191,6 +215,20 @@ final class LinkViewModel: ObservableObject {
 
     init() {
         for (id, key) in store.keysById { gate.remember(locatorId: id, passwordKey: key) }
+        transport.onDiscover = { [weak self] peripherals in
+            Task { @MainActor in
+                guard let self else { return }
+                self.discoveredReceivers = peripherals.map {
+                    ($0.identifier, $0.name ?? "Unnamed receiver")
+                }
+                // Reconnecting to the receiver used last is not a choice worth
+                // interrupting for; only ask when it is genuinely ambiguous.
+                if let known = self.transport.lastKnownPeripheral,
+                   let match = peripherals.first(where: { $0.identifier == known }) {
+                    self.transport.connect(to: match)
+                }
+            }
+        }
         transport.onStateChange = { [weak self] s in
             Task { @MainActor in self?.state = s }
         }

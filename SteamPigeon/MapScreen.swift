@@ -1,4 +1,5 @@
 import SwiftUI
+import CoreLocation
 
 /// The live map tab.
 ///
@@ -8,6 +9,12 @@ struct MapScreen: View {
     @ObservedObject var model: LinkViewModel
 
     @State private var recentre = 0
+    /// Live camera, so the rose counter-rotates and the scale bar sizes itself.
+    @State private var cameraBearing: Double = 0
+    @State private var cameraZoom: Double = 15
+    @State private var cameraCentre = CLLocationCoordinate2D(latitude: 0, longitude: 0)
+    /// Hoisted so a tap on the MAP closes the action panel.
+    @State private var actionsExpanded = false
 
     var body: some View {
         // Measured HERE, at the top, rather than from the map's background. The panel
@@ -23,8 +30,17 @@ struct MapScreen: View {
                     phoneAccuracyM: model.phone.horizontalAccuracyM,
                     track: model.track,
                     recentreToken: recentre,
-                    markerState: model.markerState
+                    markerState: model.markerState,
+                    onCameraChange: { bearing, zoom, centre in
+                        cameraBearing = bearing
+                        cameraZoom = zoom
+                        cameraCentre = centre
+                    }
                 )
+                // A tap anywhere on the map dismisses the action panel. Without this
+                // the only way out is hitting the same small panel again, which is a
+                // trap on a screen where every other gesture belongs to the map.
+                .onTapGesture { actionsExpanded = false }
 
                 MapStatusPanel(
                     receiverName: nil,
@@ -41,7 +57,8 @@ struct MapScreen: View {
                     canArm: model.canSendArmCommand,
                     armPending: model.armCommandPending,
                     onRescan: { model.rescan() },
-                    onToggleArmed: { model.toggleArmed() }
+                    onToggleArmed: { model.toggleArmed() },
+                    actionsExpanded: $actionsExpanded
                 )
                 .padding(8)
 
@@ -49,14 +66,39 @@ struct MapScreen: View {
                     statsPanel(in: proxy.size)
                 }
 
+                if !model.discoveredReceivers.isEmpty {
+                    Color.black.opacity(0.4).ignoresSafeArea()
+                    VStack { Spacer(); receiverPicker; Spacer() }
+                        .frame(maxWidth: .infinity)
+                }
+
+                // Android uses a Toast; this is the same job — say why nothing
+                // happened, then get out of the way.
+                if let message = model.transientMessage {
+                    VStack {
+                        Spacer()
+                        Text(message)
+                            .font(SPFont.bodyMedium)
+                            .padding(12)
+                            .background(SPColor.surfaceContainerHighest,
+                                        in: RoundedRectangle(cornerRadius: 12))
+                            .padding(.bottom, 90)
+                            .onAppear {
+                                Task {
+                                    try? await Task.sleep(for: .seconds(4))
+                                    model.transientMessage = nil
+                                }
+                            }
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+
                 // The app's own compass rose, carrying the ADR-0023 calibration mark,
                 // and the scale bar — both bottom-left, clear of the stats panel.
                 VStack(alignment: .leading, spacing: 6) {
                     Spacer()
-                    CompassRose(bearingDeg: 0, trust: model.phone.compassTrust)
-                    MapScaleBar(zoom: 15,
-                                latitude: model.phone.coordinate?.latitude
-                                       ?? model.rocketCoordinate?.latitude ?? 0)
+                    CompassRose(bearingDeg: cameraBearing, trust: model.phone.compassTrust)
+                    MapScaleBar(zoom: cameraZoom, latitude: cameraCentre.latitude)
                 }
                 .padding(.leading, 10)
                 .padding(.bottom, 16)
@@ -109,6 +151,39 @@ struct MapScreen: View {
         .padding(8)
     }
 
+
+    /// Offered when discovery finds receivers and none is the one used last.
+    @ViewBuilder private var receiverPicker: some View {
+        if !model.discoveredReceivers.isEmpty {
+            VStack(spacing: 0) {
+                Text("Select receiver").font(SPFont.titleMedium).padding(.top, 12)
+                Text("\(model.discoveredReceivers.count) device(s) found. Tap to connect.")
+                    .font(SPFont.bodySmall)
+                    .foregroundStyle(SPColor.onSurfaceVariant)
+                    .padding(.bottom, 8)
+                ForEach(model.discoveredReceivers, id: \.id) { r in
+                    Divider()
+                    Button { model.selectReceiver(r.id) } label: {
+                        HStack {
+                            Image(systemName: "dot.radiowaves.left.and.right")
+                            Text(r.name).font(SPFont.bodyLarge)
+                            Spacer()
+                        }
+                        .padding(.vertical, 12).padding(.horizontal, 16)
+                    }
+                    .foregroundStyle(SPColor.onBackground)
+                }
+                Divider()
+                Button("Cancel") { model.dismissReceiverPicker() }
+                    .font(SPFont.labelLarge)
+                    .padding(12)
+            }
+            .frame(maxWidth: 320)
+            .background(SPColor.surfaceContainerHigh)
+            .clipShape(RoundedRectangle(cornerRadius: 20))
+            .shadow(radius: 20)
+        }
+    }
 
     /// ADR-0019 verdict as prose. `Congested` is the quieter of the two: the channel
     /// is occupied but our packets are still arriving clean.

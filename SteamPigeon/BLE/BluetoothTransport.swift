@@ -47,6 +47,12 @@ final class BluetoothTransport: NSObject {
     /// Complete, CRC-verified frames. Already reassembled by `PacketFramer`.
     var onFrame: (([UInt8]) -> Void)?
     var onStateChange: ((TransportState) -> Void)?
+    /// Every FFE0 peripheral seen this scan, so the user can choose. Android shows a
+    /// picker whenever discovery finds one or more devices; connecting to whatever
+    /// answered first is wrong the moment there are two receivers at a launch.
+    var onDiscover: (([CBPeripheral]) -> Void)?
+    private(set) var discovered: [CBPeripheral] = []
+
     /// ADR-0012: send a `receiverInfoRequest`. Wired by the caller, because building
     /// that message is protocol work, not transport work.
     var onHealthProbe: (() -> Void)?
@@ -117,11 +123,18 @@ final class BluetoothTransport: NSObject {
         }
 
         state = .scanning
+        discovered.removeAll()
         central.scanForPeripherals(withServices: [Self.serviceUUID], options: nil)
     }
 
     func stopScan() {
         central.stopScan()
+    }
+
+    /// Connect to one of the peripherals found this scan.
+    func connectToDiscovered(_ id: UUID) {
+        guard let p = discovered.first(where: { $0.identifier == id }) else { return }
+        connect(to: p)
     }
 
     func connect(to p: CBPeripheral) {
@@ -223,7 +236,9 @@ extension BluetoothTransport: CBCentralManagerDelegate {
 
     func centralManager(_ c: CBCentralManager, didDiscover p: CBPeripheral,
                         advertisementData: [String: Any], rssi RSSI: NSNumber) {
-        connect(to: p)
+        guard !discovered.contains(where: { $0.identifier == p.identifier }) else { return }
+        discovered.append(p)
+        onDiscover?(discovered)
     }
 
     func centralManager(_ c: CBCentralManager, didConnect p: CBPeripheral) {
