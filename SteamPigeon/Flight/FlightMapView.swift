@@ -104,7 +104,14 @@ struct FlightMapView: UIViewRepresentable {
         /// gesture — the same reason Android filters rather than snapping.
         func applyCamera(to map: MLNMapView, heading: Double?, pitch: Double,
                          centre: CLLocationCoordinate2D?) {
-            var camera = map.camera
+            // MLNMapCamera is a CLASS, so `var camera = map.camera` binds a
+            // reference, and the compiler's "never mutated" warning is the tell:
+            // mutating its properties does not need `var` because it is not a value.
+            // If that getter hands back the map's live camera rather than a copy,
+            // every assignment below would take effect immediately and setCamera
+            // would then animate from an already-changed state — i.e. not animate at
+            // all. Copying makes the question moot.
+            guard let camera = map.camera.copy() as? MLNMapCamera else { return }
             var changed = false
 
             if let heading {
