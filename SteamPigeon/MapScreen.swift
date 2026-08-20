@@ -7,6 +7,7 @@ import CoreLocation
 /// draggable telemetry panel over the map, and the map filling everything.
 struct MapScreen: View {
     @ObservedObject var model: LinkViewModel
+    @ObservedObject var settings: AppSettings
 
     @State private var recentre = 0
     /// Live camera, so the rose counter-rotates and the scale bar sizes itself.
@@ -139,7 +140,13 @@ struct MapScreen: View {
         }
         .sheet(item: $openDestination) { destination in
             NavigationView {
-                NotYetBuiltView(destination: destination)
+                Group {
+                    if destination == .appSettings {
+                        AppSettingsView(settings: settings)
+                    } else {
+                        NotYetBuiltView(destination: destination)
+                    }
+                }
                     .navigationTitle(destination.title)
                     .navigationBarTitleDisplayMode(.inline)
                     .toolbar {

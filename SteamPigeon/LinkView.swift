@@ -12,6 +12,7 @@ import SwiftUI
 /// into a firmware version skew, and that class of problem does not stop happening.
 struct RootView: View {
     @StateObject private var model = LinkViewModel()
+    @StateObject private var settings = AppSettings()
 
     @State private var showDiagnostics = false
     @Environment(\.verticalSizeClass) private var verticalSizeClass
@@ -30,7 +31,7 @@ struct RootView: View {
             if isLandscape {
                 HeadsUpView(model: model)
             } else {
-                MapScreen(model: model)
+                MapScreen(model: model, settings: settings)
             }
 
             // TEMPORARY: the diagnostics screen has no Android counterpart. It stays
