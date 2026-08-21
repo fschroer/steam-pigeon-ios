@@ -70,4 +70,31 @@ enum FlightStates: UInt8, CaseIterable {
     case noSignal = 9
 
     static func from(_ v: UInt8) -> FlightStates { FlightStates(rawValue: v) ?? .noSignal }
+
+    /// How the stats panel writes the state — **not** the case name.
+    ///
+    /// The general rule in this port is that Android renders `enumValue.name`, so a
+    /// label is the case name (`DroguePrimary`, not "Drogue Primary"). The flight
+    /// state is the exception: `LocatorStats` maps every state to display text by
+    /// hand, and those are the words below. Reading the rule instead of the code put
+    /// `droguePrimaryEvent` on screen.
+    ///
+    /// `noSignal` renders as **nothing**, matching Android's `else -> ""`. It is not a
+    /// state the locator reports — it is this app's own fallback for a state byte it
+    /// does not recognise — and naming it on the panel would tell the user the rocket
+    /// is in a condition the rocket never claimed.
+    var panelLabel: String {
+        switch self {
+        case .waitingLaunch:      return "Waiting For Launch"
+        case .launched:           return "Launched"
+        case .burnout:            return "Burnout"
+        case .noseover:           return "Noseover"
+        case .droguePrimaryEvent: return "Drogue Primary"
+        case .drogueBackupEvent:  return "Drogue Backup"
+        case .mainPrimaryEvent:   return "Main Primary"
+        case .mainBackupEvent:    return "Main Backup"
+        case .landed:             return "Landed"
+        case .noSignal:           return ""
+        }
+    }
 }

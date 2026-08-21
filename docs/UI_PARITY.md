@@ -408,6 +408,28 @@ app exists to give.
 Getting the category wrong is silent in both directions, and both directions have now
 been reported from the phone within a day of each other.
 
+### Ninth round, 2026-08-21 — two words on the stats panel
+
+Both reported off the phone, both in `LocatorStats`, and both the same mistake: the row
+was built from what the app knows rather than from what Android writes.
+
+| Gap | Android | iOS before |
+|---|---|---|
+| Withheld distance | `dst` is a value **or** the word: `"%15d" + " m"`, else `stringResource(R.string.unknown)` = `Unknown`. No padding, no unit | `Dist:         unknown m` — padded and given a unit, so a refusal to quote a distance read as a distance in metres |
+| Flight state | maps every state to display text by hand: `WaitingLaunch -> "Waiting For Launch"`, `DroguePrimaryEvent -> "Drogue Primary"`, `else -> ""` | `"\(flightState)"` — the Swift case name, so the panel said `droguePrimaryEvent` |
+
+The flight state is where the standing note **"enum labels are Android's case names"**
+misleads: that rule comes from the settings dropdowns, where Android renders
+`enumValue.name`. `LocatorStats` does not — it writes the words out. The rule was
+followed instead of the code, which is the same failure mode as assuming a default.
+
+`noSignal` renders as **nothing**, matching Android's `else -> ""`. It is not a state the
+locator reports; it is this app's fallback for a state byte it does not recognise, and
+naming it would tell the user the rocket is in a condition the rocket never claimed.
+
+Both are pinned by `LocatorStatsRowsTests`, including a case that fails if any label is
+ever the Swift case name again.
+
 ### Receiver Settings — protocol layer and form (2026-08-20)
 
 Staged deliberately: the three parsers and the ranking model first, then the form.

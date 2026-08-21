@@ -64,10 +64,7 @@ struct LocatorStatsPanel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 1) {
-            // Right-justified in a fixed field with units, matching Android's
-            // "%15d" + " m" — the column is why the panel uses a mono face at all.
-            row(distanceM.map { String(format: "Dist: %15d m", $0) }
-                ?? String(format: "Dist: %15@ m", "unknown" as NSString))
+            row(Self.distanceRow(distanceM))
             row(String(format: "AGL : %15.1f m", altitudeAglM))
             // In flight: speed and attitude. On the pad: what the IMU is reading.
             // Android switches between the two rather than showing both.
@@ -76,7 +73,7 @@ struct LocatorStatsPanel: View {
                 if let inc = inclinationDeg, let hdg = headingDeg {
                     row(String(format: "Inc:%5.1f° Hdg:%5.1f°", inc, hdg))
                 }
-                row("\(flightState)")
+                row(flightState.panelLabel)
             } else {
                 if let a = accel {
                     row(String(format: "Accl: %5.1f %5.1f %5.1f",
@@ -124,6 +121,18 @@ struct LocatorStatsPanel: View {
             offset = .zero
             accumulated = .zero
         }
+    }
+
+    /// The distance row, with **no units when there is no distance**.
+    ///
+    /// Android builds this as a value-or-word: a number right-justified in a 15-wide
+    /// field followed by " m", OR the bare string "Unknown". The unknown case carries
+    /// neither the padding nor the unit, because "Unknown m" is a measurement in
+    /// metres of something unknown — which is not what is being said. What is being
+    /// said is that ADR-0022/0023 refused to stand behind the figure at all.
+    static func distanceRow(_ distanceM: Int?) -> String {
+        guard let distanceM else { return "Dist: Unknown" }
+        return String(format: "Dist: %15d m", distanceM)
     }
 
     private func row(_ text: String, colour: Color = SPColor.onBackground) -> some View {
