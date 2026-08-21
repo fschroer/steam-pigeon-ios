@@ -123,6 +123,22 @@ enum ChannelSurvey {
             confirmed.contains { $0.channel == homeChannel && $0.occupiedByLocator }
         }
 
+        /// Where a channel sits between the quietest and loudest in THIS sweep, 0…1.
+        ///
+        /// Relative, and deliberately never shown as dBm: SX126x RSSI near the floor is
+        /// uncalibrated and varies unit to unit, so an absolute number would be a
+        /// precision the reading does not have.
+        ///
+        /// The span is floored at 1 dB. A genuinely flat band — every channel reading
+        /// the same, which is the uniform-floor case and therefore common on a bench —
+        /// would otherwise divide by zero and render every bar as NaN.
+        func relativeLevel(_ r: Ranked) -> Double {
+            guard let quietest = ranked.first?.level, let loudest = ranked.last?.level
+            else { return 0 }
+            let span = max(loudest - quietest, 1)
+            return min(max(Double(r.level - quietest) / Double(span), 0), 1)
+        }
+
         /// Where the current channel sits in the ranking, 1-based. Nil if unknown.
         var homeRank: Int? {
             ranked.firstIndex { $0.channel == homeChannel }.map { $0 + 1 }
@@ -163,6 +179,15 @@ enum ChannelSurvey {
         return Result(status: status, ranked: ranked, allChannelsHot: allHot,
                       uniformFloor: allHot && spread <= uniformSpreadDb,
                       homeChannel: homeChannel, confirmed: confirmed)
+    }
+
+    /// A sweep that produced nothing usable — no answer, or an unrecognised status.
+    ///
+    /// A `Result` rather than nil so the screen has something to render: "no response
+    /// from the receiver" is information the user needs, and an empty section reads as
+    /// a button that did nothing.
+    static func failed(homeChannel: Int) -> Result {
+        analyze(status: .unknown, levels: [], homeChannel: homeChannel)
     }
 
     /// Decode a `ChannelSurveyResponse`.

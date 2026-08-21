@@ -101,10 +101,35 @@ final class LinkViewModel: ObservableObject {
     /// On demand only: a sweep costs about a second of deafness, and the decision it
     /// informs is made once, on the ground.
     func requestChannelSurvey() {
-        guard let msg = OutboundMessage.receiverDirected(.channelSurveyRequest) else { return }
+        guard !surveyInProgress else { return }
+        channelSurvey = nil
+        surveyToken &+= 1
+        let token = surveyToken
+
+        guard state == .ready,
+              let msg = OutboundMessage.receiverDirected(.channelSurveyRequest) else {
+            channelSurvey = ChannelSurvey.failed(homeChannel: remoteReceiverConfig.channel)
+            return
+        }
         surveyInProgress = true
         transport.send(msg)
+
+        // A receiver whose firmware predates channel scanning never answers, and the
+        // sweep itself takes several seconds, so silence has to time out into a stated
+        // failure rather than leaving the button reading "Scanning…" for ever.
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(Self.surveyTimeout))
+            guard surveyInProgress, token == surveyToken else { return }
+            surveyInProgress = false
+            channelSurvey = ChannelSurvey.failed(homeChannel: remoteReceiverConfig.channel)
+        }
     }
+
+    /// Android's `SURVEY_TIMEOUT_MS`.
+    private static let surveyTimeout: TimeInterval = 15
+    /// Guards the timeout against a later sweep — without it, an old timer could fail a
+    /// survey that has since been restarted and answered.
+    private var surveyToken: UInt64 = 0
 
     /// Ask the receiver to describe itself. Used on entering Receiver Settings and to
     /// solicit confirmation after a change — `PreLaunchData` may stop arriving entirely

@@ -201,3 +201,40 @@ final class ChannelSurveyTests: XCTestCase {
         XCTAssertNil(r.homeRank)
     }
 }
+
+/// The survey as the screen consumes it.
+extension ChannelSurveyTests {
+
+    /// A sweep that produced nothing usable is still a Result, not nil: "no response
+    /// from the receiver" is information, and an empty section reads as a button that
+    /// did nothing.
+    func testAFailedSweepIsRenderableRatherThanNil() {
+        let r = ChannelSurvey.failed(homeChannel: 7)
+        XCTAssertEqual(.unknown, r.status)
+        XCTAssertEqual(7, r.homeChannel)
+        XCTAssertTrue(r.suggestions.isEmpty)
+        XCTAssertTrue(r.ranked.isEmpty)
+    }
+
+    /// The bar is relative to this sweep: quietest is empty, loudest is full.
+    func testTheBarSpansTheSweep() {
+        var levels = [Int](repeating: -100, count: WireProtocol.surveyChannelCount)
+        levels[0] = -120                                    // quietest
+        levels[1] = -60                                     // loudest
+        let r = analyze(levels: levels)
+        XCTAssertEqual(0, r.relativeLevel(ChannelSurvey.Ranked(channel: 0, level: -120)))
+        XCTAssertEqual(1, r.relativeLevel(ChannelSurvey.Ranked(channel: 1, level: -60)))
+        XCTAssertEqual(0.5, r.relativeLevel(ChannelSurvey.Ranked(channel: 2, level: -90)),
+                       accuracy: 0.01)
+    }
+
+    /// A genuinely flat band is the uniform-floor case and therefore common on a bench.
+    /// Without the 1 dB floor on the span every bar would be NaN.
+    func testAFlatBandDoesNotDivideByZero() {
+        let flat = [Int](repeating: -71, count: WireProtocol.surveyChannelCount)
+        let r = analyze(levels: flat)
+        let value = r.relativeLevel(ChannelSurvey.Ranked(channel: 0, level: -71))
+        XCTAssertFalse(value.isNaN)
+        XCTAssertEqual(0, value)
+    }
+}

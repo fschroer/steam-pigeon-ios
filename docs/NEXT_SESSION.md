@@ -1,6 +1,6 @@
 # Resume here — iOS port
 
-Updated 2026-08-20. **380 tests passing**, clean build with no warnings from our own
+Updated 2026-08-20. **383 tests passing**, clean build with no warnings from our own
 sources. Three pieces of work below: the sheet crash and its companion non-bug, the
 flight-map parity pass, and the nine gaps that pass turned up.
 
@@ -174,8 +174,14 @@ the link classifier, which closes a real ADR-0019 gap — with its own baseline,
 absolute test dropped, a 500 ms liveness tick and a 2 s poll during silence. All four
 are load-bearing; the reasoning is in `UI_PARITY.md`.
 
-**Next on this screen:** the channel survey section (the model is ready, the UI is not),
-the ADR-0011 channel-move flow, and the ADR-0006 conflicting-locator banner.
+The **channel survey section** has landed too — Android's wording verbatim, relative
+bars with no dBm, a 15 s timeout so a receiver too old to answer says so. "Move here" is
+withheld while a locator is connected and explains why: moving the system is ADR-0011
+and needs Locator Settings, and staging the receiver-only half would strand the locator
+on the old channel.
+
+**Next on this screen:** the ADR-0011 channel-move flow (which unblocks "Move here"),
+and the ADR-0006 conflicting-locator banner.
 
 **NOT confirmable on the simulator, needs the phone plus a locator:**
 

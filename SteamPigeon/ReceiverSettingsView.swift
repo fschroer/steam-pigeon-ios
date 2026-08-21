@@ -22,6 +22,22 @@ struct ReceiverSettingsView: View {
 
     var body: some View {
         Form {
+            ChannelSurveySection(
+                survey: model.channelSurvey,
+                inProgress: model.surveyInProgress,
+                enabled: model.state == .ready,
+                locatorConnected: model.connectedLocatorId != nil,
+                onScan: { model.requestChannelSurvey() },
+                // Withheld while a locator is connected — moving the whole system is
+                // ADR-0011 and needs Locator Settings, which is not ported. Staging the
+                // receiver-only half would strand the locator on the old channel.
+                onPick: model.connectedLocatorId == nil
+                    ? { channel in
+                        staged.channel = channel
+                        edited = true
+                      }
+                    : nil)
+
             Section {
                 if let version = model.versionInfo, !version.receiverVersion.isEmpty {
                     LabeledContent("Firmware", value: version.receiverVersion)

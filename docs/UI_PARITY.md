@@ -429,8 +429,31 @@ Two details worth keeping:
   main", which on iOS is the sheet's own Done. Adding a second control Android does not
   have is how the two apps stop needing the same manual.
 
-**Still to come on this screen:** the channel survey section (the model is ready, the UI
-is not), the ADR-0011 channel-move flow, and the ADR-0006 conflicting-locator banner.
+**Channel survey section — landed.** Android's wording verbatim, because most of it
+explains a measurement rather than labelling a control, and an explanation that differs
+between the two apps is one the manual has to write twice.
+
+The bars are **relative to this sweep** and deliberately carry no dBm: SX126x RSSI near
+the floor is uncalibrated, so an absolute number would be a precision the reading does
+not have. `Result.relativeLevel` floors the span at 1 dB — a genuinely flat band is the
+uniform-floor case and therefore common on a bench, and without the floor every bar
+would render as NaN.
+
+A 15 s timeout turns silence into a stated failure. A receiver whose firmware predates
+channel scanning never answers at all, so without it the button reads "Scanning…"
+for ever.
+
+**The "Move here" action is withheld while a locator is connected, and says so.** With
+one connected, picking a channel has to move the WHOLE system — Android calls
+`moveLocatorToChannel`, which retunes the locator and lets the receiver follow. Staging
+the receiver-only half instead would point the receiver at an empty channel and strand
+the locator on the old one (ADR-0011 invariant 1 vs 5). That move needs Locator
+Settings, which is not ported, so the choice is withheld with an explanation rather than
+quietly doing the damaging half of it. With no locator connected there is nothing to
+strand, and "point receiver" is the legitimate go-look-at-that-channel case.
+
+**Still to come on this screen:** the ADR-0011 channel-move flow (which unblocks "Move
+here"), and the ADR-0006 conflicting-locator banner.
 
 ### Icon substitutions, and why they are substitutions
 
