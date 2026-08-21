@@ -238,3 +238,31 @@ extension ChannelSurveyTests {
         XCTAssertEqual(0, value)
     }
 }
+
+/// Putting the survey away.
+@MainActor
+final class ChannelSurveyLifecycleTests: XCTestCase {
+
+    /// The ranking describes the band BEFORE a move. Leaving it up beside a "now on
+    /// channel N" message invites a second pick against a stale picture — and on the
+    /// receiver-only path the channel it recommended has already been taken.
+    func testPickingAChannelPutsTheSurveyAway() {
+        let m = LinkViewModel()
+        m.setChannelSurveyForTesting(
+            ChannelSurvey.analyze(status: .ok,
+                                  levels: [Int](repeating: -110, count: WireProtocol.surveyChannelCount),
+                                  homeChannel: 0, confirmedChannels: [1], confirmedFrames: [0]))
+        XCTAssertNotNil(m.channelSurvey)
+        m.clearChannelSurvey()
+        XCTAssertNil(m.channelSurvey)
+    }
+
+    /// A fresh sweep must not show the previous one's ranking while it runs.
+    func testStartingASweepClearsTheOldResult() {
+        let m = LinkViewModel()
+        m.setChannelSurveyForTesting(ChannelSurvey.failed(homeChannel: 3))
+        m.requestChannelSurvey()
+        XCTAssertNotEqual(ChannelSurvey.Status.ok, m.channelSurvey?.status ?? .ok,
+                          "the stale ranking must not survive into the new sweep")
+    }
+}

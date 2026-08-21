@@ -195,6 +195,17 @@ final class LinkViewModel: ObservableObject {
 
     func clearPendingChannelMove() { pendingChannelMove = nil }
 
+    /// Put the survey away once a channel has been chosen from it.
+    ///
+    /// The ranking described the band BEFORE the move, so leaving it up next to a
+    /// "now on channel N" message invites a second pick against a picture that is now
+    /// out of date — and on the receiver-only path the staged channel it recommended
+    /// has already been taken. Android clears it on either branch of the pick.
+    func clearChannelSurvey() { channelSurvey = nil }
+
+    /// Seam for the tests: a real result only arrives from a receiver.
+    func setChannelSurveyForTesting(_ r: ChannelSurvey.Result) { channelSurvey = r }
+
     /// Move the locator — and therefore the whole system — to `channel`.
     ///
     /// **This retunes a live locator.** ADR-0011: the request goes out on the OLD

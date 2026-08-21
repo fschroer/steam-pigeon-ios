@@ -70,7 +70,7 @@ struct VelocityGauge: View {
                      with: .color(.white))
 
             ctx.draw(Text("\(Int(speedMs)) m/s")
-                        .font(SPFont.telemetryBold(size: 14))
+                        .font(SPFont.telemetryEmphasis(size: 14))
                         .foregroundColor(.white),
                      at: CGPoint(x: c.x, y: c.y + radius * 0.35))
         }

@@ -612,6 +612,50 @@ covers controls that look BROKEN when imitated. A bordered, labelled text box is
 also the fix for a real usability defect. The sanctioned list is not a licence to reach
 for a different control whenever one is handier.
 
+### Fonts: nothing in this app is bold except one glyph
+
+Reported as "more examples of bolded text where it should not be". The rule turns out
+to be checkable, and it is stronger than "use the right weight per style":
+
+1. Android's `AppTypography` copies Material 3's baseline and swaps ONLY the family —
+   `baseline.titleMedium.copy(fontFamily = ...)` — so every weight comes from the M3
+   type scale, which specifies Regular or Medium and never Bold.
+2. Each family registers only Regular and Bold:
+   `FontFamily(Font(roboto_regular), Font(roboto_bold, FontWeight.Bold))`. Compose
+   resolves a Medium (W500) request by the CSS rule — for a desired weight of 400…500
+   it prefers the nearest weight at or below 500 — which is **W400**. So `titleMedium`,
+   `titleSmall` and every `label*` style render REGULAR on Android, despite reading as
+   Medium in the scale.
+
+Net: **the only bold text in the entire Android app is the "∞" compass-calibration
+glyph**, which sets `FontWeight.Bold` explicitly at its call site. `grep -rn
+"FontWeight.Bold"` over `app/src/main/java` returns four hits — three are the family
+registrations, one is that glyph.
+
+iOS had bold on `titleMedium`, `titleSmall`, `labelLarge`, `labelMedium`, `labelSmall`
+and a `telemetryBold` used by the heads-up gauges. All now Regular. `TelemetryTextStyle`
+is `FontWeight.Medium` on a mono family with no Medium, so it resolves to
+RobotoMono-Regular too — every number on the stats panel and gauges included.
+
+This was a steady drift of "this looks like a heading, headings are bold" rather than a
+single mistake, which is why it needed a rule rather than another patch. **If something
+looks like it wants emphasis, the answer is not weight** — Android reaches for size and
+colour, and the type scale already encodes that.
+
+`LinkView` is exempt and stays on system fonts: it is the bring-up diagnostics screen
+with no Android counterpart.
+
+### The channel survey is put away once a channel is picked
+
+Reported: the "find a clean channel" information does not disappear on a successful
+switch. Android calls `clearChannelSurvey()` on **both** branches of the pick.
+
+The ranking describes the band BEFORE the move, so leaving it up next to a "now on
+channel N" message invites a second pick against a picture that is out of date — and on
+the receiver-only path, the channel it recommended has already been taken. Starting a
+fresh sweep clears it too, so the previous ranking cannot sit there looking current
+while the new one runs.
+
 ### Icon substitutions, and why they are substitutions
 
 Android's control icons are Compose `Icons.Default.*` — a library, not drawables in the

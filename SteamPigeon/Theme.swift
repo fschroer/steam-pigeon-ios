@@ -63,28 +63,45 @@ enum SPFont {
     private static let mono = "RobotoMono-Regular"
     private static let monoBold = "RobotoMono-Bold"
 
+    // EVERY style below is REGULAR, and that is not an oversight — it is what Android
+    // renders. Two facts combine:
+    //
+    // 1. `AppTypography` copies Material 3's baseline and swaps ONLY the family
+    //    (`baseline.titleMedium.copy(fontFamily = ...)`), so every weight comes from
+    //    the M3 type scale. That scale specifies Regular or Medium, never Bold.
+    // 2. Each family registers only Regular and Bold
+    //    (`FontFamily(Font(roboto_regular), Font(roboto_bold, FontWeight.Bold))`), and
+    //    Compose resolves a Medium (W500) request by the CSS rule — for a desired
+    //    weight of 400…500 it prefers the nearest weight at or below 500, which is
+    //    W400. So titleMedium, titleSmall and every label style render REGULAR.
+    //
+    // The net result is checkable and worth stating plainly: **the only bold text in
+    // the whole Android app is the "∞" compass-calibration glyph**, which sets
+    // `FontWeight.Bold` explicitly at its call site. Nothing else. Bold here was a
+    // steady drift of "this looks like a heading, headings are bold" that reached the
+    // user as "bolded text where it should not be".
+
     // Display / headline / title — Roboto
-    // REGULAR, not bold. Android takes these from Material 3's baseline `Typography()`
-    // and only swaps the family (`baseline.displayLarge.copy(fontFamily = ...)`), and
-    // the baseline display styles are `FontWeight.Normal` — so `roboto_regular`. Bold
-    // here made the map's centre banner visibly heavier than Android's.
     static let displayLarge  = Font.custom(display, size: 57, relativeTo: .largeTitle)
     static let displayMedium = Font.custom(display, size: 45, relativeTo: .largeTitle)
-    static let displaySmall  = Font.custom(display,     size: 36, relativeTo: .title)
-    static let headlineLarge = Font.custom(display,     size: 32, relativeTo: .title)
-    static let headlineMedium = Font.custom(display,    size: 28, relativeTo: .title2)
-    static let headlineSmall = Font.custom(display,     size: 24, relativeTo: .title3)
-    static let titleLarge    = Font.custom(display,     size: 22, relativeTo: .title3)
-    static let titleMedium   = Font.custom(displayBold, size: 16, relativeTo: .headline)
-    static let titleSmall    = Font.custom(displayBold, size: 14, relativeTo: .subheadline)
+    static let displaySmall  = Font.custom(display, size: 36, relativeTo: .title)
+    static let headlineLarge = Font.custom(display, size: 32, relativeTo: .title)
+    static let headlineMedium = Font.custom(display, size: 28, relativeTo: .title2)
+    static let headlineSmall = Font.custom(display, size: 24, relativeTo: .title3)
+    static let titleLarge    = Font.custom(display, size: 22, relativeTo: .title3)
+    /// M3 says Medium; the family has no Medium, so Compose picks Regular.
+    static let titleMedium   = Font.custom(display, size: 16, relativeTo: .headline)
+    /// M3 says Medium; see `titleMedium`.
+    static let titleSmall    = Font.custom(display, size: 14, relativeTo: .subheadline)
 
-    // Body / label — Poppins
+    // Body / label — Poppins. The label styles are Medium in the M3 scale and resolve
+    // to Regular for the same reason.
     static let bodyLarge   = Font.custom(body, size: 16, relativeTo: .body)
     static let bodyMedium  = Font.custom(body, size: 14, relativeTo: .callout)
     static let bodySmall   = Font.custom(body, size: 12, relativeTo: .footnote)
-    static let labelLarge  = Font.custom(bodyBold, size: 14, relativeTo: .subheadline)
-    static let labelMedium = Font.custom(bodyBold, size: 12, relativeTo: .caption)
-    static let labelSmall  = Font.custom(bodyBold, size: 11, relativeTo: .caption2)
+    static let labelLarge  = Font.custom(body, size: 14, relativeTo: .subheadline)
+    static let labelMedium = Font.custom(body, size: 12, relativeTo: .caption)
+    static let labelSmall  = Font.custom(body, size: 11, relativeTo: .caption2)
 
     /// `TelemetryTextStyle` — Roboto Mono, 14sp. Every live number uses it, so digits
     /// keep their column as values change.
@@ -92,8 +109,13 @@ enum SPFont {
     static func telemetry(size: CGFloat) -> Font {
         Font.custom(mono, size: size, relativeTo: .body)
     }
-    static func telemetryBold(size: CGFloat) -> Font {
-        Font.custom(monoBold, size: size, relativeTo: .body)
+    /// **Not bold.** `TelemetryTextStyle` sets `FontWeight.Medium`, and `monoFontFamily`
+    /// registers only Regular and Bold, so Compose resolves it to RobotoMono-Regular —
+    /// every number on Android's stats panel and gauges included. Kept as a named
+    /// function because the call sites read as "the big telemetry number", and a
+    /// separate name is where the next person would otherwise reintroduce the bold.
+    static func telemetryEmphasis(size: CGFloat) -> Font {
+        Font.custom(mono, size: size, relativeTo: .body)
     }
 
     /// Names as the OS knows them. Checked at launch — a font that fails to bundle

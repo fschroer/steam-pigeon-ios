@@ -28,7 +28,7 @@ struct HeadsUpView: View {
                 VStack(spacing: 6) {
                     if let v = model.vector {
                         Text("\(v.distanceM) m")
-                            .font(SPFont.telemetryBold(size: 34))
+                            .font(SPFont.telemetryEmphasis(size: 34))
                             .foregroundStyle(SPColor.onBackground)
                         Text(String(format: "%.0f° %@", v.azimuthDeg, v.ordinal))
                             .font(SPFont.telemetry(size: 18))

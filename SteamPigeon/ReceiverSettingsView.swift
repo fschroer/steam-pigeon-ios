@@ -97,6 +97,9 @@ struct ReceiverSettingsView: View {
                                 staged.channel = channel
                                 edited = true
                             }
+                            // Either way the ranking is spent: it described the band
+                            // before the move. Android clears it on both branches.
+                            model.clearChannelSurvey()
                         })
 
                     if let channel = model.pendingChannelMove, let progress = moveProgress(channel) {

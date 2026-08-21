@@ -1,6 +1,6 @@
 # Resume here — iOS port
 
-Updated 2026-08-20. **406 tests passing**, clean build with no warnings from our own
+Updated 2026-08-20. **408 tests passing**, clean build with no warnings from our own
 sources. Three pieces of work below: the sheet crash and its companion non-bug, the
 flight-map parity pass, and the nine gaps that pass turned up.
 
@@ -215,6 +215,16 @@ round: written in SwiftUI idiom instead of read off Android's `ConfigurationItem
 `ConfigurationItemNumeric`. `ConfigRows.swift` now has the outlined labelled field, the
 stacked nudge arrows with Android's hold-to-repeat decay, and the dropdown. **Use those
 rows for every settings screen from here** rather than reaching for `Form` + `Stepper`.
+
+**Fonts were then audited end to end** after "more examples of bolded text where it
+should not be". The rule is checkable and stronger than expected: **nothing in the
+Android app is bold except the "∞" calibration glyph.** M3's baseline never specifies
+Bold, and its Medium styles resolve to Regular because each family registers only
+Regular and Bold. Five iOS styles and a `telemetryBold` were wrong; all now Regular. If
+something looks like it wants emphasis, the answer is size or colour, not weight.
+
+Also fixed: the channel survey now clears when a channel is picked, as Android does on
+both branches — the ranking describes the band before the move.
 
 **Remaining screens:** Flight Profiles (1,002 lines), Deployment Test (160), Download
 maps (677) — the last two of which depend on flight-data download.
