@@ -81,6 +81,28 @@ final class LinkViewModel: ObservableObject {
     // unlikely. Android does the same thing with a separate `padAlert` flow and a
     // `lastPreLaunchDataTime` clock.
 
+    // MARK: - Receiver-sourced messages
+    //
+    // Decoded and published; nothing consumes them yet beyond the diagnostics screen.
+    // The Receiver Settings screen is what they are for.
+
+    /// The receiver's own channel, name and channel status.
+    ///
+    /// **`noiseFloor` here is not yet fed to the link classifier**, and that is a real
+    /// gap rather than an oversight to fix silently: ADR-0019 wants this floor
+    /// specifically because it is the only one that arrives during locator silence,
+    /// which is exactly when "interference" and "the locator is switched off" are hard
+    /// to tell apart. Wiring it into `updateLinkQuality` is a behaviour change and
+    /// belongs with the screen work, not with the parser.
+    @Published private(set) var receiverInfo: ReceiverInfo?
+    /// Locator and receiver firmware versions.
+    @Published private(set) var versionInfo: VersionInfo?
+    /// The last band sweep, already ranked.
+    @Published private(set) var channelSurvey: ChannelSurvey.Result?
+    /// True between asking for a sweep and hearing back. The receiver goes deaf for
+    /// about a second, so silence needs to read as "working", not as a hang.
+    @Published private(set) var surveyInProgress = false
+
     /// ADR-0021 prepped-and-disarmed verdict.
     @Published private(set) var padAlert: PadAlertState = .quiet
     @Published private(set) var padAlertSnoozeMinutes = 0
@@ -327,6 +349,12 @@ final class LinkViewModel: ObservableObject {
     /// Drop everything that describes a link we no longer have.
     private func clearLiveReadouts() {
         prelaunch = nil
+        // Receiver-sourced state describes a receiver we are no longer talking to.
+        // The versions are the exception: they are a property of the hardware, not of
+        // this link, and re-showing them on reconnect beats a blank field.
+        receiverInfo = nil
+        channelSurvey = nil
+        surveyInProgress = false
         latestBroadcast = .none
         padAlert = .quiet
         padAlertSnoozeMinutes = 0
@@ -541,6 +569,17 @@ final class LinkViewModel: ObservableObject {
                     updateLinkQuality(rssi: Int(m.rssi), snr: Int(m.snr),
                                       noiseFloor: Int(m.noiseFloor))
                 }
+            }
+        case .receiverInfo:
+            // The ADR-0012 health probe's answer, and the ONLY message the receiver
+            // sends with no locator involved.
+            if let m = ReceiverInfo.parse(frame) { receiverInfo = m }
+        case .versionInfo:
+            if let m = VersionInfo.parse(frame) { versionInfo = m }
+        case .channelSurvey:
+            if let r = ChannelSurvey.parse(frame) {
+                channelSurvey = r
+                surveyInProgress = false
             }
         default:
             break
