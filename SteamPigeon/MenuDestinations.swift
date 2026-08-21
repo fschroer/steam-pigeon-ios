@@ -106,28 +106,3 @@ struct MenuView: View {
         .navigationViewStyle(.stack)
     }
 }
-
-/// Placeholder for a destination that has not been built.
-///
-/// Deliberately explicit rather than a blank screen: a menu entry that opens
-/// nothing is indistinguishable from one that is broken, and this app is used in a
-/// field where "is it working?" is an expensive question.
-struct NotYetBuiltView: View {
-    let destination: MenuDestination
-
-    var body: some View {
-        VStack(spacing: 12) {
-            Image(destination.iconName)
-                .renderingMode(.template)
-                .resizable().scaledToFit()
-                .frame(width: 48, height: 48)
-                .foregroundStyle(SPColor.outline)
-            Text(destination.title).font(SPFont.titleLarge)
-            Text("Not built yet on iOS.")
-                .font(SPFont.bodyMedium)
-                .foregroundStyle(SPColor.onSurfaceVariant)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(SPColor.background)
-    }
-}

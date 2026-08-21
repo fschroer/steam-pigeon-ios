@@ -220,7 +220,7 @@ struct MapScreen: View {
                 case .locatorSettings:  LocatorSettingsView(model: model)
                 case .flightProfiles:   FlightProfilesView(model: model) { sheet = nil }
                 case .downloadMap:      DownloadMapView(phone: model.phone)
-                default:                NotYetBuiltView(destination: destination)
+                case .deploymentTest:   DeploymentTestView(model: model) { sheet = nil }
                 }
             }
                 .navigationTitle(destination.title)

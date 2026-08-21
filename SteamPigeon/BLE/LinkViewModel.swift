@@ -798,6 +798,132 @@ final class LinkViewModel: ObservableObject {
 
     func dismissReceiverPicker() { discoveredReceivers = [] }
 
+    // MARK: - Deployment test (ADR-0027)
+
+    // **The display follows the LOCATOR, never the app's own hope.** Every frame here is
+    // unacknowledged: the request that starts a test, and the request that stops one. The
+    // countdown arriving is the only evidence a charge is live, and the countdown going
+    // quiet is the only evidence a test has ended.
+    //
+    // Android learned this the expensive way. Pressing cancel used to clear `active`
+    // immediately, which gated the countdown handler and made the app deaf to the very
+    // countdown still running: the button went back to reading "start" while the locator
+    // counted down and fired, and nothing on screen disagreed.
+
+    /// True from the moment a start frame is handed to the radio until the locator has
+    /// gone quiet for `deploymentTestSilence`.
+    @Published private(set) var deploymentTestActive = false
+
+    /// Seconds the locator last reported. **Written only by the locator's messages and by
+    /// the silence watchdog** — there is deliberately no setter, because letting a caller
+    /// assert a countdown the locator has not agreed to is the whole failure mode above.
+    @Published private(set) var deploymentTestCountdown = 0
+
+    /// True from the moment a cancel frame is sent until the countdown stops. Drives the
+    /// "STOPPING…" label, which says the request is out and unanswered — the state the
+    /// operator needs to see, rather than a button that has already returned to normal.
+    @Published private(set) var deploymentTestCancelPending = false
+
+    private var deploymentTestSilenceTask: Task<Void, Never>?
+
+    /// Android's `DEPLOYMENT_TEST_SILENCE_MS`. Long enough to outlast the 1 Hz countdown
+    /// with margin for a dropped frame, short enough that the screen does not claim a
+    /// live charge after the locator has stopped talking about one.
+    static let deploymentTestSilence: TimeInterval = 3
+
+    // Seams for the tests. The rules worth pinning are the watchdog and "the display
+    // follows the locator", and reaching them the real way would mean three-second waits
+    // and a live radio — which would make these tests about neither.
+    static var deploymentTestSilenceForTesting: TimeInterval { deploymentTestSilence }
+    private var silenceInterval: TimeInterval = LinkViewModel.deploymentTestSilence
+    func setDeploymentTestSilenceForTesting(_ seconds: TimeInterval) {
+        silenceInterval = seconds
+    }
+
+    /// Stands in for a start frame having gone out, without one.
+    func setDeploymentTestActiveForTesting(_ active: Bool) {
+        deploymentTestActive = active
+        if active { armDeploymentTestSilence() }
+    }
+
+    func ingestForTesting(_ frame: [UInt8]) { ingest(frame) }
+
+    /// Fire a channel. Addressed, like every locator-directed command (ADR-0020) — a
+    /// broadcast one would fire somebody else's charge.
+    func startDeploymentTest(_ option: DeploymentTestOption) {
+        guard option != .none else { return }
+        if let id = connectedLocatorId, gate.mayCommand(id) {
+            send(deploymentTestChannel: option.rawValue, to: id)
+        }
+        // Marked active **whether or not the frame left the phone**, as Android does. A
+        // start frame can be lost on the air just as easily as it can fail to be built,
+        // and the two are indistinguishable from here; the watchdog is what recovers from
+        // both. Without this the screen would sit resting while a locator that DID hear
+        // the frame counted down.
+        deploymentTestActive = true
+        armDeploymentTestSilence()
+    }
+
+    /// Ask the locator to stop. **Changes nothing about the countdown**: the locator
+    /// decides when the test is over, and this app finds out by the countdown stopping.
+    ///
+    /// Pressing repeatedly re-sends, which is what an operator will do anyway and is the
+    /// right answer on a link that drops frames.
+    func cancelDeploymentTest() {
+        if let id = connectedLocatorId, gate.mayCommand(id) {
+            send(deploymentTestChannel: DeploymentTestOption.none.rawValue, to: id)
+        }
+        // Reported pending **even if nothing could be sent**, as Android does. Pressing
+        // STOP and seeing nothing change is the worst answer this screen can give: the
+        // operator cannot tell a dead link from a button that did not register, and will
+        // stand there pressing it. "STOPPING…" says the request is out and unanswered,
+        // and the watchdog ends it either way.
+        noteDeploymentTestCancelSent()
+    }
+
+    /// Record that a cancel frame has just been handed to the radio.
+    func noteDeploymentTestCancelSent() {
+        guard deploymentTestActive else { return }
+        deploymentTestCancelPending = true
+        armDeploymentTestSilence()
+    }
+
+    /// Leaving the screen cancels a running test, and the state is deliberately NOT
+    /// cleared here.
+    ///
+    /// Clearing it discarded the locator's countdown, so a cancel lost on the way out
+    /// left the operator walking off with a live charge and an app that had forgotten
+    /// about it — and coming back showed a resting button rather than the test still
+    /// counting. Leaving it alone means the countdown is still there if the cancel did
+    /// not land, and the watchdog clears everything once the locator really is quiet.
+    func leaveDeploymentTest() {
+        cancelDeploymentTest()
+    }
+
+    private func send(deploymentTestChannel channel: UInt8, to id: UInt32) {
+        guard let msg = OutboundMessage.locatorDirected(.deploymentTestRequest,
+                                                        targetLocatorId: id,
+                                                        payload: [channel]) else { return }
+        transport.send(msg)
+    }
+
+    /// Restarted by every countdown message, so it fires only once the locator has
+    /// genuinely gone quiet. One rule covers all three endings — canceled, fired, link
+    /// lost — because from here they are indistinguishable, and all three mean the same
+    /// thing for the screen.
+    private func armDeploymentTestSilence() {
+        deploymentTestSilenceTask?.cancel()
+        let interval = silenceInterval
+        deploymentTestSilenceTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(interval))
+            guard !Task.isCancelled else { return }
+            deploymentTestCancelPending = false
+            deploymentTestCountdown = 0
+            deploymentTestActive = false
+        }
+    }
+
+
     // MARK: - Flight profiles (ADR-0016; Android `FlightProfilesScreen` + `FlightDataRepository`)
 
     /// The locator's archive slots, as its last `flightMetadata` frame described them.
@@ -1236,6 +1362,19 @@ final class LinkViewModel: ObservableObject {
             if let r = ChannelSurvey.parse(frame) {
                 channelSurvey = r
                 surveyInProgress = false
+            }
+
+        case .deploymentTest:
+            // Adopted only while a test is believed live, exactly as Android gates it:
+            // an unsolicited countdown belongs to a test this app did not start, and the
+            // screen has nothing useful to say about one.
+            //
+            // The watchdog is re-armed **even while a cancel is pending**. A countdown
+            // that crossed the cancel in flight must not be read as the cancel being
+            // refused; the countdown STOPPING is what settles that.
+            if deploymentTestActive, let m = DeploymentTestCountdown.parse(frame) {
+                deploymentTestCountdown = m.secondsRemaining
+                armDeploymentTestSilence()
             }
 
         // The flight-profile messages are NOT authenticated — they carry no locator id
