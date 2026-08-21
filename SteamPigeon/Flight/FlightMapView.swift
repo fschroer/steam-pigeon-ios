@@ -41,7 +41,18 @@ struct FlightMapView: UIViewRepresentable {
     /// Camera pitch, from the tilt mode.
     var pitchDeg: Double = 0
     /// Keep this coordinate centred, or nil to leave panning to the user.
+    ///
+    /// Only its NIL-ness is read: which point to frame is the filter's decision, and
+    /// it frames the rocket AND the phone when both have fixes rather than the rocket
+    /// alone — otherwise the phone leaves the screen exactly while you walk to the
+    /// rocket, which is when the map is being looked at.
     var autoCentreOn: CLLocationCoordinate2D?
+    /// Whether auto-zoom may drive the zoom.
+    var autoZoom: Bool = false
+    /// Closest zoom auto-zoom may frame to, from App Settings. Pinch is unbounded.
+    var maxZoom: Int = AppSettings.zoomLimitDefault
+    /// Changes when a camera control is tapped, which cancels the gesture backoff.
+    var controlsToken: Int = 0
 
     var onCameraChange: ((_ bearing: Double, _ zoom: Double, _ centre: CLLocationCoordinate2D) -> Void)?
 
@@ -58,11 +69,25 @@ struct FlightMapView: UIViewRepresentable {
         map.attributionButton.isHidden = true
         map.compassView.isHidden = true         // the app draws its own compass
         map.allowsTilting = false               // isTiltGesturesEnabled = false
+        // Stated rather than left to MapLibre's defaults. These three ARE the
+        // defaults today, so this changes nothing — but "the user can rotate the
+        // map" is a parity requirement read off Android's uiSettings, not a
+        // preference, and it should not silently depend on an SDK default.
+        map.allowsRotating = true               // isRotateGesturesEnabled = true
+        map.allowsZooming = true                // isZoomGesturesEnabled = true
+        map.allowsScrolling = true              // isScrollGesturesEnabled = true
+        // No maximumZoomLevel: the closest-zoom setting bounds AUTO-zoom only, and
+        // setting it here would bound pinch too. Same reasoning as Android's.
         // North-up and flat. ADR-0014: tilt is compensated separately, so letting the
         // SDK account for it too corrects twice.
         map.setCenter(phone ?? rocket ?? CLLocationCoordinate2D(latitude: 0, longitude: 0),
                       zoomLevel: 15, direction: 0, animated: false)
+        context.coordinator.start(with: map)
         return map
+    }
+
+    static func dismantleUIView(_ map: MLNMapView, coordinator: Coordinator) {
+        coordinator.stop()
     }
 
     func updateUIView(_ map: MLNMapView, context: Context) {
@@ -71,64 +96,224 @@ struct FlightMapView: UIViewRepresentable {
                                   phoneAccuracyM: phoneAccuracyM,
                                   track: track, recentreToken: recentreToken,
                                   markerState: markerState)
-        context.coordinator.applyCamera(to: map, heading: headingUpDeg,
-                                        pitch: pitchDeg, centre: autoCentreOn)
+        context.coordinator.setCameraInputs(
+            CameraInputs(fit: nil,
+                         rocket: rocket,
+                         phone: phone,
+                         locatorAccuracyM: rocketAccuracyM ?? 0,
+                         phoneAccuracyM: phoneAccuracyM,
+                         autoCentre: autoCentreOn != nil,
+                         autoZoom: autoZoom,
+                         maxZoom: Double(maxZoom),
+                         targetPitch: pitchDeg,
+                         viewportWidthPx: 0,
+                         screenScale: 1,
+                         headingDeg: headingUpDeg),
+            heading: headingUpDeg,
+            controlsToken: controlsToken)
     }
 
     final class Coordinator: NSObject, MLNMapViewDelegate {
 
         private var styleReady = false
         private var pending: (() -> Void)?
-        /// Fit the camera once on the first real pair, then leave the camera to the
-        /// user. Re-fitting on every 1 Hz update would fight anyone panning.
-        private var didFit = false
         private var lastRecentreToken = 0
         var onCameraChange: ((Double, Double, CLLocationCoordinate2D) -> Void)?
+
+        /// The map, so the display link can reach it without SwiftUI.
+        private weak var mapView: MLNMapView?
+        private var displayLink: CADisplayLink?
+        private(set) var filter = CameraFilter()
+        private var latestInputs = CameraInputs(
+            fit: nil, rocket: nil, phone: nil, locatorAccuracyM: 0, phoneAccuracyM: nil,
+            autoCentre: false, autoZoom: false, maxZoom: 20, targetPitch: 0,
+            viewportWidthPx: 0, screenScale: 1)
+        private var headingUp: Double?
+        private var cachedFit: (key: FitKey, value: (CLLocationCoordinate2D, Double))?
+        /// Android's `didInitialCenter`: the map renders before the first fix, so as
+        /// soon as the phone's position is known — and while the rocket still has none
+        /// — snap to it once. Without this the camera sits at its construction default
+        /// until a rocket appears, which on a cold start is a view of null island.
+        private var didInitialCentre = false
+
+        /// Starts the per-frame camera. Paired with `stop()` so the link does not
+        /// outlive the map — a CADisplayLink retains its target, so an unstopped one
+        /// keeps this coordinator and the map alive for the life of the process.
+        func start(with map: MLNMapView) {
+            mapView = map
+            guard displayLink == nil else { return }
+            let link = CADisplayLink(target: self, selector: #selector(tickCamera))
+            link.add(to: .main, forMode: .common)
+            displayLink = link
+        }
+
+        func stop() {
+            displayLink?.invalidate()
+            displayLink = nil
+        }
+
+        deinit { displayLink?.invalidate() }
+
+        /// When the user last touched the camera. Nil means "not recently".
+        private var lastUserGesture: Date?
+        private var lastControlsToken = 0
+
+        /// How long the auto-camera stays out of the way after the last frame of a
+        /// gesture. Android's `userGestureRecent` window, in `MapCameraController`.
+        static let gestureBackoff: TimeInterval = 5
+
+        /// True while the user owns the camera.
+        ///
+        /// Re-armed on every frame of a continuous gesture, so a slow pan or a long
+        /// pinch is measured from when the finger stopped, not when it started.
+        func userGestureRecent(now: Date = Date()) -> Bool {
+            guard let last = lastUserGesture else { return false }
+            return now.timeIntervalSince(last) <= Self.gestureBackoff
+        }
+
+        /// Everything that means "a finger moved this camera".
+        ///
+        /// Checked as a set rather than `== .gesturePan` because MapLibre reports a
+        /// bitmask and a single pinch arrives as several bits at once.
+        private static let gestureReasons: MLNCameraChangeReason = [
+            .gesturePan, .gesturePinch, .gestureRotate, .gestureTilt,
+            .gestureZoomIn, .gestureZoomOut, .gestureOneFingerZoom,
+        ]
+
+        private func noteGesture(_ reason: MLNCameraChangeReason) {
+            if !reason.intersection(Self.gestureReasons).isEmpty { lastUserGesture = Date() }
+        }
+
+        /// Seam for the tests: the delegate callbacks need a live `MLNMapView`, and
+        /// what is worth pinning is which reasons count as the user's, not MapLibre's
+        /// willingness to call us back.
+        func noteGestureForTesting(_ reason: MLNCameraChangeReason) { noteGesture(reason) }
 
         /// Fires continuously while the camera moves, not only when it settles — the
         /// scale bar has to track a pinch as it happens, not snap afterwards.
         func mapView(_ map: MLNMapView, regionIsChangingWith reason: MLNCameraChangeReason) {
+            noteGesture(reason)
             report(map)
         }
 
         func mapView(_ map: MLNMapView, regionDidChangeWith reason: MLNCameraChangeReason,
                      animated: Bool) {
+            noteGesture(reason)
             report(map)
         }
 
         /// Drive the camera from the control toggles.
         ///
-        /// Rotation and centring are only asserted when their mode is ON, so a user
-        /// who pans or twists with them off is never fought. Small deltas are ignored
-        /// because writing the camera on every 1 Hz packet cancels an in-progress
-        /// gesture — the same reason Android filters rather than snapping.
-        func applyCamera(to map: MLNMapView, heading: Double?, pitch: Double,
-                         centre: CLLocationCoordinate2D?) {
-            // MLNMapCamera is a CLASS, so `var camera = map.camera` binds a
-            // reference, and the compiler's "never mutated" warning is the tell:
-            // mutating its properties does not need `var` because it is not a value.
-            // If that getter hands back the map's live camera rather than a copy,
-            // every assignment below would take effect immediately and setCamera
-            // would then animate from an already-changed state — i.e. not animate at
-            // all. Copying makes the question moot.
-            guard let camera = map.camera.copy() as? MLNMapCamera else { return }
-            var changed = false
+        /// Take the latest inputs from SwiftUI. The camera itself is driven by the
+        /// display link, not from here.
+        ///
+        /// Android runs its filter from a `withFrameNanos` loop for the same reason:
+        /// the filter has to tick every frame — that is what makes the motion smooth —
+        /// but ticking it *as* composition made every frame a recomposition forever.
+        func setCameraInputs(_ inputs: CameraInputs, heading: Double?, controlsToken: Int) {
+            latestInputs = inputs
+            headingUp = heading
+            // A control tap is an explicit command and outranks the backoff, or
+            // re-enabling auto-centre would appear dead until the window expired.
+            if controlsToken != lastControlsToken {
+                lastControlsToken = controlsToken
+                lastUserGesture = nil
+            }
+        }
 
-            if let heading {
-                let delta = abs(((heading - map.direction) + 540).truncatingRemainder(dividingBy: 360) - 180)
-                if delta > 2 { camera.heading = heading; changed = true }
+        /// One display frame of camera.
+        ///
+        /// **While the user is gesturing, and for five seconds after, this moves
+        /// nothing** — Android's `MapCameraController` returns early on
+        /// `userGestureRecent` for exactly this, and seeds the filter from the live
+        /// camera on the way past so it resumes from where the fingers left it rather
+        /// than snapping back.
+        @objc func tickCamera() {
+            guard let map = mapView, styleReady else { return }
+
+            if userGestureRecent() {
+                filter.seed(centre: map.centerCoordinate,
+                            zoom: map.zoomLevel,
+                            pitch: map.camera.pitch)
+                return
             }
-            if abs(map.camera.pitch - pitch) > 1 {
-                camera.pitch = pitch
-                changed = true
+
+            var inputs = latestInputs
+            inputs.fit = boundsFit(map, rocket: inputs.rocket, phone: inputs.phone)
+            inputs.viewportWidthPx = Double(map.bounds.width) * Double(UIScreen.main.scale)
+            inputs.screenScale = Double(UIScreen.main.scale)
+
+            guard let solution = filter.tick(inputs) else { return }
+
+            // Filtered, at CameraFilter.gainBearing — see the note there for why the
+            // first pass left this out and why that was wrong.
+            let direction = solution.bearing ?? map.direction
+
+            // No animation: this IS the animation, one step per display frame. An
+            // animated write per frame would queue 120 overlapping transitions a
+            // second, each cancelling the last.
+            let camera = MLNMapCamera(lookingAtCenter: solution.centre,
+                                      altitude: MLNAltitudeForZoomLevel(solution.zoom,
+                                                                        solution.pitch,
+                                                                        solution.centre.latitude,
+                                                                        map.bounds.size),
+                                      pitch: solution.pitch,
+                                      heading: direction)
+            map.setCamera(camera, animated: false)
+        }
+
+        /// The SDK's own framing for rocket + phone, cached on the two fixes.
+        ///
+        /// **A pure query.** ADR-0014: never probe with a camera move to compute
+        /// framing — MapLibre's GL thread renders continuously and draws that
+        /// intermediate state, which is the auto-zoom wobble that ADR exists to record.
+        ///
+        /// Fitted NORTH-UP and FLAT. `cameraThatFitsCoordinateBounds` fits for the
+        /// CURRENT bearing and pitch, which zooms further out — a rotated box needs a
+        /// bigger viewport, and with heading-up on the bearing is arbitrary. Worse,
+        /// tilt is already compensated by the filter's zoom correction, so letting the
+        /// SDK account for it too corrects twice and over-zooms out. Hence the
+        /// `camera:fittingCoordinateBounds:` overload with a zeroed camera, which is
+        /// what Android's `getCameraForLatLngBounds(bounds, padding, 0.0, 0.0)` does.
+        private func boundsFit(_ map: MLNMapView,
+                               rocket: CLLocationCoordinate2D?,
+                               phone: CLLocationCoordinate2D?) -> (CLLocationCoordinate2D, Double)? {
+            guard let r = rocket, let p = phone else { return nil }
+            let key = FitKey(rocket: r, phone: p, size: map.bounds.size)
+            if let cached = cachedFit, cached.key == key { return cached.value }
+
+            let padding = CameraFraming.boundsFitPadding(viewportWidth: Double(map.bounds.width),
+                                                         viewportHeight: Double(map.bounds.height))
+            let bounds = MLNCoordinateBounds(
+                sw: CLLocationCoordinate2D(latitude: min(r.latitude, p.latitude),
+                                           longitude: min(r.longitude, p.longitude)),
+                ne: CLLocationCoordinate2D(latitude: max(r.latitude, p.latitude),
+                                           longitude: max(r.longitude, p.longitude)))
+            let flat = MLNMapCamera(lookingAtCenter: map.centerCoordinate,
+                                    altitude: map.camera.altitude, pitch: 0, heading: 0)
+            let fitted = map.camera(flat, fitting: bounds,
+                                    edgePadding: UIEdgeInsets(top: padding.v, left: padding.h,
+                                                              bottom: padding.v, right: padding.h))
+            let zoom = MLNZoomLevelForAltitude(fitted.altitude, 0,
+                                               fitted.centerCoordinate.latitude, map.bounds.size)
+            let value = (fitted.centerCoordinate, zoom)
+            cachedFit = (key, value)
+            return value
+        }
+
+        /// What the fit depends on. Recomputing it per frame is a native call the
+        /// filter does not need repeated; recomputing it per fix is what Android's
+        /// `remember(...)` key does. The viewport is part of the key because the
+        /// padding is derived from it, so a rotation has to re-ask.
+        struct FitKey: Equatable {
+            let rocketLat: Double, rocketLon: Double
+            let phoneLat: Double, phoneLon: Double
+            let size: CGSize
+            init(rocket: CLLocationCoordinate2D, phone: CLLocationCoordinate2D, size: CGSize) {
+                rocketLat = rocket.latitude; rocketLon = rocket.longitude
+                phoneLat = phone.latitude; phoneLon = phone.longitude
+                self.size = size
             }
-            if let centre {
-                let moved = LocatorVector.between(from: (map.centerCoordinate.latitude,
-                                                         map.centerCoordinate.longitude),
-                                                  to: (centre.latitude, centre.longitude)).distanceM
-                if moved > 5 { camera.centerCoordinate = centre; changed = true }
-            }
-            if changed { map.setCamera(camera, withDuration: 0.35, animationTimingFunction: nil) }
         }
 
         private func report(_ map: MLNMapView) {
@@ -151,14 +336,21 @@ struct FlightMapView: UIViewRepresentable {
                    markerState: RocketMarkerState = .live) {
             if recentreToken != lastRecentreToken {
                 lastRecentreToken = recentreToken
-                didFit = false                      // an explicit ask re-arms the fit
+                // An explicit ask outranks both the backoff and the latched anchors:
+                // "put it back" has to mean now, not once GPS noise happens to cross a
+                // deadband.
+                lastUserGesture = nil
+                if let map = mapView {
+                    filter.seed(centre: map.centerCoordinate, zoom: map.zoomLevel,
+                                pitch: map.camera.pitch)
+                }
             }
             let work = { [weak self] in
                 guard let self, let style = map.style else { return }
                 self.draw(style: style, rocket: rocket, phone: phone,
                           rocketAccuracyM: rocketAccuracyM, phoneAccuracyM: phoneAccuracyM,
                           track: track, markerState: markerState)
-                self.fitIfNeeded(map, rocket: rocket, phone: phone)
+                self.initialCentreIfNeeded(map, rocket: rocket, phone: phone)
             }
             if styleReady { work() } else { pending = work }
         }
@@ -343,24 +535,19 @@ struct FlightMapView: UIViewRepresentable {
 
         // MARK: - Camera
 
-        /// Frame both points once, using the **pure** bounds query.
+        /// One-shot centre on the phone, Android's `didInitialCenter`.
         ///
-        /// ADR-0014: never probe with `moveCamera` to compute framing. MapLibre's GL
-        /// thread renders continuously and draws that intermediate state, which shows
-        /// up as a persistent auto-zoom wobble.
-        private func fitIfNeeded(_ map: MLNMapView,
-                                 rocket: CLLocationCoordinate2D?,
-                                 phone: CLLocationCoordinate2D?) {
-            guard !didFit, let r = rocket, let p = phone else { return }
-            didFit = true
-            let bounds = MLNCoordinateBounds(
-                sw: CLLocationCoordinate2D(latitude: min(r.latitude, p.latitude),
-                                           longitude: min(r.longitude, p.longitude)),
-                ne: CLLocationCoordinate2D(latitude: max(r.latitude, p.latitude),
-                                           longitude: max(r.longitude, p.longitude)))
-            let camera = map.cameraThatFitsCoordinateBounds(
-                bounds, edgePadding: UIEdgeInsets(top: 60, left: 60, bottom: 60, right: 60))
-            map.setCamera(camera, animated: true)
+        /// Only while the ROCKET has no fix. Once it has one the filter frames both and
+        /// this would fight it. Seeds the filter too, so the first filtered frame
+        /// starts from the phone rather than dragging in from null island at 10% a
+        /// frame.
+        private func initialCentreIfNeeded(_ map: MLNMapView,
+                                           rocket: CLLocationCoordinate2D?,
+                                           phone: CLLocationCoordinate2D?) {
+            guard !didInitialCentre, rocket == nil, let p = phone else { return }
+            didInitialCentre = true
+            map.setCenter(p, zoomLevel: 12, direction: map.direction, animated: false)
+            filter.seed(centre: p, zoom: 12, pitch: map.camera.pitch)
         }
     }
 }

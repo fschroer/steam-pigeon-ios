@@ -64,8 +64,12 @@ enum SPFont {
     private static let monoBold = "RobotoMono-Bold"
 
     // Display / headline / title — Roboto
-    static let displayLarge  = Font.custom(displayBold, size: 57, relativeTo: .largeTitle)
-    static let displayMedium = Font.custom(displayBold, size: 45, relativeTo: .largeTitle)
+    // REGULAR, not bold. Android takes these from Material 3's baseline `Typography()`
+    // and only swaps the family (`baseline.displayLarge.copy(fontFamily = ...)`), and
+    // the baseline display styles are `FontWeight.Normal` — so `roboto_regular`. Bold
+    // here made the map's centre banner visibly heavier than Android's.
+    static let displayLarge  = Font.custom(display, size: 57, relativeTo: .largeTitle)
+    static let displayMedium = Font.custom(display, size: 45, relativeTo: .largeTitle)
     static let displaySmall  = Font.custom(display,     size: 36, relativeTo: .title)
     static let headlineLarge = Font.custom(display,     size: 32, relativeTo: .title)
     static let headlineMedium = Font.custom(display,    size: 28, relativeTo: .title2)

@@ -49,16 +49,50 @@ enum MapTiltMode: CaseIterable {
 }
 
 /// The view-mode and auto-framing controls, mirroring Android's column at the top
-/// right of the map: four 48 pt icon buttons on the shared overlay background.
+/// right of the map: 48 pt icon buttons on the shared overlay background.
+///
+/// **Order and behaviour are Android's**, read off `FlightMapScreen.kt`'s control
+/// column rather than inferred: tilt, auto-centre, auto-zoom, magnetic orientation,
+/// record track, reset track.
+///
+/// **Icons.** Android's are Compose `Icons.Default.*` — a library, not drawables in
+/// the repo, so there is nothing for `Tools/vd2svg.py` to convert and these are the
+/// nearest SF Symbols. Every one below is verified present in **iOS 13–16**, against
+/// `CoreGlyphs.bundle/name_availability.plist`, because the deployment target is 16.0
+/// and a symbol added later renders as a blank box on the phone rather than failing
+/// the build. `SFSymbolAvailabilityTests` pins the names.
+///
+/// | Android | here | why |
+/// |---|---|---|
+/// | `MyLocation` | `scope` | both are a crosshair; `location.circle` was an arrow-in-circle and read as "navigate", not "centre on" |
+/// | `ZoomOutMap` | `arrow.up.left.and.arrow.down.right` | no four-arrow expand glyph exists below iOS 17 |
+/// | `Explore` | `safari` | both are a compass rose with a needle |
+/// | `ScreenRotation` | `rotate.3d` | nearest available; names the phone-tilt mode it selects |
+/// | `FiberManualRecord` | `circle.fill` | same filled disc |
+/// | `Stop` | `stop.fill` | same filled square |
+/// | `RestartAlt` | `arrow.counterclockwise` | same circular restart arrow |
+///
+/// The archived-path control (`History`) has no counterpart yet: Android offers it
+/// only when a downloaded record exists, and flight-data download is not ported.
 struct MapControlsColumn: View {
     @Binding var tiltMode: MapTiltMode
     @Binding var autoCentre: Bool
     @Binding var autoZoom: Bool
     /// Heading-up rotation. Android calls this `compassEnabled`.
+    ///
+    /// **Never disabled, whatever the compass is doing.** ADR-0023's trust verdict
+    /// suppresses the BEARING — `MapScreen` withholds the heading when trust is
+    /// `unreliable`, and Android does the same with `compassUsable`, which it applies
+    /// to `bearingValid` and nowhere near this control. Greying the button out instead
+    /// is a different claim: it says the MODE is unavailable, when what is unavailable
+    /// is this moment's heading. Magnetic interference at startup is ordinary and
+    /// passes; a control that arrives dead reads as a broken app, and the user cannot
+    /// even express the preference. What tells them the compass is doubted is the
+    /// calibration mark on the rose, which is where the doubted bearing is visible.
     @Binding var headingUp: Bool
-    /// Suppressed while the compass cannot be trusted — rotating the world to a
-    /// heading the app does not believe is worse than not rotating it.
-    let compassTrusted: Bool
+    /// Whether new fixes are being appended to the track.
+    @Binding var recording: Bool
+    let onResetTrack: () -> Void
 
     var body: some View {
         VStack(spacing: 0) {
@@ -67,7 +101,7 @@ struct MapControlsColumn: View {
             }
             .accessibilityLabel("Switch to \(tiltMode.nextDescription)")
 
-            toggle(systemName: "location.circle", on: $autoCentre,
+            toggle(systemName: "scope", on: $autoCentre,
                    onLabel: "Disable auto-center", offLabel: "Enable auto-center")
 
             toggle(systemName: "arrow.up.left.and.arrow.down.right", on: $autoZoom,
@@ -75,8 +109,30 @@ struct MapControlsColumn: View {
 
             toggle(systemName: "safari", on: $headingUp,
                    onLabel: "Disable magnetic orientation",
-                   offLabel: "Enable magnetic orientation",
-                   enabled: compassTrusted)
+                   offLabel: "Enable magnetic orientation")
+
+            // Android's tinting inverts here and it is not a slip: RED while
+            // recording, dimmed while not. The other toggles mean "this mode is
+            // engaged"; this one means "something is being written down", which is
+            // the state worth spotting from across a field.
+            Button { recording.toggle() } label: {
+                Image(systemName: recording ? "stop.fill" : "circle.fill")
+                    .font(.system(size: 24))
+                    .foregroundStyle(recording ? Color.red : .white.opacity(0.35))
+                    .frame(width: 48, height: 48)
+            }
+            .accessibilityLabel(recording ? "Stop recording flight path"
+                                          : "Start recording flight path")
+
+            // Full white unconditionally — it is an action, not a state, so there is
+            // no "off" for it to be dimmed into.
+            Button(action: onResetTrack) {
+                Image(systemName: "arrow.counterclockwise")
+                    .font(.system(size: 24))
+                    .foregroundStyle(.white)
+                    .frame(width: 48, height: 48)
+            }
+            .accessibilityLabel("Reset flight path")
         }
         .padding(.vertical, 4)
         .background(SPColor.mapOverlay)

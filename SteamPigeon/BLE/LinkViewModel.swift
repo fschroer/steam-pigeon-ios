@@ -71,6 +71,29 @@ final class LinkViewModel: ObservableObject {
     /// The classified link verdict, or nil when there is nothing to say.
     @Published private(set) var linkVerdict: LinkQuality.Verdict = .normal
 
+    // MARK: - Things only PreLaunchData carries
+    //
+    // The locator stops broadcasting `PreLaunchData` the moment it is armed and sends
+    // `TelemetryData` instead, so ANY field read straight off `prelaunch` keeps
+    // reporting whatever was true just before the arm — for the whole flight, with
+    // nothing on screen to say it is old. These are held as their own state, updated
+    // from BOTH branches, so the stale reading is impossible rather than merely
+    // unlikely. Android does the same thing with a separate `padAlert` flow and a
+    // `lastPreLaunchDataTime` clock.
+
+    /// ADR-0021 prepped-and-disarmed verdict.
+    @Published private(set) var padAlert: PadAlertState = .quiet
+    @Published private(set) var padAlertSnoozeMinutes = 0
+    /// When `PreLaunchData` last arrived — a different clock from `lastLocatorMessage`,
+    /// which telemetry also refreshes.
+    @Published private(set) var lastPreLaunchMessage: Date?
+
+    /// Whether the pre-launch-only readouts (the batteries) are current.
+    var isPreLaunchFresh: Bool {
+        guard let last = lastPreLaunchMessage else { return false }
+        return Date().timeIntervalSince(last) < RocketMarkerState.messageTimeout
+    }
+
     private func updateLinkQuality(rssi: Int, snr: Int, noiseFloor: Int, now: Date = Date()) {
         quietestFloor = LinkQuality.updateQuietestFloor(current: quietestFloor, sample: noiseFloor)
 
@@ -94,36 +117,113 @@ final class LinkViewModel: ObservableObject {
 
     /// Recorded ground track of the connected locator, oldest first.
     ///
-    /// Deduped and capped: at 1 Hz an unbounded array would grow all afternoon, and
-    /// consecutive fixes from a rocket sitting on the pad differ only by GPS noise,
-    /// which would draw a scribble rather than a track.
-    @Published private(set) var track: [CLLocationCoordinate2D] = []
-    private static let trackMinSeparationM = 2.0
+    /// Capped, because at 1 Hz an unbounded array would grow all afternoon. It is NOT
+    /// thinned by distance: what keeps the pad from scribbling is that nothing is
+    /// recorded before launch at all (`TrackRecording.recordsPathPoint`), and Android's
+    /// own dedup test warns that a minimum-separation filter silently swallows the real
+    /// slow movement of a descent under canopy.
+    @Published private(set) var track: [TrackPoint] = []
     private static let trackMaxPoints = 2_000
 
-    private func recordTrack(lat: Double, lon: Double, hasFix: Bool) {
-        // Only fixed positions join the track. A fixless reading may be good enough to
-        // keep quoting a stale distance (ADR-0022) but not to draw as ground truth.
-        guard hasFix, lat != 0 || lon != 0 else { return }
-        let point = CLLocationCoordinate2D(latitude: lat, longitude: lon)
-        if let last = track.last {
-            let step = LocatorVector.between(from: (last.latitude, last.longitude),
-                                             to: (lat, lon)).distanceM
-            guard Double(step) >= Self.trackMinSeparationM else { return }
+    /// What the map draws.
+    var trackCoordinates: [CLLocationCoordinate2D] { track.map(\.coordinate) }
+
+    /// Whether new fixes are appended to the track. Defaults **on**, as Android's
+    /// `_isFlightPathRecording` does — a flight recorded only if you remembered to
+    /// arm the recorder is a flight lost.
+    @Published var isRecordingTrack = true
+
+    private var recorder = TrackRecorder()
+    private let trackStore = TrackStore()
+
+    /// The map's "start clean" control (Android `resetFlightPath`).
+    ///
+    /// Resuming recording is part of it: Android re-arms deliberately, because a
+    /// cleared track that then refused to draw is indistinguishable from a broken one.
+    func resetTrack() {
+        track = []
+        isRecordingTrack = true
+        recorder.reset()
+        trackStore.delete()
+    }
+
+    /// Offer one fix to the track.
+    ///
+    /// The state machine decides whether it is drawn — see `TrackRecording`. Nothing is
+    /// recorded on the pad, and recording stops when the flight ends, which is what
+    /// keeps GPS noise from scribbling over the spot the user is walking to.
+    private func recordTrack(lat: Double, lon: Double, hasFix: Bool,
+                             state: FlightStates, altitudeAglM: Float, descentRateMs: Float) {
+        let outcome = recorder.observe(state: state, aglM: altitudeAglM,
+                                       descentRateMs: descentRateMs)
+        var changed = false
+        if case .newFlight = outcome, !track.isEmpty {
+            // A new flight left on the old track would draw the last one under the one
+            // now in the air.
+            track = []
+            changed = true
         }
-        track.append(point)
-        if track.count > Self.trackMaxPoints { track.removeFirst(track.count - Self.trackMaxPoints) }
+
+        let records: Bool
+        switch outcome {
+        case .newFlight(let r): records = r
+        case .record:           records = true
+        case .skip:             records = false
+        }
+
+        if isRecordingTrack, records, hasFix, lat != 0 || lon != 0,
+           !TrackRecording.repeatsFix(track.last, latitude: lat, longitude: lon,
+                                      altitudeM: altitudeAglM) {
+            track.append(TrackPoint(latitude: lat, longitude: lon, altitudeM: altitudeAglM,
+                                    timestampMs: Int64(Date().timeIntervalSince1970 * 1000)))
+            if track.count > Self.trackMaxPoints {
+                track.removeFirst(track.count - Self.trackMaxPoints)
+            }
+            changed = true
+        }
+        if changed { trackStore.save(track) }
     }
 
     /// The connected locator's latest position, if it reported one.
     var rocketCoordinate: CLLocationCoordinate2D? {
-        if let t = telemetry, t.latitude != 0 || t.longitude != 0 {
-            return CLLocationCoordinate2D(latitude: t.latitude, longitude: t.longitude)
+        let (lat, lon) = newest(\.latitude, \.latitude).flatMap { lat in
+            newest(\.longitude, \.longitude).map { (lat, $0) }
+        } ?? (0, 0)
+        guard lat != 0 || lon != 0 else { return nil }
+        return CLLocationCoordinate2D(latitude: lat, longitude: lon)
+    }
+
+    // MARK: - Fields BOTH broadcasts carry
+    //
+    // **Newest wins — not "telemetry if we have any".**
+    //
+    // Android merges both messages into one `rocketState`, so whichever arrived last
+    // owns every field it carries. iOS keeps the two decoded messages side by side,
+    // which means the same rule has to be applied where they are READ — and reading
+    // `telemetry ?? prelaunch` is a different rule that goes wrong the moment the
+    // locator returns to broadcasting `PreLaunchData`, which it does on every disarm
+    // and after every landing. `telemetry` is never nil again once a flight has
+    // happened, so it shadowed the fresh pre-launch values for the rest of the session
+    // — cured only by restarting the app, which is exactly how it was reported.
+    //
+    // Fields only TELEMETRY carries — flight state, velocity, attitude — are read from
+    // `telemetry` directly and deliberately keep their last value: Android's pre-launch
+    // branch does not write them either, so a landed rocket goes on reading Landed.
+    // Fields only PRE-LAUNCH carries are aged on `isPreLaunchFresh` instead.
+
+    /// Which broadcast arrived most recently.
+    private enum LatestBroadcast { case none, preLaunch, telemetry }
+    private var latestBroadcast: LatestBroadcast = .none
+
+    /// The value from whichever broadcast arrived last, given where the field lives in
+    /// each of them.
+    private func newest<T>(_ fromPreLaunch: KeyPath<PreLaunchData, T>,
+                           _ fromTelemetry: KeyPath<TelemetryData, T>) -> T? {
+        switch latestBroadcast {
+        case .telemetry: return telemetry?[keyPath: fromTelemetry] ?? prelaunch?[keyPath: fromPreLaunch]
+        case .preLaunch: return prelaunch?[keyPath: fromPreLaunch] ?? telemetry?[keyPath: fromTelemetry]
+        case .none:      return nil
         }
-        if let p = prelaunch, p.latitude != 0 || p.longitude != 0 {
-            return CLLocationCoordinate2D(latitude: p.latitude, longitude: p.longitude)
-        }
-        return nil
     }
 
     /// Android's `isInFlight`: armed, OR a flight state other than WaitingLaunch.
@@ -151,6 +251,26 @@ final class LinkViewModel: ObservableObject {
 
     /// Toggle the locator's armed state. Addressed to the connected locator, because
     /// an unaddressed Arm reaches every locator on the channel.
+    /// Ask the locator to hold the prepped-and-disarmed alert for another step
+    /// (ADR-0021 Decision 5).
+    ///
+    /// A rocket assembled vertically with charges wired is physically identical to one
+    /// standing on the pad, so no sensor separates them — this is the operator saying
+    /// "still prepping". Locator-directed, so it carries a target like every other
+    /// command (ADR-0020): a snooze is a state change on one rocket, and broadcasting
+    /// it would quiet every locator on the channel.
+    ///
+    /// The app asks for a step; the LOCATOR accumulates and clamps to its own ceiling.
+    /// Nothing here may make a snooze indefinite — that would be an off switch, and
+    /// hands back the forgotten arm the alert exists to catch.
+    func snoozePadAlert() {
+        guard let id = connectedLocatorId, gate.mayCommand(id) else { return }
+        guard let msg = OutboundMessage.locatorDirected(
+            .padAlertSnoozeRequest, targetLocatorId: id,
+            payload: [UInt8(PadAlertState.snoozeStepMinutes)]) else { return }
+        transport.send(msg)
+    }
+
     func toggleArmed() {
         guard let id = connectedLocatorId, gate.mayCommand(id) else { return }
 
@@ -176,14 +296,14 @@ final class LinkViewModel: ObservableObject {
         }
     }
 
-    /// Drop the link and look for receivers again — offering a choice.
+    /// Drop the link and look for receivers again.
     ///
-    /// Rescan exists precisely to reach a DIFFERENT receiver, so it must not
-    /// silently reconnect to the remembered one. Auto-reconnect is for app launch,
-    /// where not interrupting is the kindness; here it defeats the button.
+    /// Nothing special left to do: every scan offers the choice now, including the one
+    /// at launch, so this is just "start over". It used to have to forget a remembered
+    /// receiver first, because the launch scan would otherwise reconnect to it silently
+    /// — the behaviour that made a second receiver unreachable.
     func rescan() {
         transport.disconnect()
-        transport.forgetRememberedPeripheral()
         discoveredReceivers = []
         transport.startScan()
     }
@@ -207,6 +327,10 @@ final class LinkViewModel: ObservableObject {
     /// Drop everything that describes a link we no longer have.
     private func clearLiveReadouts() {
         prelaunch = nil
+        latestBroadcast = .none
+        padAlert = .quiet
+        padAlertSnoozeMinutes = 0
+        lastPreLaunchMessage = nil
         telemetry = nil
         vector = nil
         track.removeAll()
@@ -222,6 +346,16 @@ final class LinkViewModel: ObservableObject {
     }
 
     /// ADR-0017 trust state for the drawn position.
+    /// Whether the locator has spoken recently enough to describe.
+    ///
+    /// Android's `lastMessageAge < messageTimeout`, which gates the centre banner: a
+    /// banner describing a rocket the app is no longer in contact with is a claim it
+    /// cannot make. The stats panel and marker use the same clock.
+    var isLocatorFresh: Bool {
+        guard let last = lastLocatorMessage else { return false }
+        return Date().timeIntervalSince(last) < RocketMarkerState.messageTimeout
+    }
+
     var markerState: RocketMarkerState {
         RocketMarkerState.from(
             lastMessageAge: lastLocatorMessage.map { Date().timeIntervalSince($0) } ?? .infinity,
@@ -229,16 +363,33 @@ final class LinkViewModel: ObservableObject {
     }
 
     var rocketAccuracyM: Double? {
-        if let t = telemetry { return Double(t.horizontalAccuracy) }
-        if let p = prelaunch { return Double(p.horizontalAccuracy) }
-        return nil
+        newest(\.horizontalAccuracy, \.horizontalAccuracy).map(Double.init)
     }
+
+    /// Per-channel deployment continuity.
+    ///
+    /// Reported from the phone as channels showing no continuity when one of them had
+    /// it, cured by restarting the app — the signature of a stale value winning.
+    var deployChannelContinuity: [Bool] {
+        newest(\.deployChannelContinuity, \.deployChannelContinuity) ?? []
+    }
+
+    var satellites: UInt8? { newest(\.satellites, \.satellites) }
+    var gpsStatus: SensorHealth? { newest(\.gpsStatus, \.gpsStatus) }
+    var rssi: Int? { newest(\.rssi, \.rssi).map(Int.init) }
+    var snr: Int? { newest(\.snr, \.snr).map(Int.init) }
+    var altitudeAglM: Float { newest(\.altitudeAgl, \.altitudeAgl) ?? 0 }
 
     private let transport = BluetoothTransport()
     private let started = Date()
 
     init() {
         for (id, key) in store.keysById { gate.remember(locatorId: id, passwordKey: key) }
+        // A track survives the app being killed, as Android's does. The recorder's own
+        // flags deliberately do NOT: `flightStateObserved` starts false so the first
+        // packet after a restart cannot be read as a launch and wipe the flight it just
+        // rejoined.
+        track = trackStore.load()
         transport.onDiscover = { [weak self] peripherals in
             Task { @MainActor in
                 guard let self else { return }
@@ -301,7 +452,7 @@ final class LinkViewModel: ObservableObject {
     /// jumped rather than on being fixless.
     private func updateVector(lat: Double, lon: Double, satellites: UInt8,
                               gpsStatus: SensorHealth, state: FlightStates,
-                              altitudeAglM: Float) {
+                              altitudeAglM: Float, descentRateMs: Float = 0) {
         guard let me = phone.coordinate, phone.hasUsableFix else {
             vector = nil
             vectorSuppressedReason = phone.authorized
@@ -314,7 +465,8 @@ final class LinkViewModel: ObservableObject {
                                       to: (lat, lon),
                                       altitudeAglM: altitudeAglM)
         let hasFix = DistancePlausibility.hasFix(satellites: satellites, gpsStatus: gpsStatus)
-        recordTrack(lat: lat, lon: lon, hasFix: hasFix)
+        recordTrack(lat: lat, lon: lon, hasFix: hasFix, state: state,
+                    altitudeAglM: altitudeAglM, descentRateMs: descentRateMs)
 
         if plausibility.accept(distanceM: v.distanceM, hasFix: hasFix, state: state) != nil {
             vector = v
@@ -351,6 +503,10 @@ final class LinkViewModel: ObservableObject {
                 if admit(frame, m.locatorId, WireProtocol.prelaunchBaseStructSize,
                          deviceName: m.deviceName) {
                     prelaunch = m
+                    latestBroadcast = .preLaunch
+                    lastPreLaunchMessage = Date()
+                    padAlert = m.padAlert
+                    padAlertSnoozeMinutes = m.padAlertSnoozeMinutes
                     armed = m.armed                     // newest broadcast wins
                     updateVector(lat: m.latitude, lon: m.longitude,
                                  satellites: m.satellites, gpsStatus: m.gpsStatus,
@@ -364,10 +520,24 @@ final class LinkViewModel: ObservableObject {
                 lastLocatorId = m.locatorId
                 if admit(frame, m.locatorId, WireProtocol.telemetryBaseStructSize) {
                     telemetry = m
+                    latestBroadcast = .telemetry
+                    // TelemetryData carries no pad alert — it is an ON-PAD condition,
+                    // and this message means armed or in flight. Cleared EXPLICITLY,
+                    // because `PreLaunchData` stops arriving at exactly this point:
+                    // reported from the phone as an escalation that would not go away
+                    // when the locator was armed, and then vanished when it was
+                    // disarmed — which is the stale value being replaced at last,
+                    // the wrong way round.
+                    padAlert = .quiet
+                    padAlertSnoozeMinutes = 0
                     armed = m.armed                     // newest broadcast wins
                     updateVector(lat: m.latitude, lon: m.longitude,
                                  satellites: m.satellites, gpsStatus: m.gpsStatus,
-                                 state: m.flightState, altitudeAglM: m.altitudeAgl)
+                                 state: m.flightState, altitudeAglM: m.altitudeAgl,
+                                 // NED: down is positive, so vertical velocity IS the
+                                 // descent rate with no negation. Android passes
+                                 // velNed.z here for the same reason.
+                                 descentRateMs: m.velocityNed.z)
                     updateLinkQuality(rssi: Int(m.rssi), snr: Int(m.snr),
                                       noiseFloor: Int(m.noiseFloor))
                 }

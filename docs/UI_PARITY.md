@@ -4,11 +4,14 @@
 app in **both functionality and UI presentation**, except where a specific iOS design
 rule should take precedence.
 
-> ⚠️ This is a **tighter contract than ADR-0016 currently states.** That ADR says
-> *"Capability parity is required; pixel parity is not. Each platform may be idiomatic
-> (Material vs. HIG)."* Everything built before this date was built to the ADR. If the
-> tighter rule is the real one, ADR-0016's UI/UX row should be amended to say so —
-> otherwise the next person reads the ADR and reverts this on good authority.
+> **Resolved (2026-08-19):** ADR-0016 was amended to say this itself. The bar is now
+> stated there as a test — **one user manual serves both platforms** — with six
+> sanctioned iOS departures listed. Anything not on that list mirrors Android. This
+> page is no longer in tension with the ADR; it is the inventory that ADR points to.
+
+**Restated (2026-08-20, fschroer)** after four map defects that all came from assuming
+rather than reading: *fully review the Android code, do not assume the functionality.*
+That is now a standing rule at the top of this repo's `CLAUDE.md` Parity rules.
 
 ## Where iOS actually stands
 
@@ -58,6 +61,334 @@ auto-zoom and auto-centre with deadbands; tilt from device pitch; keep-screen-on
 
 The three font families ship as `.ttf` in `res/font/` and can be bundled on iOS
 unchanged, which is the cheapest large step toward "looks like the same app".
+
+## Flight map — line-by-line audit against `FlightMapScreen.kt` (2026-08-20)
+
+Prompted by four defects reported from the phone, all four of which came from
+**assuming** what the Android map did instead of reading it. What follows is the whole
+comparison, including the parts not yet fixed, so the next pass starts from a list
+rather than from a fresh guess.
+
+**Naming trap, worth knowing before reading either file:** Android's `MapControlsColumn`
+is the *status panel* (receiver/locator/RSSI rows plus the action dropdown), which iOS
+calls `MapStatusPanel`. The control buttons Android draws are an unnamed `Column`
+inside `MapWithOverlays`. iOS's `MapControlsColumn` is that unnamed column. The two
+files use the same name for different things.
+
+### Fixed in this pass
+
+| # | Gap | Android | iOS before |
+|---|---|---|---|
+| 1 | auto-zoom default | `mutableStateOf(true)` | `false` |
+| 2 | magnetic-orientation default | `mutableStateOf(true)` | `false` |
+| 3 | record-track control | `FiberManualRecord`/`Stop`, red while recording | absent |
+| 4 | reset-track control | `RestartAlt`, always full white | absent |
+| 5 | auto-centre icon | `MyLocation`, a crosshair | `location.circle`, an arrow |
+| 6 | gesture backoff | auto-camera returns early while `userGestureRecent` (5 s) | none — every camera write raced the finger |
+| 7 | control tap cancels the backoff | `LaunchedEffect(...) { lastUserGestureTime = 0 }` | n/a |
+| 8 | rotate/zoom/scroll gestures | set explicitly in `uiSettings` | left to SDK defaults (same values, but unstated) |
+
+Items 6 and 7 are one fix, and they were reported as three separate bugs: the map
+wandering under a pinch, panning that snapped back, and rotation springing back with
+magnetic orientation on. `applyCamera` runs from `updateUIView`, and reporting the live
+camera back into SwiftUI state re-renders the view — so each gesture frame invited a
+camera write on top of the finger.
+
+### The nine gaps — closed 2026-08-20
+
+Seven were implemented; two needed no code, for reasons Android itself supplies.
+
+| # | Gap | What landed |
+|---|---|---|
+| 1 | No camera filter | `CameraFilter` — Android's per-frame Kalman over target/zoom/tilt, gains .1/.05/.05 unchanged, driven by a `CADisplayLink` |
+| 2 | Auto-zoom did nothing | The toggle now drives the fit, bounded by the App Settings closest-zoom limit **on the filter only**, so pinch stays unbounded |
+| 3 | No anchor/deadband on auto-centre | `recenterDeadbandM` + `viewportLimitedDeadbandM`, latched anchor, re-latched only past the combined GPS error |
+| 4 | Auto-centre targeted the rocket alone | Now a north-up, flat bounds fit over rocket AND phone, falling back to the rocket when the phone has no fix |
+| 5 | Track not persisted | `TrackStore` — same `flight_path.csv` name and CSV shape as Android's, legacy three-column rows included |
+| 6 | No landing freeze | `TrackRecording` + `TrackRecorder`: nothing recorded on the pad, the two fixes that end a flight still drawn, then frozen |
+| 8 | No one-shot initial centre | Centres on the phone at z12 once, while the rocket has no fix. **Confirmed on the simulator** — the map used to open on null island |
+
+**7 — archived-path control: still correctly absent.** Android offers it only when a
+downloaded record exists, and flight-data download is not ported. Building the button
+now would be a control with nothing to toggle. It becomes a real gap the moment
+ADR-0009 lands, and is noted in the outstanding list against that item.
+
+**9 — `showControls`: no action, and none wanted.** It is dead state on Android —
+toggled by a map tap and never read — so the control column is always visible there,
+which is what iOS already does. Recorded so nobody "restores" a behaviour Android does
+not have.
+
+### Found while implementing, and fixed
+
+**The track was thinned by distance, and should not have been.** iOS dropped fixes
+closer than 2 m to the last one, to stop GPS noise scribbling on the pad. Android solves
+that a different way — `recordsPathPoint` records **nothing** before launch — and its own
+`PathDedupTest` warns explicitly against the distance rule, because what it silently
+swallows is real slow movement, "which is what a descent under canopy looks like". With
+the landing freeze ported, the 2 m rule was both redundant and harmful; it is now
+Android's exact-repeat rule, which exists to drop the ~5 repeated frames per fix that
+5 Hz transmission of a 1 Hz payload produces.
+
+### Third round, 2026-08-20 — three more from the phone
+
+All three were overlays, and the audit above had not covered overlays: it compared the
+control column and the camera, and stopped there. Recorded because the lesson is about
+the audit, not the code — **a partial audit reads exactly like a complete one.**
+
+| Observation | Cause | Fix |
+|---|---|---|
+| Rotation "very jerky" | Bearing was NOT filtered — my own decision, recorded below as a judgement to revisit | `CameraFilter.gainBearing` = .01, Android's value, with the ±540 shortest-turn wrap |
+| No "Disarmed" banner | The centre banner had never been ported | `FlightBanner` + `PulsingText` |
+| No escalated pad warning | Same banner, plus the snooze control | Banner escalation + a snooze button in the status dropdown |
+
+**On the bearing, I was wrong and it is worth saying how.** The previous pass skipped
+Android's bearing Kalman on the reasoning that CoreLocation already smooths
+`trueHeading` and ADR-0023's trust hold gates it, so a second filter would only add lag.
+The reasoning confused two different things: CoreLocation smooths the *value*, but
+delivers it in discrete updates a few times a second, while the camera is written every
+display frame. Holding a bearing for ~20 frames and then stepping it **is** the jerk.
+Android's gain of .01 crosses most of a step in under a second.
+
+**On the pad alert — it is not computed here, and must not be.** The locator decides,
+using deployment-channel continuity, the configured primary axis and its own attitude
+(ADR-0021, firmware), and sends the verdict as one byte. The app's whole job is to
+display it and offer the snooze. The wire decode already existed and was correct
+(`PadAlertState`, `padAlertSnoozeMinutes`, `padAlertSnoozeRequest`); only the UI was
+missing, which is why this looked like a missing feature rather than a missing field.
+
+The snooze is **locator-directed** and carries a target (ADR-0020), matching Android's
+`sendMessage` routing — a snooze is a state change on one rocket, and broadcasting it
+would quiet every locator on the channel. The app asks for one 5-minute step; the
+locator accumulates and clamps to its own 15-minute ceiling. Nothing app-side may make a
+snooze indefinite: that would be an off switch, and hands back the forgotten arm the
+alert exists to catch.
+
+**One thing to check side by side with Android.** The escalated banner is `displayLarge`
+(57 pt on both, Material's baseline) and its two-line text wraps to five lines on a
+402 pt iPhone, running under the control column. Android composes it identically on a
+411 dp reference phone, so this is believed faithful rather than an iOS defect — but
+"believed faithful" on a legibility question is exactly what a screenshot comparison is
+for, and neither of us has looked at the two together.
+
+### Fourth round, 2026-08-20 — three more from the phone
+
+| Observation | Cause | Fix |
+|---|---|---|
+| Compass button greyed out at startup under magnetic interference | iOS disabled the CONTROL on ADR-0023 trust | Control is never disabled; trust still suppresses the bearing |
+| Banners in the wrong font | `SPFont.displayLarge` used Roboto-**Bold** | Material's baseline display styles are `FontWeight.Normal` → Roboto-Regular |
+| No choice offered with two receivers | `startScan` reconnected to a remembered peripheral and skipped the scan | Auto-reconnect removed; 3 s scan window then always offer the list |
+
+**The compass control.** Android applies `compassUsable` to `bearingValid` and nowhere
+near the button — the button is never disabled, and its tint follows `compassEnabled`
+alone. Disabling it makes a different claim than intended: it says the MODE is
+unavailable, when what is unavailable is this moment's heading. Magnetic interference at
+startup is ordinary and passes, and a control that arrives dead reads as a broken app.
+What tells the user the compass is doubted is the calibration mark on the rose — where
+the doubted bearing is visible. The ADR-0023 suppression is unchanged and still applied
+in `MapScreen`.
+
+**The font.** Android builds its type scale as
+`baseline.displayLarge.copy(fontFamily = displayFontFamily)` — it swaps the family and
+keeps Material 3's baseline weight, which for the display styles is `Normal`. iOS had
+`displayLarge` and `displayMedium` on Roboto-Bold, so every banner rendered heavier than
+Android's. **Not verified locally:** this Mac has no Gradle cache, so the M3 baseline
+table could not be read off disk; the weights are taken from the M3 type scale.
+`titleMedium` / `titleSmall` are a separate question — their baseline weight is Medium
+(W500) and only Regular and Bold are bundled, so what Compose actually resolves them to
+wants checking on the Android box before anything here changes. Line height and letter
+spacing are likewise unported.
+
+**The receiver picker.** `startScan` preferred a direct reconnect to the last-used
+`peripheral.identifier`, so the scan never ran and the second receiver was never seen.
+Android has no such path: it scans for `SCAN_DURATION_MS` (3 s), then emits
+`DevicesFound` with everything heard and always raises the picker — for one device as
+well as two. iOS now does the same, and reports once when the window closes rather than
+per device, so a receiver that advertises late still makes the list instead of appearing
+under the user's thumb. The persisted identifier is gone entirely: it existed only for
+the auto-reconnect, and a stored id nothing reads is a trap.
+
+Found while doing it: **nothing ever set `TransportState.noDevicesFound`.** It had a
+label on two screens and no producer, so an empty scan left the app saying "Scanning"
+for ever — the one thing it had finished doing. The window now sets it, as Android emits
+`NoDevicesAvailable`.
+
+### Fifth round, 2026-08-20 — map rotation under interference, and the silent app
+
+**The map stopped rotating under magnetic interference, and should not have.** iOS
+withheld the camera heading whenever compass trust was `unreliable`. That test belongs
+to two other things and not to this one:
+
+- ADR-0023 **Decision 5** suppresses the **AR overlay** at `UNRELIABLE`, via ADR-0022's
+  mechanism. iOS still does that, in `updateVector`, and it is unchanged.
+- ADR-0023 **Decision 6** describes the map orientation "visibly correcting itself
+  mid-gesture" during the figure-eight repair — which it cannot do if interference has
+  frozen it. The map is an orientation aid, not a quoted figure, and the rose's
+  calibration mark is what says the heading is doubted.
+- Android agrees: its camera bearing is `hasCompass && compassEnabled`, with accuracy
+  nowhere in it. `compassUsable` reaches `bearingValid` only.
+
+**The pad alert had no voice and no haptic — and neither did anything else.**
+`AppSettings.voiceEnabled` / `voiceIdentifier` were written by the settings screen and
+read by nothing, so the app was silent everywhere. That is why a missing pad-alert
+callout looked like a fault in that alert rather than the absence of the feature.
+
+Now present:
+
+| | Android | here |
+|---|---|---|
+| Speech engine | one shared `TextToSpeech`, `QUEUE_FLUSH` for urgent lines | `FlightSpeech` over `AVSpeechSynthesizer`, `.urgent` stops the current utterance |
+| Pad-alert voice | rising edge then every 30 s while alerting; never while snoozed | same, `PadAlertAnnouncer` |
+| Pad-alert haptic | 260 ms / 140 ms / 260 ms / 2.4 s waveform, looping | same cycle via `CHHapticAdvancedPatternPlayer`, with a two-tap fallback where there is no haptic engine |
+| Arm/disarm | spoken on every change | same |
+
+**One iOS-specific decision worth knowing: the audio session is `.playback`.** The
+default category obeys the ring/silent switch, so on a phone with the switch flipped —
+which is most phones at a launch — every callout would be generated, mixed, and thrown
+away. Android's TTS goes out on `STREAM_MUSIC`, which ringer mute does not touch, so
+obeying the switch would also be a divergence in the one direction that matters. Ducking
+rather than interrupting, so someone's music drops under the callout.
+
+The haptic is deliberately **not** gated on the speech setting: someone who turned
+speech off is more reliant on it, not less. It is also the only channel that survives a
+muted phone in a pocket on a loud flight line.
+
+**Still not ported: the flight callouts.** `FlightSpeechAnnouncer` (~320 lines) carries
+ascent, descent, apogee, landing prediction and link-loss announcements, with the
+ADR-0022 rule that a withheld distance means SILENCE rather than a stale number read
+aloud. The engine now exists for it; the announcer does not.
+
+### Sixth round, 2026-08-20 — the half-restored receiver, and the voice list
+
+**A receiver that connected itself, greyed out, and would not arm — one cause.**
+`willRestoreState` adopted the peripheral iOS handed back and set the state to
+`connected`, and then did nothing else. Restoration returns the CONNECTION, not the
+GATT session on top of it: `didConnect` is not called for a peripheral that is already
+connected, so services were never discovered, the characteristics never resolved and
+notifications never subscribed. `state` therefore stopped at `.connected` and never
+reached `.ready` — which is what the grey icon means, what gates the receiver menu, and
+what `canSendArmCommand` requires. A manual rescan fixed it because that path runs
+`didConnect` properly.
+
+Everything else in the report follows from the same thing:
+
+- **"Only one of two receivers is listed."** A connected peripheral does not answer a
+  scan, so the receiver the app was actually holding was the one missing. The scan now
+  seeds its list from `retrieveConnectedPeripherals(withServices:)`, so an already-held
+  receiver is offered alongside the ones still advertising.
+- **"Cancelling connects the one that wasn't listed."** Nothing connected on cancel —
+  the restored link had been there all along, invisible and half-alive.
+- **Choosing the other receiver** now cancels the previous connection first. Without
+  that the old one stayed connected but un-referenced, holding its `bluetoothd` session
+  and keeping itself out of every later scan.
+
+Also hardened: `startScan` ignores a duplicate call while a window is open, as Android
+does. It is reached twice at launch — from `centralManagerDidUpdateState` and from the
+view appearing — and restarting the window discarded whatever the first had found,
+which is a plausible second contributor to the one-of-two symptom.
+
+**The voice list.** Two iOS-only problems, neither of which Android has:
+
+1. **Novelty voices.** Apple ships Bubbles, Bells, Boing, Zarvox and a dozen more
+   alongside the real ones; Android's engine offers none, so it never needed a filter.
+   Filtered now — by `voiceTraits.isNoveltyVoice` on iOS 17+, and by an identifier list
+   on 16, which is the deployment target.
+
+   The list was enumerated from the device, and that mattered twice. **Names are not
+   stable**: Jester ships as `…voice.Hysterical`, Superstar as `…voice.Princess`,
+   Wobble as `…voice.Deranged`. And the tempting shortcut of excluding the legacy
+   `com.apple.speech.synthesis.voice.` prefix is **wrong** — Fred, Junior, Kathy and
+   Ralph share it and Apple does not class them as novelty, so that rule would have
+   quietly removed four ordinary voices. Both halves are pinned by tests.
+2. **The wheel snapped back.** A `Picker` in a Form presents a wheel, and a wheel always
+   re-centres on the current selection, so anything far from the current choice was hard
+   to reach. Replaced with a pushed checkmark list — the iOS pattern for a long
+   single-choice list, and it stays where it is scrolled. **Confirmed on the simulator.**
+
+### Seventh round, 2026-08-20 — the escalation that would not clear
+
+**Arming while the pad alert was up left the escalated banner on screen; disarming
+cleared it.** Backwards, and the inversion is the diagnosis: the locator stops
+broadcasting `PreLaunchData` the moment it is armed and sends `TelemetryData` instead.
+The banner read `model.prelaunch?.padAlert`, so arming froze the last pre-launch value —
+`alerting` — and it stayed frozen. Disarming resumed `PreLaunchData`, which finally
+overwrote it. The app was not reacting to the arm at all; it was showing a photograph.
+
+Android clears it explicitly and says why:
+
+> `TelemetryData` carries no `pad_alert` — it is an on-pad condition and this message
+> means armed or in flight. Cleared explicitly because `PreLaunchData` stops arriving at
+> that point, so a set flag would otherwise latch on stale data and keep warning through
+> the whole flight.
+
+iOS now holds `padAlert` and `padAlertSnoozeMinutes` as their own state on the view
+model, written by BOTH branches — set from pre-launch, cleared by telemetry — rather
+than read off the last `prelaunch` object. That makes the stale reading impossible
+rather than merely unlikely.
+
+**The same defect was sitting on the batteries.** They are pre-launch-only fields too,
+read straight off `prelaunch` with no freshness test, so they would have shown the
+charge from before the flight for the whole flight. Android ages them on a separate
+`lastPreLaunchDataTime` clock precisely for this, with the note that "nothing beats a
+stale battery reading for being quietly wrong". iOS now has `lastPreLaunchMessage` /
+`isPreLaunchFresh` and hides the icons once they go stale.
+
+**The general rule, worth applying to anything added later:** a field carried only by
+`PreLaunchData` must never be read from the last-seen object. Either give it its own
+state written by both branches, or age it on `isPreLaunchFresh`. Names are the
+exception and deliberately so — a receiver does not rename itself mid-flight, and
+Android keeps showing them too.
+
+**Not unit-tested, and honestly so.** Pinning this needs a frame fed through `ingest`,
+which sits behind the ADR-0006 recognition gate and its auth tag, so the test would
+mostly be exercising authentication and would fail for reasons that have nothing to do
+with pad alerts. The rule is recorded at both call sites instead. If a seam for
+injecting decoded broadcasts is ever added for other reasons, this is the first thing
+that should use it.
+
+### Eighth round, 2026-08-20 — continuity that needed an app restart
+
+**Deployment channels showed no continuity when a channel had it; restarting fixed it.**
+"Restarting fixes it" is the tell for a latched value, and this is the MIRROR of the
+seventh round: there, stale pre-launch shadowed fresh telemetry. Here, stale telemetry
+shadows fresh pre-launch.
+
+The view read `t?.deployChannelContinuity ?? p?.deployChannelContinuity` — *telemetry if
+we have any*. But `telemetry` is never nil again once a flight has happened, and the
+locator goes back to broadcasting `PreLaunchData` on **every disarm and after every
+landing**. So the last in-flight continuity won for the rest of the session, and only a
+restart cleared it.
+
+**Android's rule is newest-wins, not telemetry-first.** It merges both messages into one
+`rocketState`, so whichever arrived last owns every field it carries. iOS keeps the two
+decoded messages side by side, so the same rule has to be applied where they are read —
+`LinkViewModel.newest(_:_:)` now does that, and the accessors go through it.
+
+The same `t ?? p` pattern was on **position, GPS accuracy, satellites, GPS status, RSSI,
+SNR, AGL and the tilt ramp's altitude** — all latching the same way. Position is the one
+that would have mattered most: after a landing the map marker would have sat at the last
+in-flight fix instead of where the rocket actually is, which is the one number the whole
+app exists to give.
+
+**Three categories, and every field belongs to exactly one:**
+
+| Carried by | Rule | Examples |
+|---|---|---|
+| both broadcasts | **newest wins** (`newest(_:_:)`) | position, accuracy, satellites, GPS status, RSSI, SNR, AGL, deployment continuity, armed |
+| telemetry only | read from `telemetry`, keeps its last value | flight state, velocity, attitude — Android's pre-launch branch does not write them either, so a landed rocket goes on reading Landed |
+| pre-launch only | age on `isPreLaunchFresh`, or clear explicitly | batteries, pad alert; device and receiver names are the deliberate exception |
+
+Getting the category wrong is silent in both directions, and both directions have now
+been reported from the phone within a day of each other.
+
+### Icon substitutions, and why they are substitutions
+
+Android's control icons are Compose `Icons.Default.*` — a library, not drawables in the
+repo — so `Tools/vd2svg.py` has nothing to convert and these are the nearest SF Symbols.
+Each was checked against the deployment target using the system's own availability data
+(see `SFSymbolAvailabilityTests` for the command); all are iOS 13–15, under the 16.0
+floor. The one that could not be matched closely is `ZoomOutMap`: its four-arrow expand
+glyph has no equivalent below iOS 17, so the two-arrow `arrow.up.left.and.arrow.down.right`
+stands in.
 
 ## Where iOS idiom should win
 

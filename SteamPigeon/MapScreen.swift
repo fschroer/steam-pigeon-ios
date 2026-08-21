@@ -9,6 +9,12 @@ struct MapScreen: View {
     @ObservedObject var model: LinkViewModel
     @ObservedObject var settings: AppSettings
 
+    init(model: LinkViewModel, settings: AppSettings) {
+        self.model = model
+        self.settings = settings
+        _voice = StateObject(wrappedValue: SpeechCoordinator(settings: settings))
+    }
+
     @State private var recentre = 0
     /// Live camera, so the rose counter-rotates and the scale bar sizes itself.
     @State private var cameraBearing: Double = 0
@@ -17,13 +23,21 @@ struct MapScreen: View {
     /// Hoisted so a tap on the MAP closes the action panel.
     @State private var actionsExpanded = false
     @State private var tiltMode: MapTiltMode = .flat
+    // All three default ON, as Android's `autoTargetMode`, `autoZoomMode` and
+    // `compassEnabled` do (FlightMapScreen.kt, MapWithOverlays). They were false
+    // here, which left the map inert on arrival and made the controls look broken:
+    // the modes the app is *for* were the ones switched off.
     @State private var autoCentre = true
-    @State private var autoZoom = false
-    @State private var headingUp = false
+    @State private var autoZoom = true
+    @State private var headingUp = true
     /// The menu and the screen it opens are ONE presentation — see `MapSheet`. They
     /// were two `.sheet` modifiers, and selecting a menu item dismissed the first
     /// while presenting the second in the same tick, which iOS 16 refuses.
     @State private var sheet: MapSheet?
+
+    /// The voice and the haptic. Owned here because the map screen is where the pad
+    /// alert is displayed, and the three channels should start and stop together.
+    @StateObject private var voice: SpeechCoordinator
 
     var body: some View {
         // Measured HERE, at the top, rather than from the map's background. The panel
@@ -37,15 +51,35 @@ struct MapScreen: View {
                     phone: model.phone.coordinate,
                     rocketAccuracyM: model.rocketAccuracyM,
                     phoneAccuracyM: model.phone.horizontalAccuracyM,
-                    track: model.track,
+                    track: model.trackCoordinates,
                     recentreToken: recentre,
                     markerState: model.markerState,
-                    headingUpDeg: headingUp && model.phone.compassTrust != .unreliable
-                                  ? model.phone.trueHeadingDeg : nil,
+                    // NOT gated on compass trust. ADR-0023 Decision 5 suppresses the
+                    // AR overlay at UNRELIABLE, and ADR-0022's mechanism withholds the
+                    // quoted bearing — both of which iOS still does, in `updateVector`.
+                    // The MAP is neither: it is an orientation aid, the rose carries
+                    // the calibration mark that says the heading is doubted, and
+                    // Decision 6 describes the map visibly correcting itself DURING the
+                    // figure-eight — which it cannot do if interference froze it.
+                    // Android agrees: its camera bearing is `hasCompass && compassEnabled`,
+                    // with accuracy nowhere in it.
+                    headingUpDeg: headingUp ? model.phone.trueHeadingDeg : nil,
                     pitchDeg: tiltMode.pitch(
-                        altitudeAglM: Double(model.telemetry?.altitudeAgl ?? 0),
+                        // Newest-wins, not telemetry-only: Android ramps the tilt from
+                        // `rocketState.altitudeAboveGroundLevel`, which both broadcasts
+                        // write. Reading telemetry alone would hold the camera leaned
+                        // at the last in-flight altitude after a disarm.
+                        altitudeAglM: Double(model.altitudeAglM),
                         devicePitchDeg: model.phone.devicePitchDeg ?? 0),
                     autoCentreOn: autoCentre ? model.rocketCoordinate : nil,
+                    autoZoom: autoZoom,
+                    maxZoom: settings.mapMaxZoom,
+                    // Changing any camera control is an explicit command and cancels
+                    // the gesture backoff, so the tap takes effect now rather than up
+                    // to five seconds later. Android does this with
+                    // `LaunchedEffect(tiltMode, autoTargetMode, autoZoomMode,
+                    // compassEnabled) { lastUserGestureTime = 0 }`.
+                    controlsToken: controlsToken,
                     onCameraChange: { bearing, zoom, centre in
                         // MapLibre reports this from inside its own update, which can
                         // land mid-layout. Deferring keeps it an ordinary state change.
@@ -81,12 +115,28 @@ struct MapScreen: View {
                         autoCentre: $autoCentre,
                         autoZoom: $autoZoom,
                         headingUp: $headingUp,
-                        compassTrusted: model.phone.compassTrust != .unreliable)
+                        recording: $model.isRecordingTrack,
+                        onResetTrack: { model.resetTrack() })
                 }
                 .padding(8)
 
                 if model.connectedLocatorId != nil {
                     statsPanel(in: proxy.size)
+                }
+
+                // Centre of the map, over everything: what is wrong with the rocket in
+                // front of you. Gated on hearing from the locator at all — a banner
+                // describing a rocket the app is no longer in contact with is a claim
+                // it cannot make.
+                if model.isLocatorFresh, let banner = FlightBanner.text(
+                    padAlert: model.padAlert,
+                    snoozeMinutes: model.padAlertSnoozeMinutes,
+                    armed: model.armed,
+                    locatorGpsLock: model.rocketCoordinate != nil) {
+                    PulsingText(text: banner,
+                                color: FlightBanner.color(padAlert: model.padAlert),
+                                pulse: FlightBanner.pulses(padAlert: model.padAlert))
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
 
                 if !model.discoveredReceivers.isEmpty {
@@ -128,6 +178,16 @@ struct MapScreen: View {
             }
         }
         .ignoresSafeArea(edges: .bottom)
+        // The locator's verdict drives the voice and the haptic. Gated on hearing from
+        // it, exactly as the banner is: a warning about a rocket the app is out of
+        // contact with is a claim it cannot make, and a haptic that outlives its cause
+        // teaches the operator the phone is broken.
+        .onChange(of: model.isLocatorFresh ? model.padAlert : .quiet) {
+            voice.padAlert.update($0)
+        }
+        // Android speaks the arm state on every change, from the status panel.
+        .onChange(of: model.armed) { voice.speech.say($0 ? "Armed" : "Disarmed") }
+        .onDisappear { voice.padAlert.stop() }
         // THE screen's only sheet. Adding a second one here reintroduces the crash.
         .sheet(item: $sheet) { current in
             switch current {
@@ -171,6 +231,20 @@ struct MapScreen: View {
         .navigationViewStyle(.stack)
     }
 
+    /// Changes whenever a camera control does, and is otherwise stable.
+    ///
+    /// Derived rather than kept as its own `@State` so it cannot drift out of step
+    /// with the controls it stands for. Only inequality is ever tested, so a hash
+    /// that differs run to run is fine.
+    private var controlsToken: Int {
+        var hasher = Hasher()
+        hasher.combine(tiltMode)
+        hasher.combine(autoCentre)
+        hasher.combine(autoZoom)
+        hasher.combine(headingUp)
+        return hasher.finalize()
+    }
+
     // MARK: - Overlays
 
     /// Bottom-right by default, dragged from there, clamped to the container.
@@ -190,7 +264,7 @@ struct MapScreen: View {
                     armed: model.armed,
                     inFlight: model.isInFlight,
                     distanceM: model.vector?.distanceM,
-                    altitudeAglM: t?.altitudeAgl ?? p?.altitudeAgl ?? 0,
+                    altitudeAglM: model.altitudeAglM,
                     // NED: down is positive, so a climb is the negation.
                     // Android shows total speed from the NED vector, not just the
                     // vertical component.
@@ -199,15 +273,17 @@ struct MapScreen: View {
                     headingDeg: t?.attitude.headingDeg,
                     accel: p?.accel,
                     gyro: p?.gyro,
-                    latitude: t?.latitude ?? p?.latitude ?? 0,
-                    longitude: t?.longitude ?? p?.longitude ?? 0,
+                    latitude: model.rocketCoordinate?.latitude ?? 0,
+                    longitude: model.rocketCoordinate?.longitude ?? 0,
                     deployChannelText: p.map { cfg in
                         cfg.deployChannelModes.enumerated().map { i, mode in
                             DeployChannelText.line(channel: i + 1, mode: mode, config: cfg)
                         }
                     } ?? [],
-                    deployChannelContinuity: t?.deployChannelContinuity
-                                          ?? p?.deployChannelContinuity ?? [],
+                    // Newest broadcast wins — see `LinkViewModel.newest`. Reading
+                    // telemetry-then-prelaunch here is what left a stale in-flight
+                    // reading on screen after every disarm.
+                    deployChannelContinuity: model.deployChannelContinuity,
                     onTapSpeak: nil,
                     containerSize: container,
                     homeToken: recentre
@@ -223,12 +299,15 @@ struct MapScreen: View {
         MapStatusPanel(
                     receiverName: model.prelaunch?.receiverName,
                     connectionState: model.state,
-                    receiverBatteryMv: model.prelaunch?.receiverBatteryMv,
+                    // Pre-launch-only fields, aged on their own clock: the locator stops
+                    // sending them the moment it is armed, and nothing is worse than a
+                    // battery reading that is quietly the one from before the flight.
+                    receiverBatteryMv: model.isPreLaunchFresh ? model.prelaunch?.receiverBatteryMv : nil,
                     locatorName: model.prelaunch?.deviceName,
-                    satellites: model.telemetry?.satellites ?? model.prelaunch?.satellites,
-                    gpsStatus: model.telemetry?.gpsStatus ?? model.prelaunch?.gpsStatus,
+                    satellites: model.satellites,
+                    gpsStatus: model.gpsStatus,
                     armed: model.armed,
-                    locatorBatteryMv: model.prelaunch?.locatorBatteryMv,
+                    locatorBatteryMv: model.isPreLaunchFresh ? model.prelaunch?.locatorBatteryMv : nil,
                     rssi: rssi,
                     snr: snr,
                     linkNote: linkNote,
@@ -236,6 +315,9 @@ struct MapScreen: View {
                     armPending: model.armCommandPending,
                     onRescan: { model.rescan() },
                     onToggleArmed: { model.toggleArmed() },
+                    padAlert: model.padAlert,
+                    padAlertSnoozeMinutes: model.padAlertSnoozeMinutes,
+                    onSnoozePadAlert: { model.snoozePadAlert() },
                     actionsExpanded: $actionsExpanded
                 )
     }
@@ -286,10 +368,6 @@ struct MapScreen: View {
         }
     }
 
-    private var rssi: Int? {
-        model.telemetry.map { Int($0.rssi) } ?? model.prelaunch.map { Int($0.rssi) }
-    }
-    private var snr: Int? {
-        model.telemetry.map { Int($0.snr) } ?? model.prelaunch.map { Int($0.snr) }
-    }
+    private var rssi: Int? { model.rssi }
+    private var snr: Int? { model.snr }
 }

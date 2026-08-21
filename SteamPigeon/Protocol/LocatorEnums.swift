@@ -44,6 +44,12 @@ enum PadAlertState {
     }
 
     static func snoozeMinutes(_ v: UInt8) -> Int { v >= 2 ? Int(v) - 2 : 0 }
+
+    /// Ceiling the LOCATOR clamps total remaining snooze to. Mirrored here only so the
+    /// control can show "no more" rather than vanishing; the locator enforces it.
+    static let snoozeCeilingMinutes = 15
+    /// Added per tap. The locator accumulates and clamps.
+    static let snoozeStepMinutes = 5
 }
 
 /// Flight state machine, in wire order.

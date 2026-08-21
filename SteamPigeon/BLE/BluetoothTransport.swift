@@ -77,19 +77,18 @@ final class BluetoothTransport: NSObject {
     private var framer = PacketFramer()
     private var health = ConnectionHealthMonitor()
     private var healthTimer: Timer?
+    private var scanWindowTimer: Timer?
 
-    /// Transport identity is `peripheral.identifier` — iOS never exposes a MAC, so
-    /// Android's `macPrefix = "D8:67"` filter has no counterpart. This value is
-    /// **per-install**: it differs on another phone and changes on reinstall, so it
-    /// identifies *a receiver on this install* and nothing more. Locator identity is
-    /// unaffected — that keys on the 32-bit `locator_id` from telemetry (ADR-0006)
-    /// and stays platform-neutral.
-    private static let lastPeripheralKey = "com.steampigeon.ios.lastPeripheral"
-
-    var lastKnownPeripheral: UUID? {
-        get { UserDefaults.standard.string(forKey: Self.lastPeripheralKey).flatMap(UUID.init) }
-        set { UserDefaults.standard.set(newValue?.uuidString, forKey: Self.lastPeripheralKey) }
-    }
+    // Transport identity is `peripheral.identifier` — iOS never exposes a MAC, so
+    // Android's `macPrefix = "D8:67"` filter has no counterpart. It is **per-install**:
+    // it differs on another phone and changes on reinstall, so it identifies *a
+    // receiver on this install* and nothing more. Locator identity is unaffected —
+    // that keys on the 32-bit `locator_id` from telemetry (ADR-0006).
+    //
+    // It is no longer PERSISTED. A remembered identifier existed only to reconnect
+    // without asking, which is the behaviour that hid the second receiver; with the
+    // picker always offered there is nothing left to remember, and a stored id that
+    // nothing reads is a trap for the next reader.
 
     // MARK: - Lifecycle
 
@@ -122,34 +121,70 @@ final class BluetoothTransport: NSObject {
         )
     }
 
+    /// How long to collect before offering the choice. Android's `SCAN_DURATION_MS`.
+    ///
+    /// A window rather than reporting each device as it arrives: with two receivers
+    /// powered up, whichever advertises first would otherwise pop a one-item list, and
+    /// the second would appear under the user's thumb a moment later. Three seconds is
+    /// long enough for both to be heard and short enough not to feel like a hang.
+    static let scanWindow: TimeInterval = 3
+
     /// Scan for the receiver by **service UUID**, never by name.
     ///
     /// Name filtering works in the foreground and silently fails in the background,
     /// where a service filter is mandatory. FFE0 is advertised by default
     /// (`03 03 E0FF`) and the receiver firmware issues no `AT+UIDS`/`AT+SADV`/`AT+UADV`
     /// that would change that — so this is the one correct filter.
+    ///
+    /// **This never auto-connects, not even to the receiver used last.** It used to:
+    /// a remembered `peripheral.identifier` was reconnected directly and the scan was
+    /// skipped, which meant that with two receivers powered up the app silently took
+    /// the one it had used before and never offered the other. Android has no such
+    /// path — it scans for a fixed window and always raises the picker on what it
+    /// found — and someone with two receivers could not reach the second one here
+    /// without understanding why.
     func startScan() {
         guard central.state == .poweredOn else { return }
-
-        // Prefer a direct reconnect to the receiver we used last.
-        if let known = lastKnownPeripheral,
-           let p = central.retrievePeripherals(withIdentifiers: [known]).first {
-            connect(to: p)
-            return
-        }
+        // A scan already running is left alone, as Android does ("scan already in
+        // progress — ignoring duplicate call"). `startScan` is reached twice at
+        // launch — once from `centralManagerDidUpdateState` on poweredOn, once from
+        // the view appearing — and restarting the window threw away everything the
+        // first one had already found. That is a plausible cause of "sometimes only
+        // one of two receivers is listed": whichever answered early was discarded, and
+        // a receiver that had just advertised was in no hurry to advertise again.
+        guard scanWindowTimer == nil else { return }
 
         state = .scanning
-        discovered.removeAll()
+        // Seed with receivers ALREADY connected to this phone — including one iOS
+        // handed back through `willRestoreState`. A connected peripheral does not
+        // answer a scan, so without this the receiver the app is actually talking to
+        // is the one missing from the list: "only one of my two receivers is listed,
+        // and cancelling connects me to the other one".
+        discovered = central.retrieveConnectedPeripherals(withServices: [Self.serviceUUID])
         central.scanForPeripherals(withServices: [Self.serviceUUID], options: nil)
+
+        // Report ONCE, when the window closes, with everything heard in it.
+        scanWindowTimer?.invalidate()
+        scanWindowTimer = Timer.scheduledTimer(withTimeInterval: Self.scanWindow,
+                                               repeats: false) { [weak self] _ in
+            guard let self else { return }
+            self.central.stopScan()
+            self.scanWindowTimer = nil
+            // Android emits NoDevicesAvailable here. Without it the app sat in
+            // `scanning` forever and told the user it was still looking, which is the
+            // one thing it had finished doing. Nothing set this state before.
+            if self.discovered.isEmpty {
+                self.state = .noDevicesFound
+            }
+            self.onDiscover?(self.discovered)
+        }
     }
 
     func stopScan() {
+        scanWindowTimer?.invalidate()
+        scanWindowTimer = nil
         central.stopScan()
     }
-
-    /// Forget the remembered receiver, so the next scan offers a choice instead of
-    /// reconnecting. Used by Rescan.
-    func forgetRememberedPeripheral() { lastKnownPeripheral = nil }
 
     /// Connect to one of the peripherals found this scan.
     func connectToDiscovered(_ id: UUID) {
@@ -158,7 +193,14 @@ final class BluetoothTransport: NSObject {
     }
 
     func connect(to p: CBPeripheral) {
-        central.stopScan()
+        stopScan()
+        // Let go of the previous one FIRST. Without this, choosing the other receiver
+        // left the first still connected and merely un-referenced — it keeps its
+        // session with `bluetoothd`, keeps the radio busy, and keeps itself out of the
+        // next scan, so it could never be chosen again.
+        if let existing = peripheral, existing.identifier != p.identifier {
+            central.cancelPeripheralConnection(existing)
+        }
         peripheral = p
         p.delegate = self
         state = .connecting
@@ -251,19 +293,37 @@ extension BluetoothTransport: CBCentralManagerDelegate {
               let p = restored.first else { return }
         peripheral = p
         p.delegate = self
-        state = p.state == CBPeripheralState.connected ? .connected : .connecting
+
+        if p.state == CBPeripheralState.connected {
+            // **The GATT work has to be redone, and this is the whole point of the
+            // callback.** iOS restores the CONNECTION, not the session on top of it:
+            // `didConnect` is not called for a peripheral that is already connected, so
+            // nothing here would ever have discovered services, resolved the
+            // characteristics or subscribed to notifications.
+            //
+            // Reported from the phone as a receiver that connected by itself with a
+            // GREY icon, gated the receiver menu and refused to arm — all of which is
+            // `state` stopping at `.connected` and never reaching `.ready`, because
+            // `.ready` is set when the notify characteristic is subscribed. A manual
+            // rescan fixed it because that path runs `didConnect` properly.
+            state = .connected
+            framer.reset()      // a half-frame from before the restart must not survive
+            p.discoverServices([Self.serviceUUID])
+        } else {
+            state = .connecting
+        }
     }
 
     func centralManager(_ c: CBCentralManager, didDiscover p: CBPeripheral,
                         advertisementData: [String: Any], rssi RSSI: NSNumber) {
+        // Collected, not reported: the window closing is what offers the choice, so a
+        // second receiver arriving late still makes the list.
         guard !discovered.contains(where: { $0.identifier == p.identifier }) else { return }
         discovered.append(p)
-        onDiscover?(discovered)
     }
 
     func centralManager(_ c: CBCentralManager, didConnect p: CBPeripheral) {
         state = .connected
-        lastKnownPeripheral = p.identifier
         framer.reset()          // a half-frame from the previous link must not survive
         // NOTE: deliberately NOT reading maximumWriteValueLength here. See `send`.
         p.discoverServices([Self.serviceUUID])

@@ -8,16 +8,36 @@ struct AppSettingsView: View {
 
     private let voices = AppSettings.availableVoices()
 
+    /// What the row shows when collapsed. Falls back to the first voice, which is what
+    /// `FlightSpeech` uses when nothing has been chosen.
+    private var selectedVoiceName: String {
+        let id = settings.voiceIdentifier
+        return voices.first(where: { $0.identifier == id })?.name
+            ?? voices.first?.name
+            ?? "None"
+    }
+
     var body: some View {
         Form {
             Section {
                 Toggle("Enable Speech", isOn: $settings.voiceEnabled)
 
-                Picker("Voice Name", selection: Binding(
-                    get: { settings.voiceIdentifier ?? voices.first?.identifier ?? "" },
-                    set: { settings.voiceIdentifier = $0 })) {
-                    ForEach(voices, id: \.identifier) { voice in
-                        Text(voice.name).tag(voice.identifier)
+                // A pushed list, NOT a `Picker`.
+                //
+                // The default picker in a Form presents a wheel, and a wheel always
+                // re-centres on the current selection: let go anywhere else and it
+                // snaps back, which with thirty-odd voices makes anything far from the
+                // current choice genuinely hard to reach. Reported that way from the
+                // phone. A pushed list scrolls where it is put and stays there, and it
+                // is what iOS Settings does for a long single-choice list.
+                NavigationLink {
+                    VoiceListView(voices: voices, selected: $settings.voiceIdentifier)
+                } label: {
+                    HStack {
+                        Text("Voice Name")
+                        Spacer()
+                        Text(selectedVoiceName)
+                            .foregroundStyle(SPColor.onSurfaceVariant)
                     }
                 }
                 .disabled(!settings.voiceEnabled || voices.isEmpty)
@@ -55,5 +75,39 @@ struct AppSettingsView: View {
         }
         .scrollContentBackground(.hidden)
         .background(SPColor.background)
+    }
+}
+
+/// The voice list, pushed from Application Settings.
+///
+/// Plain rows with a checkmark — the iOS single-choice pattern. No wheel, so the list
+/// stays where the user scrolls it.
+struct VoiceListView: View {
+    let voices: [AVSpeechSynthesisVoice]
+    @Binding var selected: String?
+
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        List(voices, id: \.identifier) { voice in
+            Button {
+                selected = voice.identifier
+                dismiss()
+            } label: {
+                HStack {
+                    Text(voice.name).foregroundStyle(SPColor.onBackground)
+                    Spacer()
+                    if voice.identifier == selected {
+                        Image(systemName: "checkmark").foregroundStyle(SPColor.primary)
+                    }
+                }
+                .contentShape(Rectangle())
+            }
+            .listRowBackground(SPColor.surfaceContainer)
+        }
+        .scrollContentBackground(.hidden)
+        .background(SPColor.background)
+        .navigationTitle("Voice Name")
+        .navigationBarTitleDisplayMode(.inline)
     }
 }

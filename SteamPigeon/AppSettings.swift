@@ -47,10 +47,53 @@ final class AppSettings: ObservableObject {
 
     /// English voices the device offers, sorted by name — Android filters to
     /// `locale.language == "en"` and sorts the same way.
+    ///
+    /// **Novelty voices are excluded, which Android has no need to do.** Its engine
+    /// offers none; iOS ships Bubbles, Bells, Boing, Zarvox and a dozen more alongside
+    /// the real ones, and a rocket's altitude read out by Bubbles is not a callout. The
+    /// list is what the user picks from, so this is the place to draw it.
     static func availableVoices() -> [AVSpeechSynthesisVoice] {
         AVSpeechSynthesisVoice.speechVoices()
-            .filter { $0.language.hasPrefix("en") }
+            .filter { $0.language.hasPrefix("en") && !isNovelty($0) }
             .sorted { $0.name < $1.name }
+    }
+
+    /// Identifiers of the novelty voices, for the iOS 16 path.
+    ///
+    /// Enumerated from the device rather than written from memory, and that mattered
+    /// twice. **Names are not stable** — Jester ships as `…voice.Hysterical`, Superstar
+    /// as `…voice.Princess`, Wobble as `…voice.Deranged` — so a name-based list breaks
+    /// silently when Apple renames one. And the tempting shortcut of excluding the
+    /// legacy `com.apple.speech.synthesis.voice.` prefix is **wrong**: Fred, Junior,
+    /// Kathy and Ralph share it and Apple does not class them as novelty, so that rule
+    /// would quietly remove four ordinary voices.
+    private static let noveltyIdentifiers: Set<String> = [
+        "com.apple.speech.synthesis.voice.Albert",
+        "com.apple.speech.synthesis.voice.BadNews",
+        "com.apple.speech.synthesis.voice.Bahh",
+        "com.apple.speech.synthesis.voice.Bells",
+        "com.apple.speech.synthesis.voice.Boing",
+        "com.apple.speech.synthesis.voice.Bubbles",
+        "com.apple.speech.synthesis.voice.Cellos",
+        "com.apple.speech.synthesis.voice.Deranged",
+        "com.apple.speech.synthesis.voice.GoodNews",
+        "com.apple.speech.synthesis.voice.Hysterical",
+        "com.apple.speech.synthesis.voice.Organ",
+        "com.apple.speech.synthesis.voice.Princess",
+        "com.apple.speech.synthesis.voice.Trinoids",
+        "com.apple.speech.synthesis.voice.Whisper",
+        "com.apple.speech.synthesis.voice.Zarvox",
+    ]
+
+    /// iOS 17 knows this itself; 16 does not, and 16.0 is the deployment target.
+    ///
+    /// The system trait is preferred where it exists so a voice added later is
+    /// classified by Apple rather than by this list going stale.
+    static func isNovelty(_ voice: AVSpeechSynthesisVoice) -> Bool {
+        if #available(iOS 17.0, *) {
+            return voice.voiceTraits.contains(.isNoveltyVoice)
+        }
+        return noveltyIdentifiers.contains(voice.identifier)
     }
 
     /// The copy under the zoom slider.

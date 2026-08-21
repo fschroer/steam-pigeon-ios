@@ -1,8 +1,186 @@
 # Resume here — iOS port
 
-Updated 2026-08-20. The two bugs the previous handoff opened are closed: one was real
-and is fixed, one did not reproduce and is explained below. Repo state: **256 tests
-passing**, clean build with no warnings from our own sources.
+Updated 2026-08-20. **340 tests passing**, clean build with no warnings from our own
+sources. Three pieces of work below: the sheet crash and its companion non-bug, the
+flight-map parity pass, and the nine gaps that pass turned up.
+
+---
+
+## ⚠️ Read `../rocket-flight-manager` before touching UI. All of it, not a grep.
+
+Four map defects were reported from the phone and **all four came from assuming what
+the Android app did**. Three map controls shipped defaulting off because four lines of
+`mutableStateOf(true)` went unread; two controls were simply missing; and the fifteen
+lines of gesture backoff that make Android's map usable were absent, which reached the
+user as three separate bugs.
+
+This is now a standing rule at the top of `CLAUDE.md`. The full comparison is in
+`docs/UI_PARITY.md` under *Flight map — line-by-line audit*; the nine gaps it opened
+are now closed, and it records what was deliberately left and why. Start there rather
+than re-deriving it.
+
+---
+
+## Flight map parity pass — DONE, needs the phone to confirm
+
+Fixed: auto-zoom and magnetic-orientation defaults (both now ON, as Android);
+record-track and reset-track controls added; auto-centre icon corrected to a crosshair;
+rotate/zoom/scroll gestures stated explicitly; and the **gesture backoff** — while the
+user is touching the camera, and for five seconds after, the auto-camera writes
+nothing, exactly as Android's `MapCameraController` returns early on
+`userGestureRecent`. A control tap cancels the window so the tap is not swallowed.
+
+That last one is one fix for three reported symptoms — pinch wander, pan snap-back, and
+rotation springing back — because `applyCamera` runs from `updateUIView` and reporting
+the camera back into SwiftUI state re-renders the view, so every gesture frame invited a
+camera write on top of the finger. `MapGestureBackoffTests` pins it.
+
+**Confirmed on the simulator:** the control column now shows six buttons in Android's
+order with Android's defaults and tint rules (record is RED while recording; reset is
+always full white).
+
+### Then the nine gaps that audit turned up — also DONE
+
+Seven implemented, two needing no code. New pure types, all unit-tested:
+`CameraFraming` (deadband sizing and ground geometry), `CameraFilter` (Android's
+per-frame Kalman with latched anchors, driven by a `CADisplayLink`), `TrackRecording` /
+`TrackRecorder` (pad silence, landing freeze, new-flight reset), `TrackStore`
+(`flight_path.csv`, Android's format including legacy rows). Auto-zoom now actually
+does something; auto-centre frames rocket AND phone rather than the rocket alone.
+
+Two were correctly no-ops: the archived-path control has nothing to toggle until
+flight-data download lands, and Android's `showControls` is dead state there, so iOS
+showing the column always is already right.
+
+**One divergence found and fixed while doing it:** the track was thinned to a 2 m
+minimum separation. Android does not do that, and its own dedup test warns that the
+rule silently swallows the slow movement of a descent under canopy. What keeps the pad
+quiet on Android is recording nothing before launch, which is now ported.
+
+**Visibly confirmed on the simulator:** the map opens centred on the phone at z12
+instead of on null island, and a pan holds instead of springing back. The rest of the
+camera work needs a locator — see below.
+
+### Third round — rotation smoothing, the "Disarmed" banner, the pad alert
+
+Three more observations from the phone, all overlays the audit had not covered:
+
+- **Rotation was jerky** because the bearing was not filtered. That was my judgement in
+  the previous pass and it was wrong: CoreLocation smooths the heading VALUE but
+  delivers it a few times a second, while the camera is written every frame. Now at
+  Android's gain of .01, with the shortest-turn wrap so crossing north does not spin
+  the map the long way.
+- **The "Disarmed" banner had never been ported.** `FlightBanner` + `PulsingText`,
+  composed exactly as Android composes it — two independent lines, escalation that
+  replaces rather than adds. **Confirmed on the simulator.**
+- **The pad alert (ADR-0021) had no UI.** Worth knowing: the locator computes the
+  verdict from continuity, primary axis and attitude and sends it as one byte — the app
+  only displays it. The wire decode was already right; only the banner escalation and
+  the snooze control were missing. Snooze is locator-directed with a target (ADR-0020).
+
+**Left as-is deliberately:** the escalated banner wraps to five lines at 57 pt and runs
+under the control column. Android composes it identically, so this is believed faithful
+— but that is a legibility question and wants a side-by-side screenshot, which nobody
+has taken.
+
+### Fourth round — compass control, banner font, receiver picker
+
+- **The compass button was greyed out** under magnetic interference. Android never
+  disables it: `compassUsable` gates the BEARING, not the control. Trust suppression is
+  unchanged; the button is now always live, and the rose's calibration mark is what
+  says the compass is doubted.
+- **Banners were bold.** Android keeps Material 3's baseline weight and swaps only the
+  family, and the baseline display styles are Regular. `displayLarge`/`displayMedium`
+  are now Roboto-Regular. **Confirmed on the simulator.** `titleMedium`/`titleSmall`
+  are a separate W500 question — see `UI_PARITY.md` before touching them.
+- **Two receivers offered no choice**, because `startScan` reconnected to a remembered
+  peripheral and skipped scanning. Removed; there is now a 3 s window (Android's
+  `SCAN_DURATION_MS`) and the picker is always offered, for one receiver as well as two.
+  Also fixed: `noDevicesFound` had no producer, so an empty scan said "Scanning" for ever.
+
+### Fifth round — rotation under interference, and the app's voice
+
+- **The map stopped rotating under magnetic interference.** iOS gated the camera
+  heading on compass trust; ADR-0023 gates the **AR overlay** (Decision 5) and its
+  Decision 6 describes the map correcting itself during the figure-eight, which it
+  cannot do if frozen. Android's camera bearing has accuracy nowhere in it. Gate
+  removed; the vector suppression in `updateVector` is untouched.
+- **There was no voice anywhere.** `voiceEnabled`/`voiceIdentifier` were written by
+  Settings and read by nothing. `FlightSpeech` now exists (AVSpeechSynthesizer,
+  `.playback` session so the ring/silent switch cannot mute a launch), plus
+  `PadAlertAnnouncer` — spoken warning on the rising edge and every 30 s while alerting,
+  never while snoozed — and the arm/disarm announcement.
+- **The pad alert now vibrates**, on Android's exact waveform (260/140/260/2400 ms,
+  looping), via CoreHaptics with a two-tap fallback. NOT gated on the speech setting.
+
+**Still missing: the flight callouts.** `FlightSpeechAnnouncer` — ascent, descent,
+apogee, landing prediction, link loss — is still unported. The engine exists for it now.
+Remember the ADR-0022 rule when porting it: a withheld distance must mean **silence**,
+not a stale number read aloud.
+
+### Sixth round — the half-restored receiver, and the voice list
+
+- **A receiver connected itself with a grey icon and would not arm.** One cause:
+  `willRestoreState` adopted the peripheral and never re-ran GATT discovery, so the link
+  stopped at `.connected` and never reached `.ready`. iOS restores the connection, not
+  the session on top of it, and `didConnect` does not fire for an already-connected
+  peripheral. The scan now also seeds from `retrieveConnectedPeripherals`, so the held
+  receiver appears in the picker instead of being the missing one; choosing another
+  cancels the previous connection; and a duplicate `startScan` no longer discards a
+  window's finds.
+- **The voice list** now excludes novelty voices (`isNoveltyVoice` on iOS 17+, an
+  identifier list on 16) and is a pushed checkmark list rather than a snap-back wheel.
+  **Confirmed on the simulator.** Do NOT "simplify" the filter to the
+  `com.apple.speech.synthesis.voice.` prefix — Fred, Junior, Kathy and Ralph share it
+  and are not novelty. `VoiceSelectionTests` pins both halves.
+
+### Seventh round — the escalation that would not clear when armed
+
+The locator stops sending `PreLaunchData` the moment it is armed. The banner read
+`model.prelaunch?.padAlert`, so arming froze the last pre-launch value and disarming
+was what finally overwrote it — hence the inverted behaviour reported. `padAlert` and
+`padAlertSnoozeMinutes` are now their own view-model state, set from pre-launch and
+**cleared explicitly by telemetry**, exactly as Android does.
+
+The same latching was on the **batteries** — pre-launch-only fields read with no
+freshness test, which would have shown the pre-flight charge all flight. Now aged on
+`isPreLaunchFresh` / `lastPreLaunchMessage`.
+
+**Rule for anything added later:** a field carried only by `PreLaunchData` must never be
+read off the last-seen object. Give it its own state written by both branches, or age it
+on `isPreLaunchFresh`. Device names are the deliberate exception.
+
+### Eighth round — continuity that needed an app restart
+
+The mirror of the seventh. The view read `telemetry ?? prelaunch`, but `telemetry` is
+never nil again once a flight has happened and the locator returns to `PreLaunchData` on
+every disarm and after every landing — so the last in-flight value won for the rest of
+the session. Android's rule is **newest wins**, because it merges both messages into one
+`rocketState`. `LinkViewModel.newest(_:_:)` now applies that rule, and position,
+accuracy, satellites, GPS status, RSSI, SNR, AGL and the tilt altitude went through the
+same fix. Position was the worst of them: after a landing the marker would have sat at
+the last in-flight fix.
+
+**Before adding any field that comes off a broadcast, decide which of three categories
+it is in** — both / telemetry-only / pre-launch-only. The table is in `UI_PARITY.md`.
+Getting it wrong is silent in both directions, and both directions have now been
+reported from the phone.
+
+**NOT confirmable on the simulator, needs the phone plus a locator:**
+
+- **Pinch wander and pan snap-back** need a rocket fix — with no locator,
+  `autoCentreOn` is nil and nothing contends for the camera in the first place.
+- **The greyed-out compass button** and **rotation under interference** cannot be
+  reproduced there: the simulator has no magnetometer, so compass trust never leaves
+  `high`.
+- **The pad-alert voice and haptic** need a locator to raise the alert, and the
+  simulator has no haptic engine at all — it would take the fallback path.
+- **Two receivers and the restoration fix**, obviously — the simulator has no
+  Bluetooth at all. The restored-link path needs a relaunch against a live receiver.
+- **Rotation smoothing** cannot be judged there at all:
+  `CLLocationManager.headingAvailable()` is false on the simulator, so
+  `trueHeadingDeg` stays nil and heading-up never engages. Verified by the absence of
+  `startUpdatingHeading` in the launch log.
 
 ---
 
@@ -128,28 +306,30 @@ locator password gate. Others remain open.
 
 **Outstanding, roughly in value order:**
 
-1. **Confirm the sheet fix on the phone** (Bug 1 above) — the only outstanding piece of
-   it, and the only machine that can show it. Then re-measure the receiver-switch
-   delay, which no longer has a candidate cause.
-2. **Auto-zoom deadband** — the toggle exists, the behaviour does not. Port
-   `recenterDeadbandM`, `autoZoomDeadbandLevels`, `viewportLimitedDeadbandM` from
-   `FlightMapScreen.kt`; approximating it produces a camera that hunts.
-3. **TTS callouts** — `AppSettings.voiceEnabled` / `voiceIdentifier` already exist and
-   are unconsumed. See `FlightSpeechAnnouncer` and the ADR-0022 rule that a withheld
+1. **Confirm on the phone**, the only machine that can show any of it: the sheet fix
+   (Bug 1), and the three map-gesture fixes with a locator powered up. Then re-measure
+   the receiver-switch delay, which no longer has a candidate cause.
+2. **Flight TTS callouts** — the speech engine now exists (`FlightSpeech`) and the pad
+   alert and arm/disarm use it. `FlightSpeechAnnouncer`'s ascent/descent/apogee/landing
+   /link-loss callouts are still unported. The ADR-0022 rule applies: a withheld
    distance must mean **silence**, not a stale number read aloud.
-4. **Remaining screens:** Receiver Settings (463 lines), Locator Settings (759),
+3. **Remaining screens:** Receiver Settings (463 lines), Locator Settings (759),
    Flight Profiles (1,002), Deployment Test (160), Download maps (677).
-5. **Flight-data download** (ADR-0009) — iOS throughput is still unmeasured, which
-   ADR-0016 flags as an open unknown.
-6. **Camera passthrough** behind the heads-up gauges (landscape).
+4. **Flight-data download** (ADR-0009) — iOS throughput is still unmeasured, which
+   ADR-0016 flags as an open unknown. It also unblocks the archived-path map control,
+   which is the one flight-map gap deliberately left open.
+5. **Camera passthrough** behind the heads-up gauges (landscape).
 
 ## Standing instructions worth carrying over
 
 - **Mirror Android in functionality and presentation**, per ADR-0016's 2026-08-19
   clarification: the bar is that **one user manual serves both platforms**. Six
   sanctioned iOS departures are listed there.
-- **Read the Android source before implementing**, not just grep it. Most defects this
-  session came from inferring a value or a style instead of reading what the widget
-  specifies — including two documented in comments right next to the code.
+- **Read the Android source before implementing, and read ALL of it — not a grep.**
+  This is now a rule in `CLAUDE.md` rather than a note here, because it has been the
+  finding of every review so far, and on 2026-08-20 it was restated by fschroer after
+  four map defects that were all the same mistake. Defaults, ordering, tint rules,
+  thresholds and gesture handling are requirements, not details — and two of them were
+  documented in comments sitting next to the code.
 - Check call sites for placeholders (`nil`, hardcoded literals) before committing.
   Three separate defects were a placeholder left behind.

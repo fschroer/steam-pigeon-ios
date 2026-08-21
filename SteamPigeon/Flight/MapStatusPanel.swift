@@ -35,6 +35,11 @@ struct MapStatusPanel: View {
     var onRescan: (() -> Void)?
     var onToggleArmed: (() -> Void)?
 
+    /// ADR-0021 pad alert, as the locator reports it. Drives the snooze control.
+    var padAlert: PadAlertState = .quiet
+    var padAlertSnoozeMinutes: Int = 0
+    var onSnoozePadAlert: (() -> Void)?
+
     // Android's metrics, not approximations of them (FlightMapScreen.kt:2142-2146).
     // The name column is FIXED, not flexible: a flexible one grows into the icon
     // gutter as soon as a name is long, which is exactly the crowding this avoids.
@@ -87,6 +92,12 @@ struct MapStatusPanel: View {
         actionsExpanded.toggle()
         collapseTask?.cancel()
         guard actionsExpanded else { return }
+        scheduleCollapse()
+    }
+
+    /// (Re)start the idle timer that tidies the dropdown away.
+    private func scheduleCollapse() {
+        collapseTask?.cancel()
         collapseTask = Task {
             try? await Task.sleep(for: Self.collapseDelay)
             if !Task.isCancelled { actionsExpanded = false }
@@ -121,6 +132,29 @@ struct MapStatusPanel: View {
             actionButton("Rescan", container: SPColor.primary, content: SPColor.onPrimary) {
                 actionsExpanded = false
                 onRescan?()
+            }
+
+            // Snooze appears ONLY while the alert is actually sounding, so it cannot be
+            // pressed pre-emptively to keep a rocket permanently quiet. It is the
+            // operator saying "still prepping" (ADR-0021 Decision 5), and the locator
+            // bounds it regardless of what the app asks for — a snooze that could be
+            // made indefinite is an off switch, and hands back the forgotten arm this
+            // exists to catch.
+            if padAlert != .quiet {
+                // Disabled at the ceiling rather than hidden, so "no more" is visible
+                // instead of the control vanishing. And it does NOT collapse the panel:
+                // tapping to accumulate should not cost a re-open each time.
+                let atCeiling = padAlertSnoozeMinutes >= PadAlertState.snoozeCeilingMinutes
+                actionButton(padAlert == .snoozed
+                             ? "Snoozed \(padAlertSnoozeMinutes) min — add \(PadAlertState.snoozeStepMinutes)"
+                             : "Snooze \(PadAlertState.snoozeStepMinutes) min",
+                             container: SPColor.tertiary, content: SPColor.onTertiary,
+                             enabled: !atCeiling) {
+                    onSnoozePadAlert?()
+                    // Restart the collapse timer rather than defeating it: tap as often
+                    // as you like, and it still closes once you stop.
+                    scheduleCollapse()
+                }
             }
 
             // Disarm is error-coloured, as on Android: the consequences of the two
