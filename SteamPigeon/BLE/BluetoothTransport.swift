@@ -143,8 +143,21 @@ final class BluetoothTransport: NSObject {
     /// path — it scans for a fixed window and always raises the picker on what it
     /// found — and someone with two receivers could not reach the second one here
     /// without understanding why.
+    /// Whether CoreBluetooth will accept a command at all.
+    ///
+    /// Every central command is gated on this. CoreBluetooth does not queue a command
+    /// issued in any other state — it logs `API MISUSE: … can only accept this command
+    /// while in the powered on state` and **drops it**, so an ungated call is not merely
+    /// noisy, it is an action the app believes it took and did not. Reported from the
+    /// phone as that log line on 2026-08-21.
+    private var canCommandCentral: Bool { central.state == .poweredOn }
+
+    /// A restored connection whose GATT session still has to be rebuilt. Set by
+    /// `willRestoreState`, consumed the moment the central reports `.poweredOn`.
+    private var needsRestoredDiscovery = false
+
     func startScan() {
-        guard central.state == .poweredOn else { return }
+        guard canCommandCentral else { return }
         // A scan already running is left alone, as Android does ("scan already in
         // progress — ignoring duplicate call"). `startScan` is reached twice at
         // launch — once from `centralManagerDidUpdateState` on poweredOn, once from
@@ -181,8 +194,11 @@ final class BluetoothTransport: NSObject {
     }
 
     func stopScan() {
+        // Our own timer dies either way: a scan window that cannot be stopped at the
+        // radio is still over as far as this app is concerned.
         scanWindowTimer?.invalidate()
         scanWindowTimer = nil
+        guard canCommandCentral else { return }
         central.stopScan()
     }
 
@@ -193,6 +209,10 @@ final class BluetoothTransport: NSObject {
     }
 
     func connect(to p: CBPeripheral) {
+        // Refused rather than attempted: a connect issued while the radio is off is
+        // dropped, and the app would sit in `.connecting` for a connection nobody asked
+        // for. `centralManagerDidUpdateState` scans again when power returns.
+        guard canCommandCentral else { return }
         stopScan()
         // Let go of the previous one FIRST. Without this, choosing the other receiver
         // left the first still connected and merely un-referenced — it keeps its
@@ -208,8 +228,12 @@ final class BluetoothTransport: NSObject {
     }
 
     func disconnect() {
+        // The watchdog stops either way. If the radio is off the link is already gone —
+        // there is nothing to cancel, and pretending otherwise leaves a timer probing a
+        // connection that no longer exists.
         stopHealthWatchdog()
-        if let p = peripheral { central.cancelPeripheralConnection(p) }
+        guard canCommandCentral, let p = peripheral else { return }
+        central.cancelPeripheralConnection(p)
     }
 
     // MARK: - Sending
@@ -277,7 +301,17 @@ extension BluetoothTransport: CBCentralManagerDelegate {
 
     func centralManagerDidUpdateState(_ c: CBCentralManager) {
         switch c.state {
-        case .poweredOn:    startScan()
+        case .poweredOn:
+            // A restored connection's GATT session is rebuilt HERE, at the first moment
+            // CoreBluetooth accepts commands.
+            if needsRestoredDiscovery, let p = peripheral,
+               p.state == CBPeripheralState.connected {
+                needsRestoredDiscovery = false
+                p.discoverServices([Self.serviceUUID])
+            }
+            // Scanning still runs: the choice of receiver is always offered, and a
+            // restored peripheral is seeded into the list by `retrieveConnectedPeripherals`.
+            startScan()
         case .poweredOff:   state = .poweredOff
         case .unauthorized: state = .unauthorized
         case .unsupported:  state = .unsupported
@@ -294,25 +328,32 @@ extension BluetoothTransport: CBCentralManagerDelegate {
         peripheral = p
         p.delegate = self
 
+        // **The GATT work has to be redone, and this is the whole point of the
+        // callback.** iOS restores the CONNECTION, not the session on top of it:
+        // `didConnect` is not called for a peripheral that is already connected, so
+        // nothing here would ever have discovered services, resolved the characteristics
+        // or subscribed to notifications.
+        //
+        // Reported from the phone as a receiver that connected by itself with a GREY
+        // icon, gated the receiver menu and refused to arm — all of which is `state`
+        // stopping at `.connected` and never reaching `.ready`, because `.ready` is set
+        // when the notify characteristic is subscribed. A manual rescan fixed it because
+        // that path runs `didConnect` properly.
+        //
+        // **The discovery is issued from `centralManagerDidUpdateState`, not here.**
+        // This callback runs BEFORE the central reports `.poweredOn`, and CoreBluetooth
+        // drops any command issued before then — so the redo that fixes the grey icon
+        // was itself liable to be discarded, restoring the exact bug it was written for.
         if p.state == CBPeripheralState.connected {
-            // **The GATT work has to be redone, and this is the whole point of the
-            // callback.** iOS restores the CONNECTION, not the session on top of it:
-            // `didConnect` is not called for a peripheral that is already connected, so
-            // nothing here would ever have discovered services, resolved the
-            // characteristics or subscribed to notifications.
-            //
-            // Reported from the phone as a receiver that connected by itself with a
-            // GREY icon, gated the receiver menu and refused to arm — all of which is
-            // `state` stopping at `.connected` and never reaching `.ready`, because
-            // `.ready` is set when the notify characteristic is subscribed. A manual
-            // rescan fixed it because that path runs `didConnect` properly.
             state = .connected
             framer.reset()      // a half-frame from before the restart must not survive
-            p.discoverServices([Self.serviceUUID])
+            needsRestoredDiscovery = true
         } else {
             state = .connecting
         }
     }
+
+
 
     func centralManager(_ c: CBCentralManager, didDiscover p: CBPeripheral,
                         advertisementData: [String: Any], rssi RSSI: NSNumber) {
