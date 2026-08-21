@@ -1,6 +1,6 @@
 # Resume here — iOS port
 
-Updated 2026-08-20. **340 tests passing**, clean build with no warnings from our own
+Updated 2026-08-20. **380 tests passing**, clean build with no warnings from our own
 sources. Three pieces of work below: the sheet crash and its companion non-bug, the
 flight-map parity pass, and the nine gaps that pass turned up.
 
@@ -165,6 +165,17 @@ the last in-flight fix.
 it is in** — both / telemetry-only / pre-launch-only. The table is in `UI_PARITY.md`.
 Getting it wrong is silent in both directions, and both directions have now been
 reported from the phone.
+
+### Receiver Settings — protocol layer and form landed
+
+Parsers for `receiverInfo` / `versionInfo` / `channelSurvey` plus the ADR-0019 ranking
+model, then the staged form with its Update button. The polled noise floor now reaches
+the link classifier, which closes a real ADR-0019 gap — with its own baseline, the
+absolute test dropped, a 500 ms liveness tick and a 2 s poll during silence. All four
+are load-bearing; the reasoning is in `UI_PARITY.md`.
+
+**Next on this screen:** the channel survey section (the model is ready, the UI is not),
+the ADR-0011 channel-move flow, and the ADR-0006 conflicting-locator banner.
 
 **NOT confirmable on the simulator, needs the phone plus a locator:**
 

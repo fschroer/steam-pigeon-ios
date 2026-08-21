@@ -214,10 +214,10 @@ struct MapScreen: View {
     private func destinationView(_ destination: MenuDestination) -> some View {
         NavigationView {
             Group {
-                if destination == .appSettings {
-                    AppSettingsView(settings: settings)
-                } else {
-                    NotYetBuiltView(destination: destination)
+                switch destination {
+                case .appSettings:      AppSettingsView(settings: settings)
+                case .receiverSettings: ReceiverSettingsView(model: model)
+                default:                NotYetBuiltView(destination: destination)
                 }
             }
                 .navigationTitle(destination.title)

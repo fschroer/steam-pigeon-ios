@@ -380,6 +380,58 @@ app exists to give.
 Getting the category wrong is silent in both directions, and both directions have now
 been reported from the phone within a day of each other.
 
+### Receiver Settings — protocol layer and form (2026-08-20)
+
+Staged deliberately: the three parsers and the ranking model first, then the form.
+
+**The blocker was protocol, not UI.** iOS had the `MsgType` values and framing sizes for
+`receiverInfo`, `versionInfo` and `channelSurvey` but no parsers and no ranking model,
+so nothing on the screen could show real data. Offsets came from the RECEIVER firmware
+header, not the Kotlin. No triad change was needed — every size was already pinned by
+the 2026-08-17 session.
+
+**The polled noise floor now reaches the classifier**, which closes an ADR-0019 gap
+rather than just serving this screen: `ReceiverInfo` is the only message the receiver
+sends on its own behalf, so its floor is the sole channel measurement available during
+locator silence — exactly when "something is on our channel" and "the locator is off"
+are hardest to separate. Three things had to come with it, and none is guessable:
+
+1. **Its own baseline.** Polled readings come from continuous sampling and read higher
+   than the safe-window figure a broadcast carries. One shared minimum-keeping baseline
+   pins itself at the broadcast value and makes every polled reading afterwards look
+   elevated — permanently.
+2. **The absolute floor test is dropped for a polled reading.** `busyFloorDbm` is
+   calibrated for the safe-window statistic; a continuous peak clears it on a channel
+   with nothing on it.
+3. **A liveness tick and a poll during silence.** Without the tick nothing recomputes
+   when no packet arrives, so a link that simply stopped kept asserting the last
+   packet's verdict. Without the poll the floor is expired most of its life — the
+   ADR-0012 watchdog's ~10 s is far longer than the 3 s freshness window — and the note
+   blinks between probes. Android's cadences: liveness 500 ms, poll 2 s, silence
+   threshold 5 s (deliberately longer than `lossyGap`, because polling through routine
+   gaps drains the receiver's peak-since-last-report and shortens the window for the
+   broadcast that follows).
+
+**Form.** Staged edits, never live, with the Update button reporting what the receiver
+said — a config change that silently did nothing is indistinguishable from one that
+never arrived. Confirmation compares the **channel only**: the receiver echoes its
+channel in `PreLaunchData` but never its name, so the name is accepted optimistically
+once the channel matches. Waiting for a value that never arrives would report every
+successful rename as unacknowledged.
+
+Two details worth keeping:
+
+- The receiver's channel and name are read from `PreLaunchData` **outside** the ADR-0006
+  recognition gate. They describe the user's own receiver, not the locator that carried
+  them, and gating them would leave this screen blank in the case it is most needed — an
+  unrecognised locator on the channel you are trying to move off.
+- **A "Revert" button was drafted and removed.** Android pairs Update with "Return to
+  main", which on iOS is the sheet's own Done. Adding a second control Android does not
+  have is how the two apps stop needing the same manual.
+
+**Still to come on this screen:** the channel survey section (the model is ready, the UI
+is not), the ADR-0011 channel-move flow, and the ADR-0006 conflicting-locator banner.
+
 ### Icon substitutions, and why they are substitutions
 
 Android's control icons are Compose `Icons.Default.*` — a library, not drawables in the

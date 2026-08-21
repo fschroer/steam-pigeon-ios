@@ -71,6 +71,91 @@ final class LinkViewModel: ObservableObject {
     /// The classified link verdict, or nil when there is nothing to say.
     @Published private(set) var linkVerdict: LinkQuality.Verdict = .normal
 
+    // MARK: - Receiver-sourced messages
+
+    /// The receiver's own channel, name and channel status.
+    ///
+    /// Its `noiseFloor` feeds the link classifier through `pollChannel` — ADR-0019
+    /// wants this reading specifically because it is the only one that arrives during
+    /// locator silence.
+    @Published private(set) var receiverInfo: ReceiverInfo?
+    /// Locator and receiver firmware versions.
+    @Published private(set) var versionInfo: VersionInfo?
+    /// The last band sweep, already ranked.
+    @Published private(set) var channelSurvey: ChannelSurvey.Result?
+    /// True between asking for a sweep and hearing back. The receiver goes deaf for
+    /// about a second, so silence needs to read as "working", not as a hang.
+    @Published private(set) var surveyInProgress = false
+
+    /// The receiver's configuration as it is believed to be RIGHT NOW.
+    ///
+    /// Fed from two places, because the receiver reports itself two ways: `ReceiverInfo`
+    /// answers a direct question, and every `PreLaunchData` echoes the receiver's own
+    /// channel and name in passing. The second is what makes the settings screen
+    /// correct without asking, and what confirms a channel change.
+    @Published private(set) var remoteReceiverConfig = ReceiverConfig()
+    @Published private(set) var receiverConfigMessageState: ConfigMessageState = .idle
+
+    /// Ask the receiver to sweep the band (ADR-0019 tier 3).
+    ///
+    /// On demand only: a sweep costs about a second of deafness, and the decision it
+    /// informs is made once, on the ground.
+    func requestChannelSurvey() {
+        guard let msg = OutboundMessage.receiverDirected(.channelSurveyRequest) else { return }
+        surveyInProgress = true
+        transport.send(msg)
+    }
+
+    /// Ask the receiver to describe itself. Used on entering Receiver Settings and to
+    /// solicit confirmation after a change — `PreLaunchData` may stop arriving entirely
+    /// when the channel moves, so this is the only reliable acknowledgement path.
+    func requestReceiverInfo() {
+        guard let msg = OutboundMessage.receiverDirected(.receiverInfoRequest) else { return }
+        transport.send(msg)
+    }
+
+    /// Send a receiver configuration change and wait for the receiver to confirm it.
+    ///
+    /// **Confirmation compares the CHANNEL only.** The receiver echoes its channel back
+    /// in `PreLaunchData` but never its name, so the name is accepted optimistically
+    /// once the channel matches — there is nothing else to wait for, and waiting for a
+    /// value that never arrives would report every successful rename as unacknowledged.
+    func changeReceiverConfig(_ config: ReceiverConfig) {
+        guard let msg = OutboundMessage.receiverDirected(.receiverCfgChgRequest,
+                                                         payload: config.payload) else {
+            receiverConfigMessageState = .sendFailure
+            return
+        }
+        receiverConfigMessageState = .sendRequested
+        transport.send(msg)
+        receiverConfigMessageState = .sent
+
+        Task { @MainActor in
+            // The BLE module is reset as part of a name change, so the link drops and
+            // reconnects; a channel change can stop PreLaunchData entirely. Ask
+            // directly rather than waiting to be told.
+            try? await Task.sleep(for: .milliseconds(300))
+            requestReceiverInfo()
+
+            // Android polls 50 × 100 ms. Same five seconds, same cadence.
+            for _ in 0..<50 {
+                try? await Task.sleep(for: .milliseconds(100))
+                if remoteReceiverConfig.channel == config.channel {
+                    remoteReceiverConfig.deviceName = config.deviceName
+                    receiverConfigMessageState = .ackUpdated
+                    break
+                }
+                if receiverConfigMessageState == .sendFailure { break }
+            }
+            if receiverConfigMessageState.isInFlight {
+                receiverConfigMessageState = .notAcknowledged
+            }
+            // Back to Idle so the button is usable again either way.
+            try? await Task.sleep(for: .seconds(2))
+            receiverConfigMessageState = .idle
+        }
+    }
+
     // MARK: - Things only PreLaunchData carries
     //
     // The locator stops broadcasting `PreLaunchData` the moment it is armed and sends
@@ -80,28 +165,6 @@ final class LinkViewModel: ObservableObject {
     // from BOTH branches, so the stale reading is impossible rather than merely
     // unlikely. Android does the same thing with a separate `padAlert` flow and a
     // `lastPreLaunchDataTime` clock.
-
-    // MARK: - Receiver-sourced messages
-    //
-    // Decoded and published; nothing consumes them yet beyond the diagnostics screen.
-    // The Receiver Settings screen is what they are for.
-
-    /// The receiver's own channel, name and channel status.
-    ///
-    /// **`noiseFloor` here is not yet fed to the link classifier**, and that is a real
-    /// gap rather than an oversight to fix silently: ADR-0019 wants this floor
-    /// specifically because it is the only one that arrives during locator silence,
-    /// which is exactly when "interference" and "the locator is switched off" are hard
-    /// to tell apart. Wiring it into `updateLinkQuality` is a behaviour change and
-    /// belongs with the screen work, not with the parser.
-    @Published private(set) var receiverInfo: ReceiverInfo?
-    /// Locator and receiver firmware versions.
-    @Published private(set) var versionInfo: VersionInfo?
-    /// The last band sweep, already ranked.
-    @Published private(set) var channelSurvey: ChannelSurvey.Result?
-    /// True between asking for a sweep and hearing back. The receiver goes deaf for
-    /// about a second, so silence needs to read as "working", not as a hang.
-    @Published private(set) var surveyInProgress = false
 
     /// ADR-0021 prepped-and-disarmed verdict.
     @Published private(set) var padAlert: PadAlertState = .quiet
@@ -116,6 +179,29 @@ final class LinkViewModel: ObservableObject {
         return Date().timeIntervalSince(last) < RocketMarkerState.messageTimeout
     }
 
+    // MARK: - Channel measurements
+    //
+    // The classifier reads whatever the last measurement left behind, so the app has to
+    // remember WHEN each was taken and WHICH sampling regime produced it.
+
+    /// The last reported values. `noiseFloor` can be refreshed with no packet at all —
+    /// see `pollChannel` — while `rssi`/`snr` cannot, because those describe a packet.
+    private var liveRssi = 0
+    private var liveSnr = 0
+    private var liveNoiseFloor = LinkQuality.noiseFloorUnknown
+    private var lastPacketMeasurement: Date?
+    private var lastFloorMeasurement: Date?
+
+    /// Whether the live floor came from a `ReceiverInfo` poll rather than a broadcast.
+    private var floorFromPoll = false
+
+    /// **Two baselines, never one.** Polled readings come from the receiver's
+    /// continuous-sampling regime and read higher than the safe-window figure a
+    /// broadcast carries. Feeding both into a shared minimum-keeping baseline made
+    /// every polled reading look elevated, permanently — a channel with nothing on it
+    /// reported as interference for the rest of the session.
+    private var quietestPolledFloor = LinkQuality.noiseFloorUnknown
+
     private func updateLinkQuality(rssi: Int, snr: Int, noiseFloor: Int, now: Date = Date()) {
         quietestFloor = LinkQuality.updateQuietestFloor(current: quietestFloor, sample: noiseFloor)
 
@@ -126,15 +212,130 @@ final class LinkViewModel: ObservableObject {
         }
         lastAcceptedBroadcast = now
 
+        liveRssi = rssi
+        liveSnr = snr
+        liveNoiseFloor = noiseFloor
+        lastPacketMeasurement = now
+        if noiseFloor != LinkQuality.noiseFloorUnknown {
+            lastFloorMeasurement = now
+            floorFromPoll = false
+        }
+        reclassifyLink(now: now)
+    }
+
+    /// A channel measurement that needed no locator (ADR-0019).
+    ///
+    /// `ReceiverInfo` is the only message the receiver sends on its own behalf, so this
+    /// is the sole floor reading available during locator silence — which is exactly
+    /// when "something is sitting on our channel" and "the locator is switched off" are
+    /// hardest to tell apart, and the most useful moment to be able to say which.
+    ///
+    /// **`rssi` and `snr` are deliberately left alone.** No packet arrived, so there is
+    /// nothing new to say about them; they age out on their own clock and the
+    /// classifier stops trusting them.
+    private func pollChannel(noiseFloor: Int, badFrames: UInt8, now: Date = Date()) {
+        // Bad frames counted here are loss we can SEE with no locator transmitting at
+        // all: something else is on the channel and being destroyed, which is the case
+        // the gap-based test cannot distinguish from silence.
+        if badFrames > 0 { lastLossy = now }
+
+        guard noiseFloor != LinkQuality.noiseFloorUnknown else { return }
+        quietestPolledFloor = LinkQuality.updateQuietestFloor(current: quietestPolledFloor,
+                                                              sample: noiseFloor)
+        liveNoiseFloor = noiseFloor
+        lastFloorMeasurement = now
+        floorFromPoll = true
+        reclassifyLink(now: now)
+    }
+
+    private func fresh(_ at: Date?, _ now: Date) -> Bool {
+        guard let at else { return false }
+        return now.timeIntervalSince(at) < LinkQuality.staleMeasurement
+    }
+
+    private func reclassifyLink(now: Date) {
         let lossy = lastLossy.map { now.timeIntervalSince($0) < LinkQuality.lossMemory } ?? false
         let foreign = lastForeignBroadcast.map {
             now.timeIntervalSince($0) < LinkQuality.lossMemory
         } ?? false
 
+        // A polled floor is judged against a baseline from its OWN regime, and the
+        // absolute test is dropped: that threshold is calibrated for the safe-window
+        // statistic, and a continuously-sampled peak clears it on a channel with
+        // nothing on it whatsoever.
+        let fromPoll = floorFromPoll
         linkVerdict = LinkQuality.classify(
-            rssi: rssi, snr: snr,
-            noiseFloor: noiseFloor, quietestFloor: quietestFloor,
-            lossy: lossy, foreignLocator: foreign)
+            rssi: liveRssi, snr: liveSnr,
+            noiseFloor: liveNoiseFloor,
+            quietestFloor: fromPoll ? quietestPolledFloor : quietestFloor,
+            lossy: lossy, foreignLocator: foreign,
+            packetFresh: fresh(lastPacketMeasurement, now),
+            floorFresh: fresh(lastFloorMeasurement, now),
+            absoluteFloorTrusted: !fromPoll)
+    }
+
+    /// Re-judge the link while nothing is arriving.
+    ///
+    /// Without this the verdict is only ever recomputed by a packet, so a link that
+    /// simply stopped kept asserting whatever the last packet said — a locator switched
+    /// off went on being reported as a jammed channel indefinitely.
+    private func tickLinkQuality(now: Date = Date()) {
+        let heardLocator = lastLocatorMessage != nil
+        if heardLocator {
+            guard let last = lastLocatorMessage,
+                  now.timeIntervalSince(last) >= LinkQuality.lossyGap else { return }
+            // Only counted as loss when there was a cadence to miss.
+            lastLossy = now
+        } else {
+            // Never heard a locator: the poll is the only thing that knows anything
+            // about the channel, so say nothing until it has spoken recently. Being
+            // able to report an occupied channel to someone who has switched on and is
+            // hearing nothing is the point of the whole polled path.
+            guard fresh(lastFloorMeasurement, now) else { return }
+        }
+        reclassifyLink(now: now)
+    }
+
+    /// Keep a live channel measurement coming while the locator is silent.
+    ///
+    /// The ADR-0012 health watchdog already asks for `ReceiverInfo`, but on a ~10 s
+    /// cadence — far longer than a measurement stays fresh — so a floor sourced from it
+    /// would be expired for most of its life and the interference note would blink on
+    /// and off between probes.
+    ///
+    /// **Not started at the first missed broadcast**, and the threshold is deliberately
+    /// longer than `lossyGap`: a distant rocket routinely drops a broadcast or two, and
+    /// while the locator is transmitting at all the packets that DO arrive carry the
+    /// floor themselves. Polling through those gaps is not merely redundant — the
+    /// receiver's floor is a peak-since-last-report that every reader drains, so an
+    /// extra reader shortens the window for the broadcast that follows.
+    private func channelWatchTick(now: Date = Date()) {
+        guard state == .ready else { return }
+        let silent = lastLocatorMessage.map {
+            now.timeIntervalSince($0) >= Self.channelWatchSilence
+        } ?? true
+        guard silent, let msg = OutboundMessage.receiverDirected(.receiverInfoRequest) else { return }
+        transport.send(msg)
+    }
+
+    /// Android's `LINK_LIVENESS_TICK_MS` and `CHANNEL_WATCH_TICK_MS` / `_SILENCE_MS`.
+    private static let livenessTick: TimeInterval = 0.5
+    private static let channelWatchTick: TimeInterval = 2
+    private static let channelWatchSilence: TimeInterval = 5
+
+    private var livenessTimer: Timer?
+    private var channelWatchTimer: Timer?
+
+    private func startLinkTimers() {
+        guard livenessTimer == nil else { return }
+        livenessTimer = Timer.scheduledTimer(withTimeInterval: Self.livenessTick,
+                                             repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.tickLinkQuality() }
+        }
+        channelWatchTimer = Timer.scheduledTimer(withTimeInterval: Self.channelWatchTick,
+                                                 repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.channelWatchTick() }
+        }
     }
 
     /// Recorded ground track of the connected locator, oldest first.
@@ -355,6 +556,11 @@ final class LinkViewModel: ObservableObject {
         receiverInfo = nil
         channelSurvey = nil
         surveyInProgress = false
+        quietestPolledFloor = LinkQuality.noiseFloorUnknown
+        liveNoiseFloor = LinkQuality.noiseFloorUnknown
+        lastFloorMeasurement = nil
+        lastPacketMeasurement = nil
+        floorFromPoll = false
         latestBroadcast = .none
         padAlert = .quiet
         padAlertSnoozeMinutes = 0
@@ -471,6 +677,7 @@ final class LinkViewModel: ObservableObject {
     func start() {
         transport.startScan()
         phone.start()
+        startLinkTimers()
     }
 
     /// Recompute the vector to the connected locator after a new broadcast.
@@ -542,6 +749,13 @@ final class LinkViewModel: ObservableObject {
                     updateLinkQuality(rssi: Int(m.rssi), snr: Int(m.snr),
                                       noiseFloor: Int(m.noiseFloor))
                 }
+                // OUTSIDE the recognition gate, deliberately: the receiver's own
+                // channel and name describe the user's receiver, not the locator that
+                // happened to carry them. Gating them on recognising the locator would
+                // leave Receiver Settings blank in exactly the case it is most needed —
+                // an unrecognised locator on the channel you are trying to move off.
+                remoteReceiverConfig.channel = Int(m.channel)
+                if !m.receiverName.isEmpty { remoteReceiverConfig.deviceName = m.receiverName }
             }
         case .telemetryData:
             if let m = TelemetryData.parse(frame) {
@@ -573,7 +787,12 @@ final class LinkViewModel: ObservableObject {
         case .receiverInfo:
             // The ADR-0012 health probe's answer, and the ONLY message the receiver
             // sends with no locator involved.
-            if let m = ReceiverInfo.parse(frame) { receiverInfo = m }
+            if let m = ReceiverInfo.parse(frame) {
+                receiverInfo = m
+                remoteReceiverConfig.channel = Int(m.channel)
+                if !m.deviceName.isEmpty { remoteReceiverConfig.deviceName = m.deviceName }
+                pollChannel(noiseFloor: Int(m.noiseFloor), badFrames: m.badFrames)
+            }
         case .versionInfo:
             if let m = VersionInfo.parse(frame) { versionInfo = m }
         case .channelSurvey:
