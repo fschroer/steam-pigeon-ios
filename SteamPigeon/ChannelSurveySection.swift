@@ -22,7 +22,7 @@ struct ChannelSurveySection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Button(inProgress ? "Scanning… (about 7 seconds)" : "Find a clean channel", action: onScan)
-                .buttonStyle(.bordered)
+                .buttonStyle(.materialOutlined)
                 .disabled(!enabled || inProgress)
 
             if let survey { results(survey) }
@@ -81,7 +81,7 @@ struct ChannelSurveySection: View {
                 // this moves the whole system, without one it only re-points the
                 // receiver.
                 Button(locatorConnected ? "Move here" : "Point receiver") { onPick(s.channel) }
-                    .buttonStyle(.borderless)
+                    .buttonStyle(.materialText)
             }
         }
 

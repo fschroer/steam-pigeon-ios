@@ -1,13 +1,23 @@
 # Resume here — iOS port
 
-Updated 2026-08-21. **473 tests passing**, clean build with no warnings from our own
+Updated 2026-08-21. **483 tests passing**, clean build with no warnings from our own
 sources.
 
+**Every Android screen is now ported.** What is left is features inside screens, and
+hardware time — see below.
+
 **Hardware status: everything testable has been tested on the phone except an actual
-flight — and except Flight Profiles and Download maps, both of which landed 2026-08-21
-and have only been driven on the simulator.** Download maps did download a real region
-there, which is the half of it a fixture could not fake; Flight Profiles ran against
-fixtures only. fschroer exercised the map, the settings screens,
+flight — and except the three screens that landed 2026-08-21 (Flight Profiles, Download
+maps, Deployment Test), which have only been driven on the simulator.** Download maps did
+download a real region there, which is the half of it a fixture could not fake; the other
+two ran against fixtures only.
+
+**Deployment Test deserves its own line: it fires a pyro channel, and nothing about it
+has touched hardware.** The state machine is tested and the four screen states were
+driven on the simulator, but the frames have never been sent, and ADR-0027's sharp edge —
+that the stop path is one unacknowledged LoRa frame through a receiver whose transmit
+window the locator's own silence can close — is exactly the kind of thing a bench test
+finds and a unit test cannot. Bench it with an e-match nobody is standing over. fschroer exercised the map, the settings screens,
 the receiver picker, the channel move, the pad alert and the voice against real hardware.
 What remains unproven is what only a flight can prove, plus a real archived-record
 download — see *Not yet exercised* below.
@@ -84,13 +94,19 @@ standing rule is still Android-first.
 
 ## Where the port stands
 
-**Screens done:** flight map (with the full camera model), Application Settings, Receiver
-Settings, Locator Settings, **Flight Profiles** (the record list and the chart) and
-**Download maps** (region picker, estimate, offline pack download, region management).
+**Screens done: all seven.** Flight map (with the full camera model), Application
+Settings, Receiver Settings, Locator Settings, Flight Profiles (the record list and the
+chart), Download maps (region picker, estimate, offline pack download, region management)
+and Deployment Test.
 
-**One screen remains: Deployment Test (160 lines).** It is the smallest of the seven and
-needs no new plumbing — `deploymentTestRequest` is already in `MsgType` and the countdown
-message is already framed. ADR-0027 is the behaviour to implement.
+**No screens remain.** Deployment Test landed 2026-08-21, and with it the placeholder
+view for unbuilt destinations is gone — every menu entry opens something real.
+
+**Read `docs/UI_PARITY.md` § "Deployment Test" before touching it.** The rule that shapes
+the whole screen is that the display follows the LOCATOR, never the app's own hope, and
+Android's comments record what it cost to learn: an early cancel-clears-state made the app
+deaf to the countdown that was still running, so the button read "start" while the locator
+counted down and fired.
 
 **The flight-data transfer layer landed with Flight Profiles** —
 `FlightDataRepository.swift` (bitmap ack, XOR parity FEC, the delta codec),

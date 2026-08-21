@@ -142,7 +142,7 @@ struct FlightProfilesView: View {
                     .font(SPFont.bodyLarge)
                     .foregroundStyle(SPColor.onBackground)
                 Button("Return") { model.returnToFlightProfileList() }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.materialOutlined)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .padding(16)
@@ -180,7 +180,7 @@ struct FlightProfilesView: View {
     /// and leaves the button itself hugging its text.
     private func returnButton(action: @escaping () -> Void) -> some View {
         Button(action: action) { Text("Return").frame(maxWidth: .infinity) }
-            .buttonStyle(.bordered)
+            .buttonStyle(.materialOutlined)
     }
 }
 
@@ -269,7 +269,7 @@ private struct FlightProfileChart: View {
                 Spacer().frame(height: geo.size.height / 12)
 
                 Button(action: onReturn) { Text("Return").frame(maxWidth: .infinity) }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.materialOutlined)
             }
             .padding(16)
         }

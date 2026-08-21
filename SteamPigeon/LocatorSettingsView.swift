@@ -86,7 +86,7 @@ struct LocatorSettingsView: View {
                 model.changeLocatorConfig(staged)
                 edited = false
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.materialFilled)
             .disabled(!edited || busy)
             .padding(16)
         }

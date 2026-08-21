@@ -76,7 +76,7 @@ struct ReceiverSettingsView: View {
                             Spacer()
                             Button("Dismiss") { model.dismissConflict() }
                         }
-                        .buttonStyle(.borderless)
+                        .buttonStyle(.materialText)
                         Divider()
                     }
 
@@ -110,7 +110,7 @@ struct ReceiverSettingsView: View {
                                                                   : SPColor.onSurfaceVariant)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                             Button("Dismiss") { model.clearPendingChannelMove() }
-                                .buttonStyle(.borderless)
+                                .buttonStyle(.materialText)
                         }
                     }
 
@@ -150,7 +150,7 @@ struct ReceiverSettingsView: View {
                 model.changeReceiverConfig(staged)
                 edited = false
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.materialFilled)
             .disabled(!edited || model.receiverConfigMessageState != .idle)
             .padding(16)
         }

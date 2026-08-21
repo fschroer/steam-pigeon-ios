@@ -146,10 +146,9 @@ struct DownloadMapView: View {
             Text(presets.isEmpty
                  ? "No preset sites — see \(LaunchSiteRepository.displayPath)"
                  : "Go to preset site…")
-                .font(SPFont.labelLarge)
                 .frame(maxWidth: .infinity)
         }
-        .buttonStyle(.bordered)
+        .buttonStyle(.materialOutlined)
         .disabled(downloading || presets.isEmpty)
     }
 
@@ -195,7 +194,7 @@ struct DownloadMapView: View {
             }
 
             Button("Go", action: goToLatLon)
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.materialFilled)
                 .disabled(downloading || latLonDisplay.isEmpty)
         }
     }
@@ -232,11 +231,11 @@ struct DownloadMapView: View {
             ForEach(SatelliteProvider.allCases) { p in
                 if p == provider {
                     Button { pick(p) } label: { providerLabel(p) }
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(.materialFilled)
                         .disabled(!p.isAvailable)
                 } else {
                     Button { pick(p) } label: { providerLabel(p) }
-                        .buttonStyle(.bordered)
+                        .buttonStyle(.materialOutlined)
                         .disabled(!p.isAvailable || downloading)
                 }
             }
@@ -245,7 +244,6 @@ struct DownloadMapView: View {
 
     private func providerLabel(_ p: SatelliteProvider) -> some View {
         Text(p.isAvailable ? p.displayName : "\(p.displayName) (no token)")
-            .font(SPFont.labelLarge)
             .frame(maxWidth: .infinity)
     }
 
@@ -344,7 +342,7 @@ struct DownloadMapView: View {
                     // Only once the pack exists — between the button press and the pack
                     // being created there is nothing to stop.
                     Button("Cancel") { downloads.cancel() }
-                        .buttonStyle(.borderless)
+                        .buttonStyle(.materialText)
                         .disabled(!download.cancelable)
                 }
             case .complete:
@@ -369,7 +367,7 @@ struct DownloadMapView: View {
                 .fixedSize(horizontal: false, vertical: true)
             Spacer()
             Button("Dismiss") { downloads.clearFinished() }
-                .buttonStyle(.borderless)
+                .buttonStyle(.materialText)
         }
     }
 
@@ -391,10 +389,9 @@ struct DownloadMapView: View {
         } label: {
             Text(overBudget ? "Over 1 GB — tighten the area or lower the zoom"
                             : "Download this area for offline")
-                .font(SPFont.labelLarge)
                 .frame(maxWidth: .infinity)
         }
-        .buttonStyle(.borderedProminent)
+        .buttonStyle(.materialFilled)
         .disabled(bounds == nil || downloading || overBudget)
     }
 
@@ -432,7 +429,7 @@ struct DownloadMapView: View {
                                             .resumeRegion(info)
                                     }
                                 }
-                                .buttonStyle(.borderless)
+                                .buttonStyle(.materialText)
                                 .disabled(downloading)
                             }
                             // Deleting is blocked outright during a download: MapLibre

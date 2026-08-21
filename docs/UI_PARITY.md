@@ -1,12 +1,14 @@
 # Android ⇄ iOS UI parity — inventory, audits and deliberate gaps
 
-**Status, 2026-08-21.** The flight map, Application Settings, Receiver Settings,
-Locator Settings, **Flight Profiles** and **Download maps** are ported. Everything up to
-Locator Settings has been exercised on hardware; the two newest screens have been driven
-on the simulator only — though Download maps has downloaded a real region there, which is
-the half of it that could not be faked. **Deployment Test is the last screen.** The
-flight-data transfer layer landed with Flight Profiles, which also unblocks the
-archived-path map control (still to build).
+**Status, 2026-08-21. Every Android screen is ported.** The flight map, Application
+Settings, Receiver Settings, Locator Settings, Flight Profiles, Download maps and
+Deployment Test. Everything up to Locator Settings has been exercised on hardware; the
+three newest screens have been driven on the simulator only — though Download maps has
+downloaded a real region there, which is the half of it that could not be faked.
+
+What remains is **features inside screens**, not screens: the flight TTS callouts, the
+camera passthrough behind the heads-up gauges, the archived-path map control (unblocked
+by the flight-data transfer layer), and path export. `NEXT_SESSION.md` has the list.
 
 **How to use this file.** The audits below are the record of what was compared against
 Android and what was found — read the one for the screen you are about to touch before
@@ -66,7 +68,7 @@ Android UI is ~11,700 lines across `ui/`. By screen:
 | `DownloadMapScreen` | 677 | **present** (`DownloadMapView` + `Maps/`), 2026-08-21 — a real region downloaded on the simulator |
 | `ReceiverSettingsScreen` | 463 | absent |
 | `AppSettingsScreen` | 202 | absent |
-| `DeploymentTest` | 160 | absent |
+| `DeploymentTest` | 160 | **present** (`DeploymentTestView`), 2026-08-21 |
 | `ExportFlightPathScreen` | — | absent |
 | `LocatorPasswordDialog` | 139 | **present** (`PasswordChallengeView`) |
 | `DevicePickerDialog` | 103 | absent — iOS auto-connects to the first FFE0 peripheral |
@@ -1005,6 +1007,102 @@ for the same region — which is worse than both being consistently low. It want
 decision and a change on Android first; it is written up in `NEXT_SESSION.md` as such.
 The direction of the error is at least the safe one for the 1 GB gate: real downloads are
 bigger than promised, so the cap bites sooner than the estimate suggests.
+
+
+### Deployment Test — ported 2026-08-21, against `DeploymentTest.kt`
+
+The smallest screen and the one with the least room for error: it fires a pyro channel.
+**ADR-0027 is the whole design** — the USB-C console path was removed because it put the
+operator's hand a metre from the e-match, so the radio path is the only way to fire a
+channel, and everything on this screen follows from being the only path.
+
+**The rule that shapes every line of it: the display follows the LOCATOR, never the app's
+own hope.** Both frames involved are unacknowledged. The countdown arriving is the only
+evidence a charge is live; the countdown going quiet is the only evidence a test has
+ended, and canceled, fired and link-lost are indistinguishable from here — which is why
+one silence watchdog covers all three.
+
+Android learned this the expensive way, and the comment in its view model says so:
+pressing cancel used to clear `active` immediately, which gated the countdown handler and
+made the app **deaf to the countdown still running**. The button read "start" while the
+locator counted down and fired, and nothing on screen disagreed. Ported deliberately:
+
+| | Behaviour |
+|---|---|
+| Cancel | Marks itself pending and changes **nothing** else. The countdown stands until the locator stops sending one |
+| A countdown arriving after a cancel | Keeps the test live and leaves the pending flag alone — a frame that crossed the cancel in flight is not the cancel being refused |
+| Countdown value | Written only by the locator's frames and by the watchdog. There is deliberately **no setter** |
+| An unsolicited countdown | Ignored — it belongs to a test this app did not start |
+| Silence | 3 s, restarted by every countdown, ends the test whatever the reason |
+| Leaving the screen | Sends a cancel and **does not clear the state** — a cancel lost on the way out would otherwise leave the operator walking off with a live charge and an app that had forgotten about it |
+| Start button | Start **only**. It used to be the cancel too, which is why Android's manual had to warn that a press landing just after the countdown lapsed would start a FRESH test |
+| Stop button | Present from the moment the screen opens, greyed until there is something to stop, so the way out is known BEFORE the countdown starts |
+| Reachability | Armed only (`MenuGating`), because that is when the outputs are live — ADR-0021 |
+| Channel labels | `Channel1`, not "Channel 1" — Android renders the enum's case names |
+| Wire | **0 is not "nothing selected", it is CANCEL.** Both the stop control and the exit path send a channel byte rather than a different message |
+
+**One difference found while testing, and fixed to match Android:** the start and cancel
+actions were gated on being able to build the frame, so with no addressable locator
+pressing STOP did nothing at all — no label change, no feedback. Android marks the state
+regardless of whether the frame left the phone, and it is right: a lost frame and an
+unbuildable one are indistinguishable from here, the watchdog recovers from both, and
+"press STOP and watch nothing happen" is the worst answer this screen can give.
+
+`DeploymentTestTests` pins all of it, including the watchdog, through two seams — the
+silence interval and a frame-injection entry point — because reaching those rules the
+real way would need three-second waits and a live radio, which would make the tests about
+neither.
+
+**Buttons are Android's, and it took two rounds of being told.** First the geometry, then
+— reported as "the buttons are still different colors and shapes" — everything else.
+`MaterialButtonStyle` now carries all of it, and every ported screen uses it; the
+SwiftUI defaults were not near-misses of Material's buttons but different in every
+dimension a user can see:
+
+| | Material 3 | SwiftUI's bordered styles |
+|---|---|---|
+| Shape | fully rounded — a stadium | rounded rectangle, much tighter radius |
+| Filled label | `onPrimary`, dark brown here | white, whatever the tint |
+| Outlined | transparent with a 1 dp `outline` ring | a filled grey capsule |
+| Label type | `labelLarge` — Poppins 14 | the system face at ~17 |
+| Disabled | `onSurface` at 12% container / 38% label | the tint, dimmed |
+
+The `Return` button is the clearest of these: Android's is a transparent outlined pill
+and iOS was drawing a solid grey one. Three kinds are covered — `Button`,
+`OutlinedButton` and `TextButton` — because Android uses all three, and Cancel, Dismiss
+and Resume on the download screen are text buttons rather than the bordered controls they
+had been.
+
+**This is not the "Material clone" ADR-0016 warns against**, and the distinction is the
+same one `ConfigRows` was built on: the sanctioned departure covers controls that look
+*broken* when imitated — a Material switch drawn over iOS gestures. A button is the same
+object on both platforms.
+
+The geometry, which was the first round:
+
+| | Android | iOS, measured |
+|---|---:|---:|
+| Start button height | 40 dp (M3 default) | 39.7 pt |
+| Stop button height | 48 dp (set explicitly) | 48.1 pt |
+| Gap above the stop button | 12 dp | ~14 pt |
+| Gap below the dropdown | 16 dp (`EnumDropdown` carries it) | 16 pt |
+| Horizontal content padding | 24 dp (`ButtonDefaults.ContentPadding`) | 24 pt |
+| Control column inset | 16 dp screen + 40 dp start | 56 pt |
+| Return button | `weight(1f)`, so full width, 40 dp | full width, 40 pt |
+
+**Two traps worth recording**, both of which look correct in code and are not:
+
+1. **`frame(height:)` on a SwiftUI `Button` sizes its layout box** and leaves the pill
+   hugging the label inside it — the control claimed 40 pt of space and drew a 31 pt
+   shape. Moot now that `MaterialButtonStyle` pads the label itself, which is the right
+   place for it.
+2. **A nested type named `Body` inside a `ButtonStyle` is matched against the protocol's
+   own associated type**, and the compiler reports it as "does not conform", naming
+   neither. It is called `Pill`.
+
+**Deliberate divergence: none.** The only iOS-specific choice is the picker, which is
+`ConfigPickerRow` — already the sanctioned substitute for Android's `EnumDropdown`, and
+the same one Locator Settings uses.
 
 
 ## Where iOS idiom should win
