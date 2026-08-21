@@ -1,18 +1,20 @@
 # Android ⇄ iOS UI parity — inventory, audits and deliberate gaps
 
 **Status, 2026-08-21.** The flight map, Application Settings, Receiver Settings,
-Locator Settings and **Flight Profiles** are ported; everything but Flight Profiles has
-been exercised on hardware. Deployment Test and Download maps remain. The flight-data
-transfer layer landed with Flight Profiles, which also unblocks the archived-path map
-control (still to build).
+Locator Settings, **Flight Profiles** and **Download maps** are ported. Everything up to
+Locator Settings has been exercised on hardware; the two newest screens have been driven
+on the simulator only — though Download maps has downloaded a real region there, which is
+the half of it that could not be faked. **Deployment Test is the last screen.** The
+flight-data transfer layer landed with Flight Profiles, which also unblocks the
+archived-path map control (still to build).
 
 **How to use this file.** The audits below are the record of what was compared against
 Android and what was found — read the one for the screen you are about to touch before
 writing anything, rather than re-deriving it. The **deliberate divergences** are listed
-with what would close each one; there are only five, and every other difference found in
+with what would close each one; there are only six, and every other difference found in
 this port was a defect.
 
-**The five deliberate divergences:**
+**The six deliberate divergences:**
 
 | Divergence | Why | Closes when |
 |---|---|---|
@@ -20,6 +22,7 @@ this port was a defect.
 | Icon substitutions in the map control column | Android's are Compose `Icons.Default.*`, a library with nothing to convert | never — the mapping is recorded below |
 | No archived-path map control | Android offers it only once a record is downloaded | **now unblocked** — flight-data download landed 2026-08-21; the control itself is still to build |
 | Flight-profile chart constants converted at a 3.0 display density | Android draws the chart in raw **pixels** (`CHART_MARGIN_X = 64f`, `textSize = 32f`), so its apparent size changes with the phone; SwiftUI's Canvas works in points | never exactly — see the chart audit below. A side-by-side screenshot would settle whether 3.0 is the right divisor |
+| Download maps uses SwiftUI's `Menu` and `Slider` where Android uses `DropdownMenu` and a Material `Slider`, and an SF Symbol for the delete icon | ADR-0016's sanctioned list covers pickers and sliders outright; the delete glyph is a Compose `Icons.Filled.Delete`, a library with nothing to convert, so `trash` stands in as the map-column icons do | never — `trash` is pinned in `SFSymbolAvailabilityTests` like the rest |
 | Chart legend checkboxes are SF Symbols, not a Material `Checkbox` | ADR-0016 sanctioned departure: a Material checkbox clone next to iOS type reads as broken, and `checkmark.square.fill` / `square` carry the same two states in the same two colours | never |
 
 Everything else on these screens matches Android, including field order, widget shapes,
@@ -60,7 +63,7 @@ Android UI is ~11,700 lines across `ui/`. By screen:
 | `FlightMapScreen` (Start) | 3,370 | partial — map + basic stats, none of the instrumentation |
 | `FlightProfilesScreen` | 1,002 | **present** (`FlightProfilesView` + `FlightChart` + `FlightDataRepository`), 2026-08-21 — not yet exercised on hardware |
 | `LocatorSettingsScreen` | 759 | absent |
-| `DownloadMapScreen` | 677 | absent |
+| `DownloadMapScreen` | 677 | **present** (`DownloadMapView` + `Maps/`), 2026-08-21 — a real region downloaded on the simulator |
 | `ReceiverSettingsScreen` | 463 | absent |
 | `AppSettingsScreen` | 202 | absent |
 | `DeploymentTest` | 160 | absent |
@@ -816,6 +819,193 @@ silent — they corrupt flight data rather than failing:
 Both want the same fix on Android — recorded here rather than made silently, because
 "Android is the reference implementation" cuts both ways: a fix that lands here first is
 a divergence until it lands there.
+
+### Download maps — ported 2026-08-21, against `DownloadMapScreen.kt`
+
+The screen is one square map over a scrolling column of controls, and the square is not
+a style choice: **the download takes the VISIBLE bounds**, so the preview's shape becomes
+the region's shape. A squat viewport silently inflates the region sideways, and a
+portrait one goes blank at the edges the moment the live map swings 90° under the
+compass. Ported with it: `OfflineMapManager`, `SatelliteProvider`, `LaunchSites` and the
+tile arithmetic, all under `SteamPigeon/Maps/`.
+
+**The platform pieces this screen needs, and their Android counterparts:**
+
+| | Android | iOS |
+|---|---|---|
+| Offline API | `OfflineManager` + `OfflineTilePyramidRegionDefinition` | `MLNOfflineStorage` + `MLNTilePyramidOfflineRegion` — the same core, so the same model |
+| Progress | `OfflineRegion.OfflineRegionObserver` | `MLNOfflinePackProgressChanged` / `…Error` / `…MaximumMapboxTilesReached` notifications |
+| "Is the total real yet?" | `isRequiredResourceCountPrecise` | `maximumResourcesExpected != UINT64_MAX` — the same fact, spelled differently |
+| Style for the DOWNLOADER | localhost server, `network_security_config.xml` | localhost server, `NSAllowsLocalNetworking` in the Info.plist |
+| Editable preset CSV | `Android/data/<pkg>/files/launch_sites.csv`, over USB | app Documents via the Files app (`UIFileSharingEnabled`, `LSSupportsOpeningDocumentsInPlace`) |
+| Mapbox token | `secrets.properties` → `BuildConfig` | Info.plist value fed by a build setting — **never a literal in the repo** |
+
+**ADR-0014's http(s)-only rule holds on iOS too, and it was worth checking rather than
+assuming.** `MLNTilePyramidOfflineRegion`'s own documentation says a relative file URL
+cannot be an offline style URL, and this repo already recorded the Android finding — the
+downloader rejects `asset:`/`file:` and stalls at "0/1 tiles". So the localhost server is
+ported as-is, including re-binding the port a resume's immutable style URL records. A
+real 30-tile region downloaded successfully on the simulator, which is the evidence that
+the server, the ATS exemption and the pack creation all line up.
+
+#### ⚠️ iOS-FIRST behaviour: the picker opens on the phone's position, zoomed out
+
+**fschroer's preference, stated 2026-08-21, to be ported to Android.** Recorded here so
+the Android change can be made from a description rather than from reading Swift.
+
+> The download picker should open centred on **the phone's current location**, at a
+> **multi-state zoom** — wide enough that a launch site a state or two away is a pan
+> rather than a search, close enough to place yourself.
+
+The rules, exactly as implemented here:
+
+- **z5**, which on a phone-sized square shows roughly 700–950 km across. (MapLibre's world
+  is 512·2^z points wide.)
+- Applied **once**, the first time a fix is available — including one that arrives after
+  the screen is already open, since that is the first useful position rather than a
+  position the user chose.
+- **Never re-applied.** The picker reports its centre continuously through a gesture, so
+  re-centring on every update would drag the map back under the user's finger.
+- **Choosing a preset or typing a coordinate cancels it**, so a fix landing afterwards
+  cannot pull the camera off the site the user just picked.
+- **No fix, no move**: the map stays where MapLibre opens it. No invented default
+  location — an app that opens on somebody else's launch site is worse than one that
+  opens on the world.
+
+This is the **one place in the port where behaviour landed on iOS first**, at the user's
+explicit request. Until Android follows, the two apps differ here on purpose. Android
+today sets no opening camera at all, so its picker starts at MapLibre's default; the
+change there is `RegionPickerMap`'s factory plus a location source.
+
+**Mirrored deliberately:**
+
+- **Always cache down to the provider's floor** (z10), not maxZoom − N. Each lower level
+  has ~4× fewer tiles, so the context pyramid is nearly free — and without it the map is
+  blank offline at any zoomed-out level, which is exactly when someone is getting their
+  bearings on site. `TileMathTests` pins that the levels below the maximum cost under
+  half the deepest one.
+- **The estimate sums per zoom**, because measured tile size swings ~5× across the range.
+  A flat average badly misprices whichever end the user picks. The simulator download came
+  in at 743 kB against a 690 kB estimate — 8% low, on a 30-tile region.
+- **The 1 GB limit states itself in the button label.** As a separate warning line it sat
+  rows away from the control it disabled, so an over-budget region read as a dead button.
+- **"Offline regions", not "Downloaded regions".** The row is written when a download
+  STARTS, so the list has always included partial regions; presenting them as finished is
+  the one thing it must never do.
+- **A download outlives the screen.** Its state lives in `OfflineDownloadRepository`,
+  process-wide, so leaving and coming back re-attaches rather than showing a blank slate
+  with the Download button armed for a second, overlapping region.
+- **The provider is recorded in the pack's metadata**, and a resume rebuilds the style
+  from that rather than from whatever is selected now — otherwise resuming a Mapbox
+  region under Esri stitches two sources into one region.
+- The **Lat, Lon box is a readout and an entry box at once**, with the edit buffer only
+  taking over while focused; the **detail inset is a second map**, because zooming the
+  picker would silently redefine the download.
+- **The estimate lines wrap, never truncate.** Reported from the phone: the size — the
+  number the whole screen exists to report — fell off the right edge. Compose wraps by
+  default; SwiftUI needs `fixedSize(horizontal: false, vertical: true)` to grow a line
+  into two rather than clip it, and these lines are long, monospaced and Dynamic
+  Type-scaled, so they overflow on a narrow phone or at a large text size. Applied to
+  the progress and result lines too, which are the same shape. Verified at an
+  accessibility text size, where the estimate wraps to three lines intact.
+
+**Exercised on the simulator on a large region:** the indeterminate-then-determinate
+progress path, Cancel (the partial region is kept and listed as incomplete), and Resume
+(picks up where it stopped without refetching). What is still unseen is whether a
+downloaded region actually renders with the network down — MapLibre serves any matching
+tile URL from the pack database and both sides read the same style, which is all
+ADR-0014 says is needed, but "should" is not "seen".
+
+#### ⚠️ Fixed the same day: `reloadPacks()` froze the progress readout
+
+Reported from the phone as **"downloads appear to stop when I tap Done then return"**,
+and reproduced exactly: leaving the screen and coming back pinned the percentage at
+whatever it had reached, while the download itself carried on and eventually completed.
+"Appear to" was the precise word.
+
+The cause was `MLNOfflineStorage.reloadPacks()`, which the screen called on every
+appearance to refresh the region list. Its own documentation is unambiguous: *"the
+pointer values of the `MLNOfflinePack` objects in the `packs` property change, even if
+the underlying data for these packs has not changed. If this method is called while a
+pack is actively downloading, the behavior is undefined. You typically do not need to
+call this method."* The progress notifications then arrived for a pack that was no longer
+the object being held, and were dropped.
+
+Two changes, because either alone would leave the failure reachable:
+
+1. **Never call `reloadPacks()`.** MapLibre keeps `packs` current as packs are added and
+   removed, and the KVO observation on that property is how the list hears about it.
+2. **Identify the active download by value, not by pointer** — the metadata written on
+   the pack plus its style URL, which carries the port unique to that download session.
+   A notification for a pack that matches is re-adopted, so a pointer swap from any
+   cause self-heals rather than silently muting the screen.
+
+Android is not exposed to this: its `OfflineRegion` observer is attached to the region
+object and it never calls the equivalent. **This is an iOS-only defect, fixed here, with
+no Android counterpart to change.**
+
+#### Three lines from the phone's runtime log, 2026-08-21
+
+Reported together; only one was ours, and it was the quiet kind.
+
+**1. `API MISUSE: <CBCentralManager> can only accept this command while in the powered on
+state` — ours, and not merely noise.** CoreBluetooth does not queue a command issued in
+any other state: it logs this and **drops it**, so an ungated call is an action the app
+believes it took and did not. `startScan` was gated; `stopScan`, `connect` and
+`disconnect` were not, and neither was the restore path.
+
+The restore path is the one that mattered. `willRestoreState` runs **before** the central
+reports `.poweredOn`, and it issued the service discovery that rebuilds a restored
+connection's GATT session — so that discovery was liable to be dropped, restoring the
+exact bug it was written to fix (a receiver that connects by itself with a grey icon,
+gates the receiver menu and refuses to arm, cured only by a manual rescan). The discovery
+now happens at `.poweredOn`, the first moment CoreBluetooth accepts it. Every central
+command is gated on one `canCommandCentral` check; where a command is refused, the local
+state it implies is still cleared, so the app's model never claims a link the radio does
+not have.
+
+**2. `MLNMapView WARNING UIViewController.automaticallyAdjustsScrollViewInsets is
+deprecated…` — MapLibre's, once per launch, and not silenceable from here.** MapLibre logs
+it after inspecting the hosting view controller's deprecated UIKit flag, which a SwiftUI
+app does not own; setting the property the message names does not stop the log (verified).
+
+The property is set anyway **on the download picker only**, where it is a correctness
+argument rather than tidiness: the picker's visible bounds ARE the region being
+downloaded, and an inset excludes part of the frame from the viewport, so every region
+would be sized differently from the square the user framed. It is deliberately NOT set on
+the flight map: that would change the camera geometry of a hardware-verified screen by
+the safe-area inset, which nobody asked for and nobody has measured. **Open parity
+question**: Android's map has no automatic inset at all, so setting it there too would be
+the parity-consistent choice — it wants a look on the phone first.
+
+**3. `nw_connection_add_timestamp_locked_on_nw_queue [C15] Hit maximum timestamp count` —
+Apple's, and benign.** Network.framework records per-event timing on a connection and
+says so when it stops. It fires on a long-lived connection with many requests, which
+during a map download is the HTTPS connection fetching thousands of tiles. Nothing in the
+app reads those timestamps. It would only be worth chasing if it coincided with a
+download stalling — it did not.
+
+#### ⚠️ The size estimate is low, on BOTH platforms — around 2× on bytes, 4× on tiles
+
+Measured while testing the above. A 9.1 × 9.1 km region at z10–z17 estimated **2,761
+tiles / ~64 MB** and actually downloaded **139 MB**; a 22 × 22 km region estimated 12,484
+tiles against MapLibre's **49,155** resources — a ratio of 3.94, which is one whole zoom
+level.
+
+The likely cause is the tile-size convention: the style declares `"tileSize": 256`, and
+MapLibre's logical tile grid is 512, so it fetches source tiles one level deeper than the
+map zoom asked for. Android's `tileCount` does exactly the same arithmetic over the same
+range, so **Android under-reports identically** — its own Mapbox note even says "MapLibre
+zoom runs ~1 level deeper than Google's (512- vs 256-px tile convention)", which is the
+same fact, applied to detail but not to the count.
+
+**Deliberately NOT changed here.** Android is the reference implementation, the estimate
+is shared arithmetic, and fixing one side would make the two apps quote different sizes
+for the same region — which is worse than both being consistently low. It wants a
+decision and a change on Android first; it is written up in `NEXT_SESSION.md` as such.
+The direction of the error is at least the safe one for the 1 GB gate: real downloads are
+bigger than promised, so the cap bites sooner than the estimate suggests.
+
 
 ## Where iOS idiom should win
 

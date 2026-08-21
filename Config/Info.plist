@@ -26,6 +26,22 @@
 		<string>robotomono_regular.ttf</string>
 		<string>robotomono_bold.ttf</string>
 	</array>
+	<!-- ADR-0014: MapLibre's offline downloader accepts ONLY an http(s) style URL —
+	     it rejects asset:, data: and file:, stalling a region at "0/1 tiles". The
+	     style is therefore served from a short-lived server bound to 127.0.0.1 for
+	     the duration of a download (see LocalStyleServer), and App Transport
+	     Security has to permit cleartext to it. This is the counterpart of Android's
+	     res/xml/network_security_config.xml, and like that file it is REQUIRED by
+	     the download path rather than leftover scaffolding.
+
+	     NSAllowsLocalNetworking is the narrow key: it permits unencrypted
+	     connections to local hosts only, and leaves ATS in force for everything
+	     else — the tile requests themselves stay HTTPS. -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>bluetooth-central</string>

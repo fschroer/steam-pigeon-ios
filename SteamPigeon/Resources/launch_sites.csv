@@ -1,0 +1,20 @@
+# Steam Pigeon — preset launch sites for offline map downloads.
+#
+# THIS FILE IS EDITABLE. A copy is seeded to the app's Documents folder, reachable at:
+#   Files → On My iPhone → Steam Pigeon → launch_sites.csv
+# Edit that copy, then reopen the Download maps screen — no app rebuild needed.
+# Delete it to re-seed this template.
+#
+# Format:  name,latitude,longitude[,width_km[,height_km]]
+#   - latitude/longitude: decimal degrees (south/west negative)
+#   - width_km/height_km: total extent of the area, centered on lat/lon.
+#       both omitted -> 10 x 10 km;  height omitted -> square (width x width)
+#   - names MAY contain commas (the TRAILING numeric fields are parsed as the values)
+#   - lines starting with # are ignored
+#
+# Size the extent for the whole flight + drift footprint, not just the pad —
+# a rocket several km downrange should still land on your downloaded map.
+WAC 60 Acres Redmond, WA,47.706325,-122.139447,10,10
+TCR Pasco, WA,46.408738,-119.015773,10,10
+OROC Brothers, OR,43.800739,-120.649828,10,10
+BALLS Black Rock, NV,40.844967,-119.11217,20,20

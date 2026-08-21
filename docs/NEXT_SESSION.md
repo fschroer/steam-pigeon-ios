@@ -1,11 +1,13 @@
 # Resume here — iOS port
 
-Updated 2026-08-21. **442 tests passing**, clean build (fresh `-derivedDataPath`) with no
-warnings from our own sources.
+Updated 2026-08-21. **473 tests passing**, clean build with no warnings from our own
+sources.
 
 **Hardware status: everything testable has been tested on the phone except an actual
-flight — and except Flight Profiles, which landed 2026-08-21 and has only been driven on
-the simulator against fixture data.** fschroer exercised the map, the settings screens,
+flight — and except Flight Profiles and Download maps, both of which landed 2026-08-21
+and have only been driven on the simulator.** Download maps did download a real region
+there, which is the half of it a fixture could not fake; Flight Profiles ran against
+fixtures only. fschroer exercised the map, the settings screens,
 the receiver picker, the channel move, the pad alert and the voice against real hardware.
 What remains unproven is what only a flight can prove, plus a real archived-record
 download — see *Not yet exercised* below.
@@ -68,23 +70,45 @@ structure before writing anything.
 
 ---
 
+## One thing Android owes iOS
+
+**The download picker's opening camera.** fschroer asked for it on iOS first
+(2026-08-21): open on the **phone's current position at a multi-state zoom (z5)**,
+applied once when a fix first arrives, cancelled by picking a preset or typing a
+coordinate, and no invented fallback when there is no fix. Android sets no opening camera
+at all today. The full rule set is in `docs/UI_PARITY.md` under "iOS-FIRST behaviour" —
+written as a description precisely so the Android change does not require reading Swift.
+
+This is the only behaviour in the port that landed here first, and it was asked for. The
+standing rule is still Android-first.
+
 ## Where the port stands
 
 **Screens done:** flight map (with the full camera model), Application Settings, Receiver
-Settings, Locator Settings, **Flight Profiles** (the record list and the chart).
+Settings, Locator Settings, **Flight Profiles** (the record list and the chart) and
+**Download maps** (region picker, estimate, offline pack download, region management).
 
-**Screens remaining:** Deployment Test (160), Download maps (677). Neither is blocked any
-more: **the flight-data transfer layer landed with Flight Profiles** —
+**One screen remains: Deployment Test (160 lines).** It is the smallest of the seven and
+needs no new plumbing — `deploymentTestRequest` is already in `MsgType` and the countdown
+message is already framed. ADR-0027 is the behaviour to implement.
+
+**The flight-data transfer layer landed with Flight Profiles** —
 `FlightDataRepository.swift` (bitmap ack, XOR parity FEC, the delta codec),
 `FlightEvents.swift` (MsgType 19), and the request/exit handshake in `LinkViewModel`. iOS
 throughput over a real transfer is still the open unknown ADR-0016 named; nothing has
 downloaded a record from hardware yet.
 
+**The offline map path landed with Download maps** — `SteamPigeon/Maps/`, including the
+localhost style server ADR-0014 requires (`NSAllowsLocalNetworking` in the Info.plist is
+its enabler, exactly as `network_security_config.xml` is on Android). A 30-tile region
+downloaded and listed as complete on the simulator.
+
 **Also unblocked, and still to build: the archived-path map control.** Android offers it
 only once a record is downloaded, which is now possible here. It needs Android's
 `archivedPathPoints` and the control itself.
 
-**Read `docs/UI_PARITY.md` § "Flight Profiles" before touching that screen.** It records
+**Read `docs/UI_PARITY.md` §§ "Flight Profiles" and "Download maps" before touching
+either screen.** It records
 what was mirrored deliberately, the two Android FEC bugs fixed here rather than
 reproduced, and the one number in the chart with no exact answer.
 
@@ -95,6 +119,7 @@ reproduced, and the one number in the chart with no exact answer.
   ADR-0022 rule when porting: a withheld distance must mean **silence**, not a stale
   number read aloud.
 - **Camera passthrough** behind the heads-up gauges (landscape).
+- **Export flight path.** Android has an `ExportFlightPathScreen`; nothing here does.
 - **Archived-path map control.** Now unblocked — see above.
 
 ---
@@ -105,6 +130,11 @@ reproduced, and the one number in the chart with no exact answer.
   the sample burst, the bitmap acks, parity recovery, the locator's return to Disarmed on
   exit — has only run against fixtures. The simulator has no Bluetooth, so this is a
   phone job, and it is the first thing to try when one is next in hand.
+- **Offline maps with the network actually down.** A region downloaded and listed as
+  complete on the simulator, but "renders offline" was never watched happening. MapLibre
+  serves any matching tile URL from the pack database and both sides read the same style,
+  which is all ADR-0014 says is needed — but that is a claim, not an observation. Turn
+  off wi-fi and cellular at a downloaded site, or in Airplane Mode with a region cached.
 - **Double-tap to reset the chart zoom.** The recognizer is wired and pinch/pan were both
   verified on the simulator; a synthesized double-tap could not be delivered inside the
   tap window, so this one gesture is unproven.
@@ -120,7 +150,7 @@ reproduced, and the one number in the chart with no exact answer.
 
 ---
 
-## Three system-level questions, none an iOS decision
+## Four system-level questions, none an iOS decision
 
 1. **`launch_detect_altitude` and `deploy_signal_duration` cannot be read back.** Neither
    rides in `PreLaunchData`, so every locator config change writes placeholders (30 m,
@@ -129,7 +159,16 @@ reproduced, and the one number in the chart with no exact answer.
    while the locator has in fact accepted the change. fschroer decided on 2026-08-20 to
    omit both controls on iOS. Closing it properly means carrying both fields in a
    broadcast — a change across three binaries, and an ADR.
-2. **The flight-profile chart clips its altitude axis labels — on both platforms.**
+2. **The offline size estimate is low on both platforms — ~2× on bytes, ~4× on tiles.**
+   Measured 2026-08-21: a 9.1 km region estimated ~64 MB and downloaded 139 MB; a 22 km
+   region estimated 12,484 tiles against MapLibre's 49,155. The ratio is one zoom level,
+   and the likely cause is the 256-px source against MapLibre's 512-px logical tile grid,
+   so the downloader fetches a level deeper than the estimate counts. **Android's
+   estimator is the same arithmetic and is low by the same factor**, so this was NOT
+   changed on iOS alone — quoting different sizes for the same region on the two phones
+   would be worse than both being consistently low. Needs a decision and a change on
+   Android first. The error is at least in the safe direction for the 1 GB gate.
+3. **The flight-profile chart clips its altitude axis labels — on both platforms.**
    Android's left gutter is 64 px and `900m` measures about 79 px at the 32 px axis text
    size, so the first character is cut. iOS reproduces this exactly rather than quietly
    widening the gutter, because Android is the reference implementation and a silent
@@ -137,7 +176,7 @@ reproduced, and the one number in the chart with no exact answer.
    `CHART_MARGIN_X`, or drop `CHART_AXIS_TEXT_SIZE`), and it lands on Android first, then
    here in the same session. It needs fschroer's eye on the phone: it is a legibility
    judgement, and the gutter is space taken from the plot.
-3. **The escalated pad-alert banner** wraps to five lines at 57 pt and runs under the
+4. **The escalated pad-alert banner** wraps to five lines at 57 pt and runs under the
    control column. Android composes it identically at the same size on a near-identical
    screen width, so this is believed faithful — but it is a legibility question and wants
    a side-by-side screenshot that nobody has taken.

@@ -219,6 +219,7 @@ struct MapScreen: View {
                 case .receiverSettings: ReceiverSettingsView(model: model)
                 case .locatorSettings:  LocatorSettingsView(model: model)
                 case .flightProfiles:   FlightProfilesView(model: model) { sheet = nil }
+                case .downloadMap:      DownloadMapView(phone: model.phone)
                 default:                NotYetBuiltView(destination: destination)
                 }
             }

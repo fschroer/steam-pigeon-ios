@@ -40,6 +40,7 @@ final class SFSymbolAvailabilityTests: XCTestCase {
         "arrow.counterclockwise":            "13.0",   // Android RestartAlt
         "line.3.horizontal":                 "13.0",   // Android Menu
         "stethoscope":                       "14.0",   // no Android counterpart
+        "trash":                             "13.0",   // Android Icons.Filled.Delete
     ]
 
     func testEverySymbolResolves() {
