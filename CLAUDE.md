@@ -49,22 +49,30 @@ The **Android source to port from** is `../rocket-flight-manager` (Kotlin/Compos
 
 ## Parity rules
 
-- **READ the Android source for the thing you are porting. Do not assume what it does,
-  and do not settle for a grep.** Open the composable, read it top to bottom, and port
-  what it actually specifies — the defaults, the ordering, the tint rules, the
-  thresholds, the gesture handling. This is the single largest source of defects in
-  this port, it has been the finding of every review so far, and it is a **standing
-  instruction from fschroer (2026-08-19, restated 2026-08-20)**, not a style note.
-  - A control that exists on Android and not here is a defect, not a simplification.
-  - A `mutableStateOf(true)` on Android is a **requirement**, not a suggestion. Three
-    map controls shipped defaulting off because nobody read the four lines that set
-    them.
-  - Behaviour you cannot see in a screenshot still counts. The gesture backoff that
-    makes Android's map pannable is fifteen lines in `MapCameraController` and its
-    absence here read as three unrelated bugs.
-  - When you cannot mirror something (a Material icon that is library-only, an API with
-    no iOS counterpart), say so **in the code** with what you substituted and why, and
-    record it as a gap in `docs/UI_PARITY.md`. Silence reads as parity.
+- **READ the Kotlin for the thing you are building — all of it — before writing Swift.**
+  Mirror Android's **functionality and its UI** as closely as possible. Depart only where
+  Android's approach genuinely does not work on iOS, never because a SwiftUI control was
+  closer to hand. This is a **standing instruction from fschroer (2026-08-19, restated
+  2026-08-20)** and the source of every defect reported off the phone in this port.
+
+  Three failure modes, named because they do not look alike from the inside:
+  - **Assuming behaviour.** Defaults, ordering, tint rules, thresholds and gesture
+    handling are requirements to port, not incidental detail. A `mutableStateOf(true)` is
+    a requirement. A control on Android and not here is a defect, not a simplification.
+  - **Building to iOS idiom.** Walk the composable top to bottom and mirror its
+    structure, widgets and field ORDER before writing anything. A settings screen built
+    as a SwiftUI `Form` of `TextField` and `Stepper` rows renders as a list of labels —
+    nothing shows a value is editable. Use `ConfigRows.swift`.
+  - **Drifting a detail at a time.** Bold reached five type styles because "headings are
+    bold". Nothing in the Android app is bold except one glyph. When a change feels like
+    taste rather than a port, it is a divergence.
+
+  **ADR-0016's sanctioned departures are not a general licence.** That list covers
+  controls that look *broken* when imitated (a Material clone of an iOS switch). It does
+  not cover reaching for a different control because it is more idiomatic. If a departure
+  is not on that list, it needs a reason from the ADR — and it goes in
+  `docs/UI_PARITY.md` with what would close it. **Silence reads as parity.**
+
 - **Android is the reference implementation.** New behavior lands there first, then here,
   and never without being written in an ADR/summary first.
 - **Wire format is a hand-synced triad** — firmware `MessageProtocol.hpp` `static_assert`s,

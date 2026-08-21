@@ -1,4 +1,28 @@
-# Android ⇄ iOS UI parity — inventory and plan
+# Android ⇄ iOS UI parity — inventory, audits and deliberate gaps
+
+**Status, 2026-08-20.** The flight map, Application Settings, Receiver Settings and
+Locator Settings are ported and have been exercised on hardware. Flight Profiles,
+Deployment Test and Download maps remain; the last two depend on flight-data download.
+
+**How to use this file.** The audits below are the record of what was compared against
+Android and what was found — read the one for the screen you are about to touch before
+writing anything, rather than re-deriving it. The **deliberate divergences** are listed
+with what would close each one; there are only three, and every other difference found in
+this port was a defect.
+
+**The three deliberate divergences:**
+
+| Divergence | Why | Closes when |
+|---|---|---|
+| No launch-detect altitude / deploy-signal duration controls in Locator Settings | Neither field rides in a broadcast, so a change can never be confirmed — on Android editing either reports "not acknowledged" while the locator has accepted it | the firmware carries both fields in a broadcast (three binaries, wants an ADR) |
+| Icon substitutions in the map control column | Android's are Compose `Icons.Default.*`, a library with nothing to convert | never — the mapping is recorded below |
+| No archived-path map control | Android offers it only once a record is downloaded | flight-data download lands |
+
+Everything else on these screens matches Android, including field order, widget shapes,
+wording and type weights. **Silence reads as parity**, so a divergence that is not written
+here will be read as a defect by the next person — correctly.
+
+
 
 **Standing instruction (2026-08-19, fschroer):** the iOS app should mirror the Android
 app in **both functionality and UI presentation**, except where a specific iOS design
