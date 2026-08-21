@@ -1,6 +1,6 @@
 # Resume here — iOS port
 
-Updated 2026-08-21. **498 tests passing**, clean build with no warnings from our own
+Updated 2026-08-21. **500 tests passing**, clean build with no warnings from our own
 sources.
 
 **Every Android screen is now ported.** What is left is features inside screens, and
@@ -175,6 +175,13 @@ reproduced, and the one number in the chart with no exact answer.
      started with every receiver off, switching one on brought up the picker. Still
      unwatched is the battery cost of a continuous 3 s scan loop over an afternoon —
      Android does the same from a foreground service, which iOS has no equivalent for.
+- **A recorded track surviving a real restart.** Fixed 2026-08-21: `clearLiveReadouts`
+  was wiping the track the launch scan away, so the array restored from
+  `flight_path.csv` never reached the map and the next recorded point saved the emptied
+  array back over the file. The track describes the rocket, not the receiver — Android's
+  connection state does not touch `_flightPath`. Covered by `TrackRecordingTests`, but
+  the phone case is worth one look: **record a track, kill the app, reopen it, and
+  confirm the line is still drawn.**
 - **A real archived-record download.** The whole Flight Profiles path — metadata retry,
   the sample burst, the bitmap acks, parity recovery, the locator's return to Disarmed on
   exit — has only run against fixtures. The simulator has no Bluetooth, so this is a

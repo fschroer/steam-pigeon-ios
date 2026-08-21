@@ -148,6 +148,48 @@ final class TrackRecordingTests: XCTestCase {
         XCTAssertEqual(.skip, r.observe(state: .landed, aglM: 0, descentRateMs: 0))
     }
 
+    // MARK: - Surviving the app being killed
+
+    /// Reported 2026-08-21: a track persisted to disk did not survive reopening the app.
+    ///
+    /// The app enters `.scanning` within a second of launching, and the handler for that
+    /// cleared the readouts — reasonably — **and the track with them**, so the array
+    /// restored in `init` was emptied before the map drew it. The next recorded point
+    /// then saved the empty array back over the file, so the loss was permanent rather
+    /// than merely on screen. The track describes the rocket, not the receiver relaying
+    /// it; Android's connection state does not touch `_flightPath` at all.
+    @MainActor
+    func testARestoredTrackSurvivesTheLaunchScan() {
+        let store = TrackStore()
+        defer { store.delete() }
+        store.save([TrackPoint(latitude: 47.6146, longitude: -122.5526,
+                               altitudeM: 100, timestampMs: 1_700_000_000_000),
+                    TrackPoint(latitude: 47.6147, longitude: -122.5527,
+                               altitudeM: 140, timestampMs: 1_700_000_001_000)])
+
+        let m = LinkViewModel()
+        XCTAssertEqual(2, m.track.count, "the track is restored at launch")
+
+        // Exactly what the first scan of a new session runs.
+        m.clearLiveReadoutsForTesting()
+
+        XCTAssertEqual(2, m.track.count, "a lost link says nothing about where the rocket went")
+        XCTAssertEqual(2, TrackStore().load().count, "and the file is still there to reload")
+    }
+
+    /// The other half of the rule: what a lost link DOES invalidate still goes. These are
+    /// readouts of a receiver the app is no longer talking to.
+    @MainActor
+    func testALostLinkStillDropsWhatDescribesTheLink() {
+        let m = LinkViewModel()
+        m.clearLiveReadoutsForTesting()
+        XCTAssertNil(m.prelaunch)
+        XCTAssertNil(m.telemetry)
+        XCTAssertNil(m.vector)
+        XCTAssertNil(m.connectedLocatorId)
+        XCTAssertFalse(m.armed)
+    }
+
     /// A manual reset re-arms even mid-descent: a cleared track that then refused to
     /// draw would look broken.
     func testResetResumesRecording() {

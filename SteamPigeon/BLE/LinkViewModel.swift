@@ -870,6 +870,9 @@ final class LinkViewModel: ObservableObject {
 
     func ingestForTesting(_ frame: [UInt8]) { ingest(frame) }
 
+    /// What every link loss runs — including the scan that starts a second after launch.
+    func clearLiveReadoutsForTesting() { clearLiveReadouts() }
+
     /// Fire a channel. Addressed, like every locator-directed command (ADR-0020) — a
     /// broadcast one would fire somebody else's charge.
     func startDeploymentTest(_ option: DeploymentTestOption) {
@@ -1123,6 +1126,16 @@ final class LinkViewModel: ObservableObject {
 
 
     /// Drop everything that describes a link we no longer have.
+    ///
+    /// **The recorded track is deliberately NOT in here.** It describes where the rocket
+    /// went, not which receiver relayed the fixes, so a lost link says nothing about it —
+    /// and this runs on `.scanning`, which the app enters within a second of launching.
+    /// The track restored from disk in `init` was therefore wiped before it could be
+    /// drawn, and the next recorded point saved the emptied array back over the file:
+    /// a track survived being killed exactly until the app was opened again. Android
+    /// clears its `_flightPath` in two places only — `resetFlightPath`, the map's own
+    /// "start clean" control, and the new-flight branch of the telemetry handler — and
+    /// nothing about its connection state touches it.
     private func clearLiveReadouts() {
         prelaunch = nil
         // Receiver-sourced state describes a receiver we are no longer talking to.
@@ -1148,7 +1161,6 @@ final class LinkViewModel: ObservableObject {
         lastPreLaunchMessage = nil
         telemetry = nil
         vector = nil
-        track.removeAll()
         armed = false
         connectedLocatorId = nil
         conflictingLocatorIds.removeAll()
