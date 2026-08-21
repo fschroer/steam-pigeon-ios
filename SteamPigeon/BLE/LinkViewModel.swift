@@ -185,6 +185,28 @@ final class LinkViewModel: ObservableObject {
     @Published private(set) var remoteReceiverConfig = ReceiverConfig()
     @Published private(set) var receiverConfigMessageState: ConfigMessageState = .idle
 
+    /// The BLE device name of the receiver we are connected to, if any. Refreshed on
+    /// every transport state change, since the GAP name can resolve after connecting.
+    @Published private(set) var connectedReceiverName: String?
+
+    /// What to call the receiver, in Android's order (`FlightMapScreen.kt`):
+    /// `receiverDevice?.name?.takeIf { it.isNotEmpty() } ?: receiverConfig.deviceName`.
+    ///
+    /// The BLE name comes FIRST, and that is the whole point: the configured name is
+    /// learned from `PreLaunchData` (or from a `ReceiverInfo` probe, which only fires
+    /// during silence), so with an armed locator broadcasting there is nothing to learn
+    /// it from and the row fell through to "Connected".
+    var receiverDisplayName: String? {
+        Self.receiverDisplayName(bleName: connectedReceiverName,
+                                 configuredName: remoteReceiverConfig.deviceName)
+    }
+
+    /// Static so the order can be tested without a radio.
+    static func receiverDisplayName(bleName: String?, configuredName: String) -> String? {
+        if let n = bleName, !n.isEmpty { return n }
+        return configuredName.isEmpty ? nil : configuredName
+    }
+
     // MARK: - Locator channel move (ADR-0011)
 
     /// What the locator is believed to hold, rebuilt from every recognised broadcast.
@@ -1207,7 +1229,13 @@ final class LinkViewModel: ObservableObject {
                 if s == .disconnected || s == .scanning || s == .connecting {
                     self.clearLiveReadouts()
                 }
+                // After the readouts are cleared, not before: `clearLiveReadouts` is
+                // about the LOCATOR's data, and this is the receiver naming itself.
+                self.connectedReceiverName = self.transport.connectedName
             }
+        }
+        transport.onNameChange = { [weak self] name in
+            Task { @MainActor in self?.connectedReceiverName = name }
         }
         transport.onFrame = { [weak self] frame in
             Task { @MainActor in self?.ingest(frame) }
@@ -1305,6 +1333,11 @@ final class LinkViewModel: ObservableObject {
                     padAlert = m.padAlert
                     padAlertSnoozeMinutes = m.padAlertSnoozeMinutes
                     remoteLocatorConfig = LocatorConfig.from(m)
+                    // Remembered for the next launch, and for the rest of THIS one:
+                    // arming the locator stops these broadcasts, and `TelemetryData`
+                    // carries no name. Kept for open locators too, which is where this
+                    // goes past Android — see `KnownLocatorStore` and UI_PARITY.md.
+                    store.noteName(locatorId: m.locatorId, name: m.deviceName)
                     armed = m.armed                     // newest broadcast wins
                     updateVector(lat: m.latitude, lon: m.longitude,
                                  satellites: m.satellites, gpsStatus: m.gpsStatus,
@@ -1434,6 +1467,7 @@ final class LinkViewModel: ObservableObject {
             conflictingLocatorIds.remove(id)
             unauthorizedLocatorIds.remove(id)
             clearConflictIfStale(acceptedId: id)
+            adoptStoredLabel(id)
             return true
         case .conflict(let id):
             // A different AUTHORIZED locator, heard while ours is still live. Warn, but
@@ -1461,6 +1495,27 @@ final class LinkViewModel: ObservableObject {
         }
     }
 
+    /// Name an accepted locator from what was stored when it was authorized.
+    ///
+    /// **An armed locator carries no name.** It broadcasts `TelemetryData`, which has no
+    /// `device_name` field at all, so a locator first heard while armed — the app opened
+    /// mid-flight, or with the rocket already on the pad — left the status panel with
+    /// nothing to put in the locator row, and it read "No Locator" while the app was
+    /// plainly receiving and plotting that locator's telemetry.
+    ///
+    /// Android does exactly this, in the same place (`evaluateRecognition`, on accept):
+    /// falls back to the stored label, and lets the first `PreLaunchData` overwrite it
+    /// with the live value as soon as the locator disarms. The difference here is WHICH
+    /// locators have a name to fall back to: Android writes one only when a password is
+    /// accepted, so an open locator — the default state — is never named while armed.
+    /// This app stores the name of every locator it accepts a `PreLaunchData` from, so
+    /// the fallback covers a locator that has simply been heard before.
+    private func adoptStoredLabel(_ locatorId: UInt32) {
+        guard remoteLocatorConfig.deviceName.isEmpty,
+              let label = store.label(for: locatorId) else { return }
+        remoteLocatorConfig.deviceName = label
+    }
+
     /// Submit a typed password. Returns true if it authenticated.
     ///
     /// A wrong password leaves the dialog open to retry, per ADR-0006 — retyping is
@@ -1474,7 +1529,10 @@ final class LinkViewModel: ObservableObject {
             challenge?.rejected = true
             return false
         }
-        store.remember(locatorId: c.locatorId, passwordKey: key)
+        // The name is stored WITH the key, as Android's `rememberLocator` does: it is
+        // the only chance to learn it, since the dialog is raised on `PreLaunchData`
+        // and an armed locator never sends one again until it disarms.
+        store.remember(locatorId: c.locatorId, passwordKey: key, label: c.deviceName)
         gate.remember(locatorId: c.locatorId, passwordKey: key)
         policy.reconsider(c.locatorId)
         unauthorizedLocatorIds.remove(c.locatorId)

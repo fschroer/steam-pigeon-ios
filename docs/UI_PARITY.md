@@ -16,7 +16,7 @@ writing anything, rather than re-deriving it. The **deliberate divergences** are
 with what would close each one; there are only six, and every other difference found in
 this port was a defect.
 
-**The six deliberate divergences:**
+**The seven deliberate divergences:**
 
 | Divergence | Why | Closes when |
 |---|---|---|
@@ -26,6 +26,7 @@ this port was a defect.
 | Flight-profile chart constants converted at a 3.0 display density | Android draws the chart in raw **pixels** (`CHART_MARGIN_X = 64f`, `textSize = 32f`), so its apparent size changes with the phone; SwiftUI's Canvas works in points | never exactly — see the chart audit below. A side-by-side screenshot would settle whether 3.0 is the right divisor |
 | Download maps uses SwiftUI's `Menu` and `Slider` where Android uses `DropdownMenu` and a Material `Slider`, and an SF Symbol for the delete icon | ADR-0016's sanctioned list covers pickers and sliders outright; the delete glyph is a Compose `Icons.Filled.Delete`, a library with nothing to convert, so `trash` stands in as the map-column icons do | never — `trash` is pinned in `SFSymbolAvailabilityTests` like the rest |
 | Chart legend checkboxes are SF Symbols, not a Material `Checkbox` | ADR-0016 sanctioned departure: a Material checkbox clone next to iOS type reads as broken, and `checkmark.square.fill` / `square` carry the same two states in the same two colours | never |
+| iOS remembers the name of **every** locator it accepts a broadcast from; Android remembers one only for locators whose password it holds | An armed locator sends no device name, so a name has to come from something remembered — and Android's version never covers an **open** locator, which is the default state. fschroer saw the resulting blank row on the phone (2026-08-21) and asked for it closed | Android stores the name from every accepted `PreLaunchData`, not only from `rememberLocator` — see below |
 
 Everything else on these screens matches Android, including field order, widget shapes,
 wording and type weights. **Silence reads as parity**, so a divergence that is not written
@@ -434,6 +435,69 @@ naming it would tell the user the rocket is in a condition the rocket never clai
 
 Both are pinned by `LocatorStatsRowsTests`, including a case that fails if any label is
 ever the Swift case name again.
+
+### Tenth round, 2026-08-21 — the armed locator with no name, and the receiver called "Connected"
+
+Both reported off the phone, and both the same mistake in two places: a field that only
+`PreLaunchData` carries was read as though it were always there. **An armed locator sends
+`TelemetryData` and nothing else** — no locator name, and no receiver name either, since
+the receiver appends its own name to the pre-launch broadcast as it relays it. Open the
+app with the rocket already on the pad and armed, and every name on the status panel came
+up empty while the app was plainly receiving, plotting and arming that rocket.
+
+| Gap | Android | iOS before |
+|---|---|---|
+| Locator row | `lastMessageAge < messageTimeout -> locatorConfig.deviceName`, then `Ready -> "No Locator"`, else `""` | `prelaunch?.deviceName ?? "No Locator"` — so an armed locator, which sends no name, was reported as **absent** |
+| Locator name source | `evaluateRecognition` falls back to `knownLocators[id].label` when the live name is empty | no fallback at all |
+| Receiver row | `receiverDevice?.name?.takeIf { it.isNotEmpty() } ?: receiverConfig.deviceName` — the **BLE device name first** | `prelaunch?.receiverName`, so with an armed locator the row fell through to the connection state and read "Connected" |
+
+Three things followed:
+
+- The locator row now reports absence **only when nothing is arriving** — Android's
+  three-way rule, including the blank third case that keeps this row from repeating what
+  the receiver row above it already says.
+- The receiver is named by its **BLE name** first (`BluetoothTransport.connectedName`,
+  refreshed on `peripheralDidUpdateName`, since GAP can resolve it after the link is up),
+  falling back to the configured name.
+- Locator names are remembered per locator id, and that is the **divergence in the table
+  above** — see below.
+
+#### ⚠️ iOS-FIRST behaviour: naming a locator heard only while armed
+
+**Asked for by fschroer on 2026-08-21, to be ported to Android.** Written as a
+description so the Android change needs no Swift.
+
+> A locator that is armed when the app starts should still be named on the status panel,
+> whether or not it has a password.
+
+Android already stores a name for **some** locators: `rememberLocator(id, key, label)`
+writes `KnownLocator.label` when a password challenge is accepted, and
+`evaluateRecognition` falls back to it. That covers a password-protected locator and
+nothing else — an **open** locator is authorized without ever being challenged, so no
+label is ever written for it, and its row stays blank for the whole flight. Open locators
+are the default state, which makes the gap the common case rather than the edge one.
+
+The rules, exactly as implemented here (`KnownLocatorStore.noteName`,
+`LinkViewModel.adoptStoredLabel`):
+
+- The name is stored **whenever a `PreLaunchData` is accepted** — that is, from a locator
+  that passed the recognition gate. Not from broadcasts the gate rejected: a name is only
+  worth keeping for a locator this app is entitled to display.
+- Keyed on the 32-bit **`locator_id`**, beside the password key where there is one. An id
+  may hold a name with no key; the two are independent.
+- **Written only when it changes.** `PreLaunchData` arrives at 1 Hz, and re-persisting an
+  unchanged name at that rate is churn.
+- **An empty name never overwrites a stored one.** `TelemetryData` has no name field, so
+  empty means "not known here", never "renamed to nothing".
+- The stored name is used **only when the live one is empty**, and the first
+  `PreLaunchData` overwrites it as soon as the locator disarms — the same precedence
+  Android's label fallback has.
+- Forgetting a locator forgets its name with its key.
+
+**What this still cannot do, on either platform:** name a locator that has *never* been
+heard disarmed by this install. Nothing anywhere carries that name — the only fix would
+be a `locator_id`-to-name field in `TelemetryData`, which is a firmware change and wants
+an ADR.
 
 ### Receiver Settings — protocol layer and form (2026-08-20)
 

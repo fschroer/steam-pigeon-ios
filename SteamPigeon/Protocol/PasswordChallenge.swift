@@ -62,16 +62,33 @@ struct ChallengePolicy {
     mutating func reconsider(_ locatorId: UInt32) { declined.remove(locatorId) }
 }
 
-/// Locators whose password we hold, persisted across launches.
+/// Locators whose password we hold, and what every locator this app has heard calls
+/// itself. Both persisted across launches.
 ///
 /// Keys are derived (FNV-1a), never the plaintext password: the app has no reason to
 /// keep what the user typed, and the derived key is all the auth check needs.
+///
+/// **Names are kept for locators with no password too**, which is where this goes
+/// beyond Android (`docs/UI_PARITY.md`). An armed locator broadcasts `TelemetryData`,
+/// which carries no device name at all, so a locator that is armed before the app opens
+/// can only be named from something remembered. Android remembers a name only as
+/// `KnownLocator.label`, written when a password is accepted — so an OPEN locator, the
+/// default state, is never named while armed on either platform. Storing the name of
+/// every locator whose broadcast is accepted closes that, and it is the same fact from
+/// the same field, kept for one more locator.
 struct KnownLocatorStore {
 
     private static let key = "com.steampigeon.ios.knownLocators"
+    /// A SEPARATE defaults key, not a richer value under the one above: installs made
+    /// before labels existed keep their stored keys, which is the half that matters —
+    /// and names are now kept for locators that have no entry there at all.
+    private static let labelKey = "com.steampigeon.ios.knownLocatorLabels"
     private let defaults: UserDefaults
 
     private(set) var keysById: [UInt32: UInt32] = [:]
+    /// The last device name each locator was heard to carry. A superset of Android's
+    /// `KnownLocator.label`: an id can have a name here with no password key.
+    private(set) var labelsById: [UInt32: String] = [:]
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -80,22 +97,51 @@ struct KnownLocatorStore {
                 if let id = UInt32(k) { keysById[id] = v.uint32Value }
             }
         }
+        if let raw = defaults.dictionary(forKey: Self.labelKey) as? [String: String] {
+            for (k, v) in raw {
+                if let id = UInt32(k) { labelsById[id] = v }
+            }
+        }
     }
 
-    mutating func remember(locatorId: UInt32, passwordKey: UInt32) {
+    mutating func remember(locatorId: UInt32, passwordKey: UInt32, label: String = "") {
         keysById[locatorId] = passwordKey
+        // An empty name never replaces one already held: only `PreLaunchData` carries a
+        // name, so the empty case means "not known here", not "renamed to nothing".
+        if !label.isEmpty { labelsById[locatorId] = label }
         persist()
+    }
+
+    /// Record what a locator calls itself, whether or not its password is held.
+    ///
+    /// Returns false when nothing changed, which is the common case: `PreLaunchData`
+    /// arrives at 1 Hz and re-writing `UserDefaults` at that rate for a name that has
+    /// not moved is pure churn.
+    @discardableResult
+    mutating func noteName(locatorId: UInt32, name: String) -> Bool {
+        guard !name.isEmpty, labelsById[locatorId] != name else { return false }
+        labelsById[locatorId] = name
+        persist()
+        return true
     }
 
     mutating func forget(locatorId: UInt32) {
         keysById.removeValue(forKey: locatorId)
+        labelsById.removeValue(forKey: locatorId)
         persist()
+    }
+
+    func label(for locatorId: UInt32) -> String? {
+        labelsById[locatorId]?.isEmpty == false ? labelsById[locatorId] : nil
     }
 
     private func persist() {
         var raw: [String: NSNumber] = [:]
         for (id, key) in keysById { raw[String(id)] = NSNumber(value: key) }
         defaults.set(raw, forKey: Self.key)
+        var labels: [String: String] = [:]
+        for (id, label) in labelsById { labels[String(id)] = label }
+        defaults.set(labels, forKey: Self.labelKey)
     }
 
     /// Try `password` against `frame`. On success returns the derived key to store.

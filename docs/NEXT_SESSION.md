@@ -1,6 +1,6 @@
 # Resume here — iOS port
 
-Updated 2026-08-21. **483 tests passing**, clean build with no warnings from our own
+Updated 2026-08-21. **498 tests passing**, clean build with no warnings from our own
 sources.
 
 **Every Android screen is now ported.** What is left is features inside screens, and
@@ -80,7 +80,7 @@ structure before writing anything.
 
 ---
 
-## Two things Android owes iOS
+## Three things Android owes iOS
 
 **The app's name.** fschroer decided on 2026-08-21 that the app is **SteamPigeon**.
 Android's `app_name` still reads "Wherezit?" — in `values/strings.xml` and in the header
@@ -95,8 +95,18 @@ coordinate, and no invented fallback when there is no fix. Android sets no openi
 at all today. The full rule set is in `docs/UI_PARITY.md` under "iOS-FIRST behaviour" —
 written as a description precisely so the Android change does not require reading Swift.
 
-This is the only behaviour in the port that landed here first, and it was asked for. The
-standing rule is still Android-first.
+**Naming a locator that is armed at cold start.** An armed locator broadcasts
+`TelemetryData`, which carries no `device_name`, so the name has to come from something
+remembered. Android remembers one only as `KnownLocator.label`, written when a password
+is accepted — so an **open** locator, the default state, is never named while armed; its
+status row is simply blank. iOS now stores the name from every `PreLaunchData` it accepts
+(`KnownLocatorStore.noteName`), which covers open locators as well. fschroer asked for
+this on 2026-08-21 after seeing the blank row on the phone. Written up in
+`docs/UI_PARITY.md` under "Naming a locator heard only while armed"; the Android change
+is one call beside `rememberLocator`.
+
+The download camera and this are the only behaviours in the port that landed here first,
+and both were asked for. The standing rule is still Android-first.
 
 ## Where the port stands
 
@@ -148,6 +158,23 @@ reproduced, and the one number in the chart with no exact answer.
 
 ## Not yet exercised
 
+- **Both 2026-08-21 connectivity fixes, which are Bluetooth and therefore phone-only.**
+  1. *An armed locator now has a name, and so does the receiver.* `TelemetryData`
+     carries neither, so a locator first heard while armed is named from the last name
+     stored for its id (`KnownLocatorStore.noteName` → `LinkViewModel.adoptStoredLabel`),
+     and the receiver is named by its **BLE device name** — Android's first source,
+     which iOS was not reading at all. The locator row reports "No Locator" only when
+     nothing is arriving. Confirmed on the phone 2026-08-21 that the *scan* half works;
+     what is unproven is this half: **open the app with the rocket already armed and
+     confirm both rows name their device.** The locator must have been heard disarmed at
+     least once by this install — nothing anywhere carries the name of a locator that has
+     only ever been heard armed.
+  2. *The app never stops looking for a receiver.* An empty scan window starts another,
+     and losing the link returns to scanning
+     (`BluetoothTransport.shouldResumeScanning`). **Verified on the phone 2026-08-21**:
+     started with every receiver off, switching one on brought up the picker. Still
+     unwatched is the battery cost of a continuous 3 s scan loop over an afternoon —
+     Android does the same from a foreground service, which iOS has no equivalent for.
 - **A real archived-record download.** The whole Flight Profiles path — metadata retry,
   the sample burst, the bitmap acks, parity recovery, the locator's return to Disarmed on
   exit — has only run against fixtures. The simulator has no Bluetooth, so this is a

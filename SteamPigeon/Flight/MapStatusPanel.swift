@@ -15,6 +15,9 @@ struct MapStatusPanel: View {
     let receiverBatteryMv: UInt16?
 
     let locatorName: String?
+    /// Android's `lastMessageAge < messageTimeout` for this row: whether the locator has
+    /// spoken recently enough for its name — or its absence — to be worth reporting.
+    var locatorFresh: Bool = false
     let satellites: UInt8?
     let gpsStatus: SensorHealth?
     let armed: Bool
@@ -271,13 +274,21 @@ struct MapStatusPanel: View {
     }
 
     private var receiverText: String {
-        if let n = receiverName, !n.isEmpty { return n }
-        switch connectionState {
+        Self.receiverText(name: receiverName, state: connectionState)
+    }
+
+    /// Static for the same reason `locatorText` is: the wording is a port decision, and
+    /// a decision worth testing without a view.
+    static func receiverText(name: String?, state: TransportState) -> String {
+        if let n = name, !n.isEmpty { return n }
+        switch state {
         case .ready:          return "Connected"
         case .connected:      return "Resolving…"
         case .connecting:     return "Connecting…"
         case .scanning:       return "Scanning…"
-        case .noDevicesFound: return "No receiver"
+        // Android's wording, and now true again: the scan restarts on an empty window,
+        // so this state is a state of WAITING, not the end of looking.
+        case .noDevicesFound: return "Waiting for receiver"
         case .poweredOff:     return "Bluetooth off"
         case .unauthorized:   return "No permission"
         case .unsupported:    return "Unsupported"
@@ -288,9 +299,28 @@ struct MapStatusPanel: View {
 
     /// The device name alone. Armed state is carried by the rocket icon's tint, as on
     /// Android — spelling it out again in the row is a second claim to keep in sync.
+    ///
+    /// Three cases, in Android's order (`FlightMapScreen.kt`):
+    ///
+    /// 1. **Something is arriving** — its name, and nothing else. That name can be blank
+    ///    for a locator first heard while ARMED and never authorized here, because only
+    ///    `PreLaunchData` carries one; blank is then the honest answer, and "No Locator"
+    ///    is a flat contradiction of the telemetry being plotted beside it. (Authorized
+    ///    locators are named from the stored label — `LinkViewModel.adoptStoredLabel`.)
+    /// 2. **Nothing arriving, receiver up** — "No Locator": there is a radio listening
+    ///    and it is hearing nothing.
+    /// 3. **Nothing arriving, no receiver** — blank. Gated on `.ready` so this row cannot
+    ///    second-guess the receiver row above it: with no receiver there is nothing to
+    ///    hear a locator THROUGH, and saying so twice reads as two faults instead of one.
     private var locatorText: String {
-        guard let n = locatorName, !n.isEmpty else { return "No Locator" }
-        return n
+        Self.locatorText(name: locatorName, fresh: locatorFresh, state: connectionState)
+    }
+
+    /// Static so the rule can be tested without a view — it is the rule, not the
+    /// rendering, that was wrong.
+    static func locatorText(name: String?, fresh: Bool, state: TransportState) -> String {
+        if fresh { return name ?? "" }
+        return state == .ready ? "No Locator" : ""
     }
 
     private var rocketTint: Color {

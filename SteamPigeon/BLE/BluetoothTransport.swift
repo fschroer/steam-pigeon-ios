@@ -47,6 +47,9 @@ final class BluetoothTransport: NSObject {
     /// Complete, CRC-verified frames. Already reassembled by `PacketFramer`.
     var onFrame: (([UInt8]) -> Void)?
     var onStateChange: ((TransportState) -> Void)?
+    /// The connected receiver's BLE name, when it arrives or changes. GAP resolves it
+    /// asynchronously, so it can land after the link is already `.ready`.
+    var onNameChange: ((String?) -> Void)?
     /// Every FFE0 peripheral seen this scan, so the user can choose. Android shows a
     /// picker whenever discovery finds one or more devices; connecting to whatever
     /// answered first is wrong the moment there are two receivers at a launch.
@@ -190,6 +193,42 @@ final class BluetoothTransport: NSObject {
                 self.state = .noDevicesFound
             }
             self.onDiscover?(self.discovered)
+            // ...and then look again if that is where this window left us — see
+            // `shouldResumeScanning`. Reporting the empty window is only half of what
+            // Android does with the state. A window that DID find something is left
+            // alone: the picker is up, and the choice is the user's.
+            self.resumeScanning(after: self.state)
+        }
+    }
+
+    /// Look again, when the state the app has landed in is one Android keeps looking
+    /// from. Both callers reach it after the radio has gone quiet with nothing to talk
+    /// to; the decision lives here so there is one place that says when the app stops.
+    private func resumeScanning(after state: TransportState) {
+        guard Self.shouldResumeScanning(after: state) else { return }
+        startScan()
+    }
+
+    /// **The app never stops looking for a receiver on its own.**
+    ///
+    /// Android's `BluetoothService` collects the connection state and hands it back to
+    /// `handleConnectionState`, which turns `NoDevicesAvailable` — and the `Enabled`
+    /// that a run of failed reconnects falls back to — straight into another
+    /// `startScan()`. The result is a receiver that can be switched on at any time and
+    /// is picked up within a scan window.
+    ///
+    /// iOS had neither half: one 3 s window at launch and then nothing. Start the app
+    /// with the receiver off and it sat on "No receiver" until the user found Rescan,
+    /// and a receiver switched off mid-session left it on "Disconnected" the same way.
+    ///
+    /// `poweredOff`/`unauthorized`/`unsupported` are deliberately NOT here: scanning
+    /// cannot help, `centralManagerDidUpdateState` restarts the scan the moment the
+    /// radio comes back, and CoreBluetooth drops commands issued meanwhile anyway.
+    static func shouldResumeScanning(after state: TransportState) -> Bool {
+        switch state {
+        case .noDevicesFound, .disconnected: return true
+        case .idle, .unsupported, .unauthorized, .poweredOff,
+             .scanning, .connecting, .connected, .ready: return false
         }
     }
 
@@ -200,6 +239,19 @@ final class BluetoothTransport: NSObject {
         scanWindowTimer = nil
         guard canCommandCentral else { return }
         central.stopScan()
+    }
+
+    /// The connected receiver's own BLE device name.
+    ///
+    /// This is Android's FIRST source for the receiver row —
+    /// `BluetoothManagerRepository.receiverDevice.value?.name` — and the only one that
+    /// works while the locator is armed: the name the app was reading instead rides in
+    /// `PreLaunchData`, which an armed locator does not send, so the row fell back to
+    /// the connection state and read "Connected" for the whole flight.
+    var connectedName: String? {
+        guard let p = peripheral,
+              p.state == CBPeripheralState.connected else { return nil }
+        return p.name
     }
 
     /// Connect to one of the peripherals found this scan.
@@ -372,13 +424,32 @@ extension BluetoothTransport: CBCentralManagerDelegate {
 
     func centralManager(_ c: CBCentralManager, didFailToConnect p: CBPeripheral, error: Error?) {
         state = .disconnected
+        // A failed connect is the same dead end as a lost one: without this the app sat
+        // on "Disconnected" after one bad attempt, with the receiver powered up in front
+        // of the user and no way back but Rescan.
+        resumeScanning(after: .disconnected)
     }
 
     func centralManager(_ c: CBCentralManager, didDisconnectPeripheral p: CBPeripheral, error: Error?) {
+        // Only for the peripheral we are actually on. `connect(to:)` cancels the previous
+        // link when the user picks the other receiver, and that cancellation lands here —
+        // reported as a disconnect it would overwrite the `.connecting` state of the
+        // switch already in progress.
+        guard p.identifier == peripheral?.identifier else { return }
         stopHealthWatchdog()
         writeChar = nil
         framer.reset()
-        state = .disconnected
+        // A scan window already open means this disconnect is one we asked for on the
+        // way to looking again (`rescan()`), and "Disconnected" would replace an
+        // accurate "scanning" with a stale verdict for the rest of the window.
+        if scanWindowTimer == nil { state = .disconnected }
+        // Look for it again, rather than sitting on "Disconnected" until the user presses
+        // Rescan. Android reconnects to the remembered device with a backoff and falls
+        // back to a scan once the attempts run out; this app deliberately remembers no
+        // receiver (that is what hid the second one), so the scan IS that fallback — and
+        // a receiver switched off and on again comes back the same way one switched on
+        // for the first time does.
+        resumeScanning(after: .disconnected)
     }
 }
 
@@ -410,6 +481,11 @@ extension BluetoothTransport: CBPeripheralDelegate {
         guard ch.uuid == Self.notifyCharUUID, ch.isNotifying, error == nil else { return }
         state = .ready
         startHealthWatchdog()
+    }
+
+    func peripheralDidUpdateName(_ p: CBPeripheral) {
+        guard p.identifier == peripheral?.identifier else { return }
+        onNameChange?(connectedName)
     }
 
     func peripheral(_ p: CBPeripheral, didUpdateValueFor ch: CBCharacteristic, error: Error?) {

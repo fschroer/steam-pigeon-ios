@@ -273,7 +273,9 @@ struct MapScreen: View {
             HStack {
                 Spacer()
                 LocatorStatsPanel(
-                    deviceName: p?.deviceName ?? "",
+                    // Same source as the status panel's locator row, and for the same
+                    // reason — Android passes `locatorConfig` to `LocatorStats` too.
+                    deviceName: model.remoteLocatorConfig.deviceName,
                     flightState: t?.flightState ?? .waitingLaunch,
                     armed: model.armed,
                     inFlight: model.isInFlight,
@@ -311,13 +313,25 @@ struct MapScreen: View {
     /// The status rows plus the action dropdown, centred in the top row.
     private var statusPanel: some View {
         MapStatusPanel(
-                    receiverName: model.prelaunch?.receiverName,
+                    // The receiver's BLE name first, its configured name second — the
+                    // order Android resolves this in. `prelaunch?.receiverName` alone
+                    // left the row reading "Connected" whenever the locator was armed,
+                    // since that field rides in a broadcast an armed locator stops
+                    // sending.
+                    receiverName: model.receiverDisplayName,
                     connectionState: model.state,
                     // Pre-launch-only fields, aged on their own clock: the locator stops
                     // sending them the moment it is armed, and nothing is worse than a
                     // battery reading that is quietly the one from before the flight.
                     receiverBatteryMv: model.isPreLaunchFresh ? model.prelaunch?.receiverBatteryMv : nil,
-                    locatorName: model.prelaunch?.deviceName,
+                    // NOT `prelaunch?.deviceName`: the locator stops sending
+                    // `PreLaunchData` the moment it is armed, so that field is empty for
+                    // the whole flight when the app was opened with the locator already
+                    // armed. `remoteLocatorConfig` is the name the app currently believes
+                    // — live from the last broadcast, or the stored label — exactly as
+                    // Android reads `locatorConfig.deviceName` here.
+                    locatorName: model.remoteLocatorConfig.deviceName,
+                    locatorFresh: model.isLocatorFresh,
                     satellites: model.satellites,
                     gpsStatus: model.gpsStatus,
                     armed: model.armed,
