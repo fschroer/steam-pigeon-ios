@@ -118,6 +118,16 @@ enum SPFont {
         Font.custom(mono, size: size, relativeTo: .body)
     }
 
+    /// Flight-profile chart labels. Android draws these with a raw `TextPaint`, whose
+    /// default family is the platform sans — Roboto, the same face as the display
+    /// styles above.
+    ///
+    /// **Fixed size, unlike every other style here.** The chart lays itself out in its
+    /// own coordinate space and measures its annotations to pack them into rows; a
+    /// label that grew with the reader's Dynamic Type setting would overrun the plot
+    /// and collide with the row beside it.
+    static func chartLabel(size: CGFloat) -> Font { Font.custom(display, fixedSize: size) }
+
     /// Names as the OS knows them. Checked at launch — a font that fails to bundle
     /// falls back to the system face silently, which looks like a design choice
     /// rather than a missing file.

@@ -798,6 +798,182 @@ final class LinkViewModel: ObservableObject {
 
     func dismissReceiverPicker() { discoveredReceivers = [] }
 
+    // MARK: - Flight profiles (ADR-0016; Android `FlightProfilesScreen` + `FlightDataRepository`)
+
+    /// The locator's archive slots, as its last `flightMetadata` frame described them.
+    @Published private(set) var flightProfileMetadata: [FlightRecordMetadata] = []
+    @Published private(set) var flightProfileMetadataState: ConfigMessageState = .idle
+
+    /// How many times the current fetch has asked the locator for the record list.
+    /// Surfaced so a slow fetch reads as "still trying" rather than as a frozen screen.
+    @Published private(set) var flightProfileMetadataAttempt = 0
+
+    /// The archive slot being viewed. Also the gate on `flightEvents`: the locator
+    /// repeats that frame, and a late one from a previously-selected record would
+    /// otherwise mislabel the chart on screen.
+    @Published private(set) var flightProfileArchivePosition = 0
+
+    @Published private(set) var flightProfileDataState: ConfigMessageState = .idle
+
+    /// False shows the record list, true shows the chart. One flag rather than a
+    /// navigation stack, exactly as Android has it — the locator's transfer state is
+    /// what actually changes, and the screen follows it.
+    @Published private(set) var flightProfileDataDisplayState = false
+
+    /// Per-record event summary for the profile being viewed. Arrives as its own
+    /// `flightEvents` frame just ahead of the sample burst.
+    @Published private(set) var flightEvents = FlightEvents()
+
+    /// Samples reassembled so far. Republished as packets land, so the chart draws a
+    /// transfer while it is still streaming.
+    @Published private(set) var flightSamples: [FlightSample] = []
+    @Published private(set) var flightTransferProgress = FlightTransferProgress()
+
+    private let flightData = FlightDataRepository()
+
+    /// Android's `METADATA_RETRY_INITIAL_MS` / `METADATA_RETRY_MAX_MS`. The cap keeps a
+    /// long wait refreshing the locator's 30 s metadata-idle timeout, rather than
+    /// letting it drop back to Disarmed while the screen is still open.
+    private static let metadataRetryInitial: TimeInterval = 3
+    private static let metadataRetryMax: TimeInterval = 12
+
+    /// Ask the locator to list its archived flights, and keep asking until it answers.
+    ///
+    /// Mirrors Android's entry `LaunchedEffect` and `fetchFlightProfileMetadata`
+    /// together: reset, then retry with a doubling backoff. **Cancellation is what ends
+    /// it** — the screen runs this from a `.task`, which iOS cancels on disappear, the
+    /// same way leaving the composable cancels Android's coroutine.
+    func fetchFlightProfileMetadata() async {
+        // Resuming into an already-loaded chart: a metadata request would send the
+        // locator back to MetadataRequested and abort the transfer the user is waiting
+        // on, so leave an in-progress load alone.
+        guard !flightProfileDataDisplayState else { return }
+
+        flightProfileDataState = .idle
+        flightProfileMetadata = []
+        flightData.clearMetadata()
+        flightProfileMetadataAttempt = 0
+
+        var backoff = Self.metadataRetryInitial
+        var attempt = 0
+
+        while !Task.isCancelled {
+            // Opening a record takes over the link — see above.
+            if flightProfileDataDisplayState { return }
+
+            attempt += 1
+            flightProfileMetadataAttempt = attempt
+            flightProfileMetadataState = .sendRequested
+            let sent = requestFlightProfileMetadata()
+            // Don't clobber a response that landed while we were sending.
+            if !sent {
+                flightProfileMetadataState = .sendFailure
+            } else if flightProfileMetadataState == .sendRequested {
+                flightProfileMetadataState = .sent
+            }
+
+            if await waitForFlightMetadata(timeout: backoff) { return }
+
+            if flightProfileMetadataState == .sent {
+                flightProfileMetadataState = .notAcknowledged
+            }
+            backoff = min(backoff * 2, Self.metadataRetryMax)
+        }
+    }
+
+    /// Poll for the answer, at the same 100 ms cadence as every other wait here.
+    private func waitForFlightMetadata(timeout: TimeInterval) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if Task.isCancelled { return false }
+            if flightProfileMetadataState == .ackUpdated { return true }
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        return flightProfileMetadataState == .ackUpdated
+    }
+
+    /// Ask for the record list. Addressed, like every locator-directed command.
+    @discardableResult
+    func requestFlightProfileMetadata() -> Bool {
+        guard let id = connectedLocatorId, gate.mayCommand(id),
+              let msg = OutboundMessage.locatorDirected(.flightMetadataRequest,
+                                                        targetLocatorId: id) else { return false }
+        transport.send(msg)
+        return true
+    }
+
+    /// Open one archived record: show the chart and start the transfer.
+    func openFlightProfile(position: Int) {
+        flightProfileArchivePosition = position
+        flightProfileDataDisplayState = true
+        flightProfileDataState = .sendRequested
+
+        // Clears the receive state and, with it, the drain flag set by a previous
+        // cancel — a transfer cannot start while stale packets are still being refused.
+        flightData.beginTransfer()
+        flightSamples = []
+        flightTransferProgress = flightData.progress
+
+        guard let id = connectedLocatorId, gate.mayCommand(id),
+              let msg = OutboundMessage.locatorDirected(.flightDataRequest,
+                                                        targetLocatorId: id,
+                                                        payload: [UInt8(clamping: position)])
+        else {
+            flightProfileDataState = .sendFailure
+            return
+        }
+        transport.send(msg)
+        flightProfileDataState = .sent
+    }
+
+    /// Leave the chart for the record list.
+    ///
+    /// The metadata request is not merely a refresh: it tells the locator we are back
+    /// at the list, so it aborts the in-flight transfer immediately instead of bursting
+    /// until it times out.
+    func returnToFlightProfileList() {
+        clearFlightProfileData()
+        flightProfileDataState = .idle
+        flightProfileDataDisplayState = false
+        requestFlightProfileMetadata()
+    }
+
+    /// Drop one record's data and refuse anything still arriving for it.
+    func clearFlightProfileData() {
+        flightEvents = FlightEvents()
+        flightData.cancelTransfer()
+        flightSamples = []
+        flightTransferProgress = flightData.progress
+    }
+
+    /// Leaving the screen altogether: tell the locator to return to Disarmed so it
+    /// resumes `PreLaunchData`. It is a `DisarmRequest` because that is the message the
+    /// locator's flight-profile mode listens for — the rocket is disarmed already.
+    func exitFlightProfileMode() {
+        flightProfileDataDisplayState = false
+        guard let id = connectedLocatorId, gate.mayCommand(id),
+              let msg = OutboundMessage.locatorDirected(.disarmRequest,
+                                                        targetLocatorId: id) else { return }
+        transport.send(msg)
+    }
+
+    /// Acknowledge what has arrived so far. The locator sends what the bitmap says is
+    /// missing, so a dropped ack costs a retransmit round rather than the transfer.
+    private func sendFlightDataAck(_ payload: [UInt8]) {
+        guard let id = connectedLocatorId, gate.mayCommand(id),
+              let msg = OutboundMessage.locatorDirected(.flightDataAck,
+                                                        targetLocatorId: id,
+                                                        payload: payload) else { return }
+        transport.send(msg)
+    }
+
+    /// Republish what the repository holds after a packet is absorbed.
+    private func publishFlightSamples() {
+        flightSamples = flightData.samples
+        flightTransferProgress = flightData.progress
+    }
+
+
     /// Drop everything that describes a link we no longer have.
     private func clearLiveReadouts() {
         prelaunch = nil
@@ -1060,6 +1236,39 @@ final class LinkViewModel: ObservableObject {
             if let r = ChannelSurvey.parse(frame) {
                 channelSurvey = r
                 surveyInProgress = false
+            }
+
+        // The flight-profile messages are NOT authenticated — they carry no locator id
+        // and no auth tag, so there is nothing to gate them on. They arrive only in
+        // answer to a request this app addressed to the connected locator, which is
+        // what makes that acceptable and also what the ack path re-checks.
+        case .flightMetadata:
+            if flightData.onFlightMetadata(frame) {
+                flightProfileMetadata = flightData.metadata
+                flightProfileMetadataState = .ackUpdated
+            }
+        case .flightEvents:
+            // Only adopt the summary for the record being viewed: the locator repeats
+            // this frame, and a late one from a previous record would mislabel the
+            // chart on screen.
+            if let e = FlightEvents.parse(frame), e.record == flightProfileArchivePosition {
+                flightEvents = e
+            }
+        case .flightData:
+            if let ack = flightData.onFlightData(frame) {
+                sendFlightDataAck(ack)
+                publishFlightSamples()
+                flightProfileDataState = flightData.progress.complete ? .ackUpdated : .sent
+            } else {
+                // The empty-record marker returns no ack, and it is the one case that
+                // changes the screen without a packet being absorbed.
+                flightTransferProgress = flightData.progress
+            }
+        case .flightDataParity:
+            if let ack = flightData.onFlightDataParity(frame) {
+                sendFlightDataAck(ack)
+                publishFlightSamples()
+                flightProfileDataState = flightData.progress.complete ? .ackUpdated : .sent
             }
         default:
             break

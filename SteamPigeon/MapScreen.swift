@@ -218,6 +218,7 @@ struct MapScreen: View {
                 case .appSettings:      AppSettingsView(settings: settings)
                 case .receiverSettings: ReceiverSettingsView(model: model)
                 case .locatorSettings:  LocatorSettingsView(model: model)
+                case .flightProfiles:   FlightProfilesView(model: model) { sheet = nil }
                 default:                NotYetBuiltView(destination: destination)
                 }
             }
@@ -225,7 +226,18 @@ struct MapScreen: View {
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .navigationBarLeading) {
-                        Button("Done") { sheet = nil }
+                        // Flight Profiles is two screens behind one flag, so Done steps
+                        // the chart back to the record list first — what Android's
+                        // up-arrow does there (`AppNavigation.kt`). Anywhere else, and
+                        // from the list itself, it closes the sheet.
+                        Button("Done") {
+                            if destination == .flightProfiles,
+                               model.flightProfileDataDisplayState {
+                                model.returnToFlightProfileList()
+                            } else {
+                                sheet = nil
+                            }
+                        }
                     }
                 }
         }

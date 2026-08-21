@@ -10,14 +10,23 @@ enum FlightDataSizes {
     /// it (96 B on the wire, 90 B of payload). This constant IS the parser's loop
     /// bound — too high and a short frame is rejected outright, too low and the
     /// trailing slots silently vanish from the flight list.
-    static let flightMetadataPayloadSize = 90
+    static let flightMetadataPayloadSize = metadataRecordCount * metadataRecordSize
+
+    /// Archive slots the locator keeps — the parser's loop bound, see above.
+    static let metadataRecordCount = 9
+    /// `FlightMetadataRecord`: timestamp u32 + apogee f32 + flight_time u16.
+    static let metadataRecordSize = 4 + 4 + 2
 
     /// PacketHeader 6 + transfer_id 2 + packet_count 2 + bitmap[32].
     ///
     /// This is the body the ack **builder** produces. On the wire the send path
     /// splices in `target_locator_id`, so the firmware sees
     /// `sizeof(FlightDataAck) == 46`.
-    static let flightDataAckSize = 42
+    static let flightDataAckSize = WireProtocol.headerSize + flightDataAckPayloadSize
+
+    /// What `FlightDataRepository.ackPayload()` builds: transfer_id 2 + packet_count 2
+    /// + bitmap 32. The header and `target_locator_id` are added by `OutboundMessage`.
+    static let flightDataAckPayloadSize = 2 + 2 + maxPackets / 8
 
     /// Transfer window: 256 packets, so the ack bitmap is 32 bytes.
     static let maxPackets = 256
@@ -38,4 +47,8 @@ enum FlightDataSizes {
     /// packet its on-wire size is fixed. 16 + 239 = 255 =
     /// `sizeof(FlightDataPacket)`.
     static let flightDataParitySize = flightDataHeaderSize + flightDataPayloadCapacity
+
+    /// `FlightProfileCodec::LATLON_SCALE` — the fixed-point divisor for the per-sample
+    /// position deltas, which are scaled *radians*, not degrees.
+    static let latLonScale = 1e7
 }

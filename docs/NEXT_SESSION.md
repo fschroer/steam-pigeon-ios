@@ -1,12 +1,14 @@
 # Resume here — iOS port
 
-Updated 2026-08-20. **408 tests passing**, clean build with no warnings from our own
-sources. Branch `fix/ios-android-parity-pass`, 11 commits, pushed.
+Updated 2026-08-21. **442 tests passing**, clean build (fresh `-derivedDataPath`) with no
+warnings from our own sources.
 
 **Hardware status: everything testable has been tested on the phone except an actual
-flight.** fschroer exercised the map, the settings screens, the receiver picker, the
-channel move, the pad alert and the voice against real hardware. What remains unproven is
-what only a flight can prove — see *Not yet exercised* below.
+flight — and except Flight Profiles, which landed 2026-08-21 and has only been driven on
+the simulator against fixture data.** fschroer exercised the map, the settings screens,
+the receiver picker, the channel move, the pad alert and the voice against real hardware.
+What remains unproven is what only a flight can prove, plus a real archived-record
+download — see *Not yet exercised* below.
 
 ---
 
@@ -69,11 +71,22 @@ structure before writing anything.
 ## Where the port stands
 
 **Screens done:** flight map (with the full camera model), Application Settings, Receiver
-Settings, Locator Settings.
+Settings, Locator Settings, **Flight Profiles** (the record list and the chart).
 
-**Screens remaining:** Flight Profiles (1,002 lines), Deployment Test (160), Download maps
-(677). The last two depend on flight-data download, which is unported and whose iOS
-throughput ADR-0016 flags as an open unknown.
+**Screens remaining:** Deployment Test (160), Download maps (677). Neither is blocked any
+more: **the flight-data transfer layer landed with Flight Profiles** —
+`FlightDataRepository.swift` (bitmap ack, XOR parity FEC, the delta codec),
+`FlightEvents.swift` (MsgType 19), and the request/exit handshake in `LinkViewModel`. iOS
+throughput over a real transfer is still the open unknown ADR-0016 named; nothing has
+downloaded a record from hardware yet.
+
+**Also unblocked, and still to build: the archived-path map control.** Android offers it
+only once a record is downloaded, which is now possible here. It needs Android's
+`archivedPathPoints` and the control itself.
+
+**Read `docs/UI_PARITY.md` § "Flight Profiles" before touching that screen.** It records
+what was mirrored deliberately, the two Android FEC bugs fixed here rather than
+reproduced, and the one number in the chart with no exact answer.
 
 **Features remaining:**
 
@@ -82,13 +95,19 @@ throughput ADR-0016 flags as an open unknown.
   ADR-0022 rule when porting: a withheld distance must mean **silence**, not a stale
   number read aloud.
 - **Camera passthrough** behind the heads-up gauges (landscape).
-- **Archived-path map control.** Correctly absent — Android offers it only once a record
-  is downloaded, so it unblocks with flight-data download.
+- **Archived-path map control.** Now unblocked — see above.
 
 ---
 
 ## Not yet exercised
 
+- **A real archived-record download.** The whole Flight Profiles path — metadata retry,
+  the sample burst, the bitmap acks, parity recovery, the locator's return to Disarmed on
+  exit — has only run against fixtures. The simulator has no Bluetooth, so this is a
+  phone job, and it is the first thing to try when one is next in hand.
+- **Double-tap to reset the chart zoom.** The recognizer is wired and pinch/pan were both
+  verified on the simulator; a synthesized double-tap could not be delivered inside the
+  tap window, so this one gesture is unproven.
 - **An actual flight.** Everything downstream of launch detection: the landing freeze,
   the new-flight track reset, auto-zoom through a real ascent, the camera filter under
   fast movement, telemetry-only fields.
@@ -101,7 +120,7 @@ throughput ADR-0016 flags as an open unknown.
 
 ---
 
-## Two system-level questions, neither an iOS decision
+## Three system-level questions, none an iOS decision
 
 1. **`launch_detect_altitude` and `deploy_signal_duration` cannot be read back.** Neither
    rides in `PreLaunchData`, so every locator config change writes placeholders (30 m,
@@ -110,7 +129,15 @@ throughput ADR-0016 flags as an open unknown.
    while the locator has in fact accepted the change. fschroer decided on 2026-08-20 to
    omit both controls on iOS. Closing it properly means carrying both fields in a
    broadcast — a change across three binaries, and an ADR.
-2. **The escalated pad-alert banner** wraps to five lines at 57 pt and runs under the
+2. **The flight-profile chart clips its altitude axis labels — on both platforms.**
+   Android's left gutter is 64 px and `900m` measures about 79 px at the 32 px axis text
+   size, so the first character is cut. iOS reproduces this exactly rather than quietly
+   widening the gutter, because Android is the reference implementation and a silent
+   divergence is worse than a shared defect. **The fix is one constant** (widen
+   `CHART_MARGIN_X`, or drop `CHART_AXIS_TEXT_SIZE`), and it lands on Android first, then
+   here in the same session. It needs fschroer's eye on the phone: it is a legibility
+   judgement, and the gutter is space taken from the plot.
+3. **The escalated pad-alert banner** wraps to five lines at 57 pt and runs under the
    control column. Android composes it identically at the same size on a near-identical
    screen width, so this is believed faithful — but it is a legibility question and wants
    a side-by-side screenshot that nobody has taken.

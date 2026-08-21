@@ -1,22 +1,26 @@
 # Android ⇄ iOS UI parity — inventory, audits and deliberate gaps
 
-**Status, 2026-08-20.** The flight map, Application Settings, Receiver Settings and
-Locator Settings are ported and have been exercised on hardware. Flight Profiles,
-Deployment Test and Download maps remain; the last two depend on flight-data download.
+**Status, 2026-08-21.** The flight map, Application Settings, Receiver Settings,
+Locator Settings and **Flight Profiles** are ported; everything but Flight Profiles has
+been exercised on hardware. Deployment Test and Download maps remain. The flight-data
+transfer layer landed with Flight Profiles, which also unblocks the archived-path map
+control (still to build).
 
 **How to use this file.** The audits below are the record of what was compared against
 Android and what was found — read the one for the screen you are about to touch before
 writing anything, rather than re-deriving it. The **deliberate divergences** are listed
-with what would close each one; there are only three, and every other difference found in
+with what would close each one; there are only five, and every other difference found in
 this port was a defect.
 
-**The three deliberate divergences:**
+**The five deliberate divergences:**
 
 | Divergence | Why | Closes when |
 |---|---|---|
 | No launch-detect altitude / deploy-signal duration controls in Locator Settings | Neither field rides in a broadcast, so a change can never be confirmed — on Android editing either reports "not acknowledged" while the locator has accepted it | the firmware carries both fields in a broadcast (three binaries, wants an ADR) |
 | Icon substitutions in the map control column | Android's are Compose `Icons.Default.*`, a library with nothing to convert | never — the mapping is recorded below |
-| No archived-path map control | Android offers it only once a record is downloaded | flight-data download lands |
+| No archived-path map control | Android offers it only once a record is downloaded | **now unblocked** — flight-data download landed 2026-08-21; the control itself is still to build |
+| Flight-profile chart constants converted at a 3.0 display density | Android draws the chart in raw **pixels** (`CHART_MARGIN_X = 64f`, `textSize = 32f`), so its apparent size changes with the phone; SwiftUI's Canvas works in points | never exactly — see the chart audit below. A side-by-side screenshot would settle whether 3.0 is the right divisor |
+| Chart legend checkboxes are SF Symbols, not a Material `Checkbox` | ADR-0016 sanctioned departure: a Material checkbox clone next to iOS type reads as broken, and `checkmark.square.fill` / `square` carry the same two states in the same two colours | never |
 
 Everything else on these screens matches Android, including field order, widget shapes,
 wording and type weights. **Silence reads as parity**, so a divergence that is not written
@@ -54,7 +58,7 @@ Android UI is ~11,700 lines across `ui/`. By screen:
 | Android screen | Lines | iOS today |
 |---|---:|---|
 | `FlightMapScreen` (Start) | 3,370 | partial — map + basic stats, none of the instrumentation |
-| `FlightProfilesScreen` | 1,002 | absent |
+| `FlightProfilesScreen` | 1,002 | **present** (`FlightProfilesView` + `FlightChart` + `FlightDataRepository`), 2026-08-21 — not yet exercised on hardware |
 | `LocatorSettingsScreen` | 759 | absent |
 | `DownloadMapScreen` | 677 | absent |
 | `ReceiverSettingsScreen` | 463 | absent |
@@ -711,6 +715,85 @@ Each was checked against the deployment target using the system's own availabili
 floor. The one that could not be matched closely is `ZoomOutMap`: its four-arrow expand
 glyph has no equivalent below iOS 17, so the two-arrow `arrow.up.left.and.arrow.down.right`
 stands in.
+
+### Flight Profiles — ported 2026-08-21, against `FlightProfilesScreen.kt`
+
+The screen is **two screens behind one flag**, and the flag is really the locator's
+transfer state: the record list until a record is opened, the chart afterwards.
+`flightProfileDataDisplayState` lives in `LinkViewModel` for that reason, not in the
+view. Opening a record takes the link over; leaving has to hand it back.
+
+What was ported with it, because the screen cannot exist without it: the whole
+FlightData receive path (`FlightDataRepository.swift`), the `FlightEvents` message
+(MsgType 19), and the chart's geometry and event placement (`FlightChart.swift`).
+Android's `ChartViewportTest` and `FlightEventsTest` are ported case for case; the
+transfer path has tests Android has none of.
+
+**Mirrored deliberately, including the parts that look like details:**
+
+| | Android | iOS |
+|---|---|---|
+| Entry | `LaunchedEffect(service)` requests metadata, retries with a doubling 3 s → 12 s backoff, ends by coroutine cancellation | `.task { fetchFlightProfileMetadata() }`, same constants, ends by task cancellation on disappear |
+| Attempt count | shown from attempt 2 | same — a lossy link has to read as "still trying", not as a hang |
+| Exit | `onDispose` sends `DisarmRequest` so the locator resumes `PreLaunchData` | `.onDisappear` does the same. Without it the map stays blank after a visit |
+| Back from the chart | app-bar up-arrow returns to the LIST and re-requests metadata, which aborts the locator's transfer immediately | the sheet's `Done` does exactly this while the chart is up (`MapScreen.destinationView`); the `Return` button does it too |
+| Record list | icon, slot number, flexible gap of 1 unit, tappable detail column of 5 | same 1:5 split |
+| Apogee rounding | `setScale(1, RoundingMode.UP)` — away from zero | `.awayFromZero`, so a flight never reads lower than it flew |
+| A slot with no flight | still listed, "No flight data", not tappable | same |
+| Chart defaults | altitude and all three accelerometer axes ON | same — four `mutableStateOf(true)` |
+| No "descent" toggle | removed on Android in favour of pinch-zoom | not reintroduced |
+| Event annotations | packed into free rows, flipped left near the right edge, leader line to a dot that never moves | same algorithm, line for line |
+| Zoom | 1×…25×, `sqrt(zoom)` annotation growth capped at 2×, axis furniture unscaled | same |
+| Gridlines | stepped over the VISIBLE window, so the count stays constant as you zoom | same |
+| Colours | altitude `primary`, X red, Y yellow, Z green, apogee blue, drogue/main 50 %-alpha olive/green, indicators grey | same values |
+
+**Gestures are UIKit recognizers, and that is a mechanism difference, not a UI one.**
+Compose's `detectTransformGestures` reports centroid, pan delta and zoom delta together.
+SwiftUI's `MagnificationGesture` **does not report where the pinch is**, and the focal
+point is the whole behaviour here — without it a pinch zooms about the middle of the
+plot and the data slides out from under the fingers. A `UIPinchGestureRecognizer` plus a
+`UIPanGestureRecognizer` running simultaneously report the same three quantities, one
+per callback, and the transform composes either way. Verified on the simulator: pinch
+fires in both directions, one-finger pan fires, and zooming back out lands exactly on
+the original fit. **Double-tap-to-reset could not be synthesised** through the
+simulator's input latency and is unverified.
+
+**The pixels-versus-points conversion, which has no exact answer.** Android's chart
+constants are `DrawScope` units — raw pixels — so the gutters and labels are physically
+smaller on a denser screen. `FlightChart.androidChartDensity = 3` converts them, that
+being the density of the Pixel 9 Pro XL the chart was tuned on. Stroke widths and marker
+radii are NOT converted, because Android writes those as `1.dp.toPx()` / `3.dp.toPx()`
+and a dp is a point — which is also the check that 3.0 is self-consistent: at that
+divisor the indicator circles keep exactly Android's radius-to-spacing ratio.
+
+**⚠️ The altitude axis labels are clipped, on BOTH platforms.** The left gutter is 64 px
+and a label like `900m` measures about 79 px at the 32 px axis size, so its first
+character is cut off. iOS reproduces this exactly rather than quietly widening the
+gutter — Android is the reference implementation, and this is a shared defect, not an
+iOS one. **The fix belongs on Android first** (widen `CHART_MARGIN_X`, or shrink
+`CHART_AXIS_TEXT_SIZE`), and then here in the same session. It is listed in
+`NEXT_SESSION.md` as fschroer's call, since it is a legibility judgement.
+
+**Two Android bugs fixed here rather than reproduced**, both in the parity FEC and both
+silent — they corrupt flight data rather than failing:
+
+1. **Parity recovery is order-dependent on Android.** `onFlightData` XORs every received
+   payload into the same buffer that later stores the sender's parity frame, and
+   recovery XORs the received members back out. That cancels only while every member
+   arrives *before* the parity frame. A packet lost and **retransmitted after** it is
+   XORed in once and out once against a buffer that already holds the parity, so the
+   recovered packet is garbage — and `decodePayload` accepts any 48+ bytes, so it is
+   inserted into the flight as real samples. iOS keeps the sender's frame untouched and
+   recovers as `parity XOR (received members)`, which has no order to get wrong.
+   `testParityStillRecoversWhenAMemberArrivesAfterTheParityFrame` pins it.
+2. **A recovered short packet decodes the parity buffer's padding as samples.** The last
+   packet of a transfer is shorter than the parity frame, so a recovered payload carries
+   trailing zeros; zero deltas decode as duplicates of the final sample. iOS caps the
+   decode at the sample count the transfer header implies.
+
+Both want the same fix on Android — recorded here rather than made silently, because
+"Android is the reference implementation" cuts both ways: a fix that lands here first is
+a divergence until it lands there.
 
 ## Where iOS idiom should win
 
