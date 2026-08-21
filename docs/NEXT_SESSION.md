@@ -1,6 +1,6 @@
 # Resume here — iOS port
 
-Updated 2026-08-20. **398 tests passing**, clean build with no warnings from our own
+Updated 2026-08-20. **406 tests passing**, clean build with no warnings from our own
 sources. Three pieces of work below: the sheet crash and its companion non-bug, the
 flight-map parity pass, and the nine gaps that pass turned up.
 
@@ -197,9 +197,20 @@ when not), an 8 s hold so interleaved broadcasts cannot flash it away before Con
 be pressed, and a remembered Dismiss — clearing the id alone put it straight back on the
 next 1 Hz packet.
 
-**Next screen:** Locator Settings (759 lines). It is where the placeholder-fields
-problem above has to be confronted properly, since that screen edits the very fields the
-app cannot read back.
+**Locator Settings has landed too**, minus two controls on purpose. Four deployment
+channels with interlocked primary/backup limits — the only thing stopping a backup being
+configured to fire before its primary — plus name, channel, mounting axis and the Update
+row.
+
+⚠️ **Launch-detect altitude and deploy-signal duration are deliberately NOT offered.** On
+Android, editing either can never succeed: neither rides in `PreLaunchData`, so the
+confirmation comparison can never match and it always reports "not acknowledged" while
+the locator has in fact accepted the change. fschroer decided on 2026-08-20 to omit both
+rather than ship a control that cannot work. The full chain, and what would close it, is
+in `UI_PARITY.md`. This is the only deliberate UI divergence on these screens.
+
+**Remaining screens:** Flight Profiles (1,002 lines), Deployment Test (160), Download
+maps (677) — the last two of which depend on flight-data download.
 
 **NOT confirmable on the simulator, needs the phone plus a locator:**
 

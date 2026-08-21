@@ -520,9 +520,49 @@ The single `conflictLocatorId` sits alongside the existing `conflictingLocatorId
 rather than replacing it: the banner offers an ACTION and an action needs one subject,
 while the diagnostics screen lists everything audible, which is a different question.
 
-**Receiver Settings is now complete** apart from what the survey's "Move here" depends
-on, which also landed. Locator Settings is the next screen, and it is where the
-placeholder-fields problem above has to be confronted properly.
+**Receiver Settings is complete.**
+
+### Locator Settings — landed, minus two controls on purpose
+
+Four deployment channels, each a mode picker plus **only** the numeric field its
+selected mode needs; locator name, LoRa channel, mounting axis, firmware version, and
+the staged Update row.
+
+**The limits are interlocked, and that is the safety-relevant part.** A drogue backup
+must fire AFTER its primary and a main backup BELOW its primary, so each bound is
+derived from the other value rather than from a constant — it is the only thing stopping
+a backup being configured to fire first. Pinned by `DeploymentLimitsTests`, including
+the degenerate ends: an unconfigured locator reports zeros, and a `ClosedRange` with
+lower > upper traps at construction in Swift, so an inverted bound would crash the
+screen rather than merely misbehave.
+
+### ⚠️ Launch-detect altitude and deploy-signal duration are NOT offered here
+
+Android shows both. **On Android, editing either can never succeed**, and the chain is
+worth stating because it is not obvious from any one place:
+
+1. Both are editable on that screen.
+2. Neither rides in `PreLaunchData`, so `remoteLocatorConfig` is rebuilt from every
+   broadcast with hardcoded 30 and 10.
+3. Confirmation is whole-object equality against that rebuilt config, and Android's
+   `LocatorConfig` is a `data class`, so both fields count.
+
+Set launch-detect altitude to 50 and press Update: the locator receives and saves it,
+the comparison never matches, the app reports **"Update not acknowledged"**, and the
+display reverts to 30 m on the next broadcast. The change took effect; the app says it
+failed and shows the old value. That is why `// To do: remove from UI` sits beside both
+constants.
+
+**Decision (fschroer, 2026-08-20): omit both controls on iOS.** A control that can never
+report success is worse than an absent one, and this is what the Android TODO intends.
+The placeholder VALUES stay in `LocatorConfig`, because the confirmation comparison needs
+them to match — omitting the controls is in fact what makes every other field on this
+screen confirmable.
+
+This is a **deliberate, explained divergence from Android's UI**, and the only one on
+these screens. It closes when the firmware carries both fields in a broadcast, which is
+a change across three binaries and wants an ADR. `DeploymentLimitsTests` fails first if a
+control for either reappears.
 
 ### Icon substitutions, and why they are substitutions
 

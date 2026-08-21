@@ -207,15 +207,27 @@ final class LinkViewModel: ObservableObject {
     /// ADR-0020's target matters so much here: an unaddressed one would rewrite a
     /// bystander's pyro configuration.
     func moveLocatorToChannel(_ channel: Int) {
-        guard let id = connectedLocatorId, gate.mayCommand(id) else { return }
-
         pendingChannelMove = channel
         var target = remoteLocatorConfig
         target.loraChannel = channel
+        changeLocatorConfig(target)
+    }
+
+    /// Send a locator configuration change and wait for the locator to confirm it.
+    ///
+    /// **The whole settings struct goes every time** — that is the wire format, and it
+    /// is why ADR-0020's target is enforced in the type system: an unaddressed one
+    /// rewrote a bystander's deployment modes, delays and altitudes.
+    ///
+    /// A channel change is the same message with the recovery path attached, because a
+    /// channel change is the only one that can leave the link split (ADR-0011).
+    func changeLocatorConfig(_ target: LocatorConfig) {
+        guard let id = connectedLocatorId, gate.mayCommand(id) else { return }
 
         // Captured BEFORE polling, while remoteLocatorConfig still reflects the channel
         // the last broadcast arrived on — the one to fall back to.
         let oldChannel = remoteLocatorConfig.loraChannel
+        let channel = target.loraChannel
 
         locatorConfigMessageState = .sendRequested
         guard let msg = OutboundMessage.locatorDirected(.locatorCfgChgRequest,

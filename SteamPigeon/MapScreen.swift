@@ -217,6 +217,7 @@ struct MapScreen: View {
                 switch destination {
                 case .appSettings:      AppSettingsView(settings: settings)
                 case .receiverSettings: ReceiverSettingsView(model: model)
+                case .locatorSettings:  LocatorSettingsView(model: model)
                 default:                NotYetBuiltView(destination: destination)
                 }
             }
