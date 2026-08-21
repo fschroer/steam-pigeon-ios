@@ -1144,11 +1144,20 @@ and parallax; iOS fills the square and rounds the corners itself. Checked on the
 simulator home screen: the superellipse trims only background, and the rocket, its
 exhaust and the stars all survive.
 
-**Open, and not an icon question: the two apps have different NAMES.** Android's
-`app_name` is **"Wherezit?"**; iOS's bundle is `SteamPigeon`, and every doc, the nav bar
-and this repo say Steam Pigeon. That is the label printed under the icon on both home
-screens, so it is the other half of matching them — but it is a product decision, not a
-port, so it is recorded here rather than acted on.
+**The name under the icon: SteamPigeon. Decided by fschroer, 2026-08-21.**
+
+The two home screens disagreed — Android's `app_name` is **"Wherezit?"**, iOS's bundle is
+`SteamPigeon` — and since that is the label printed under the icon, it is the other half
+of making them match. Asked, and answered: **SteamPigeon is the name.**
+
+So iOS is already right, and this is the second thing **Android owes iOS**: `app_name` in
+`app/src/main/res/values/strings.xml` still reads "Wherezit?", and so does the header
+comment in the bundled `launch_sites.csv` template. Nothing on iOS changes.
+
+One detail left over, small and worth deciding once rather than drifting: the app is
+**"SteamPigeon"** under the icon (the bundle name) and **"Steam Pigeon"** in the nav bar,
+the docs and both repo names. Neither is wrong, but they are two spellings of one name,
+and the home screen is the more public of the two.
 
 ## Where iOS idiom should win
 

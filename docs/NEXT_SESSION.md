@@ -80,7 +80,13 @@ structure before writing anything.
 
 ---
 
-## One thing Android owes iOS
+## Two things Android owes iOS
+
+**The app's name.** fschroer decided on 2026-08-21 that the app is **SteamPigeon**.
+Android's `app_name` still reads "Wherezit?" — in `values/strings.xml` and in the header
+comment of the bundled `launch_sites.csv` — so the two home screens print different
+labels under the same icon. iOS needs no change. Details in `docs/UI_PARITY.md` under
+"App icon".
 
 **The download picker's opening camera.** fschroer asked for it on iOS first
 (2026-08-21): open on the **phone's current position at a multi-state zoom (z5)**,
