@@ -29,6 +29,95 @@ final class LinkViewModel: ObservableObject {
     /// Locators we hold no password for. Cannot be displayed or commanded.
     @Published private(set) var unauthorizedLocatorIds: Set<UInt32> = []
 
+    // MARK: - The conflicting-locator banner (ADR-0006)
+
+    /// The one conflicting locator the banner names, or nil.
+    ///
+    /// A single id rather than the set above, because the banner offers an ACTION and
+    /// an action needs one subject. The set stays: the diagnostics screen lists
+    /// everything audible, which is a different question.
+    @Published private(set) var conflictLocatorId: UInt32?
+    /// When the conflicting locator last spoke — see the hold in `noteConflict`.
+    private var lastConflictFrame: Date?
+    /// Ids the user has waved away. Remembered, because the conflicting locator keeps
+    /// broadcasting at 1 Hz: simply clearing the id put the banner back on the next
+    /// packet, which made Dismiss do nothing at all.
+    private var dismissedConflictIds: Set<UInt32> = []
+
+    /// The last `PreLaunchData` frame seen, whoever sent it.
+    ///
+    /// Kept so the banner's Connect can verify against a frame from THAT locator.
+    /// `challengeFrame` will not do: it belongs to whichever locator a dialog is open
+    /// for, and checking a typed password against another locator's tag is meaningless
+    /// at best and a false accept at worst.
+    private var lastPrelaunchFrame: [UInt8]?
+    private var lastPrelaunchLocatorId: UInt32?
+    private var lastPrelaunchDeviceName = ""
+
+    /// How long a conflict stands after its locator goes quiet.
+    ///
+    /// With two locators on one channel the broadcasts INTERLEAVE, so clearing the
+    /// banner whenever a good packet arrives made it flash on and off at the broadcast
+    /// rate — visible, but gone again before Connect could be pressed.
+    private static let conflictHold: TimeInterval = 8
+
+    /// Seams for the tests. The rules worth pinning are the hold and the dismissal, and
+    /// reaching them through `ingest` would mean building authenticated frames — which
+    /// would make these tests about ADR-0006 auth rather than about the banner.
+    static var conflictHoldForTesting: TimeInterval { conflictHold }
+    func noteConflictForTesting(_ id: UInt32) { noteConflict(id) }
+    func clearConflictIfStaleForTesting(acceptedId: UInt32, now: Date) {
+        clearConflictIfStale(acceptedId: acceptedId, now: now)
+    }
+
+    private func noteConflict(_ id: UInt32) {
+        guard !dismissedConflictIds.contains(id) else { return }
+        conflictLocatorId = id
+        lastConflictFrame = Date()
+    }
+
+    /// Clear the banner when OUR locator is heard — but only if it is the one named, or
+    /// the named one has gone quiet. See `conflictHold`.
+    private func clearConflictIfStale(acceptedId: UInt32, now: Date = Date()) {
+        if conflictLocatorId == acceptedId {
+            conflictLocatorId = nil
+        } else if let last = lastConflictFrame, now.timeIntervalSince(last) >= Self.conflictHold {
+            conflictLocatorId = nil
+        }
+    }
+
+    /// Wave the banner away, and keep it away.
+    func dismissConflict() {
+        if let id = conflictLocatorId { dismissedConflictIds.insert(id) }
+        conflictLocatorId = nil
+    }
+
+    /// Re-entering Receiver Settings is the user asking to see conflicts again, so a
+    /// dismissal from a previous visit does not persist.
+    func resetConflictDismissals() { dismissedConflictIds.removeAll() }
+
+    /// The banner's Connect: switch to the conflicting locator, or ask for its password.
+    ///
+    /// Only acts on a frame from THAT locator. Armed locators raise conflicts too, and
+    /// an armed stranger is only connectable once it disarms and broadcasts its identity
+    /// and name — which is also the only state in which connecting is useful.
+    func requestConnectToConflict() {
+        guard let id = conflictLocatorId, id != connectedLocatorId,
+              let frame = lastPrelaunchFrame, lastPrelaunchLocatorId == id else { return }
+
+        policy.reconsider(id)
+        if gate.isAuthorized(frame: frame, locatorId: id,
+                             baseSize: WireProtocol.prelaunchBaseStructSize) {
+            // Switch now. The displayed readouts still belong to the old locator until
+            // this one's next broadcast lands, at most one 1 Hz period away.
+            switchTo(id)
+            conflictLocatorId = nil
+            return
+        }
+        challengeFrame = frame
+        challenge = LocatorChallenge(locatorId: id, deviceName: lastPrelaunchDeviceName)
+    }
+
     /// ADR-0006 recognition gate. Open locators authenticate unconditionally, so an
     /// unprovisioned locator works with no prompt — the backward-compatibility
     /// guarantee. Passwords are not enterable yet; that needs the challenge dialog.
@@ -697,6 +786,10 @@ final class LinkViewModel: ObservableObject {
         surveyInProgress = false
         remoteLocatorConfig = LocatorConfig()
         pendingChannelMove = nil
+        conflictLocatorId = nil
+        lastConflictFrame = nil
+        lastPrelaunchFrame = nil
+        lastPrelaunchLocatorId = nil
         quietestPolledFloor = LinkQuality.noiseFloorUnknown
         liveNoiseFloor = LinkQuality.noiseFloorUnknown
         lastFloorMeasurement = nil
@@ -876,6 +969,9 @@ final class LinkViewModel: ObservableObject {
         case .preLaunchData:
             if let m = PreLaunchData.parse(frame) {
                 lastLocatorId = m.locatorId
+                lastPrelaunchFrame = frame
+                lastPrelaunchLocatorId = m.locatorId
+                lastPrelaunchDeviceName = m.deviceName
                 if admit(frame, m.locatorId, WireProtocol.prelaunchBaseStructSize,
                          deviceName: m.deviceName) {
                     prelaunch = m
@@ -966,13 +1062,20 @@ final class LinkViewModel: ObservableObject {
             lastLocatorMessage = Date()
             conflictingLocatorIds.remove(id)
             unauthorizedLocatorIds.remove(id)
+            clearConflictIfStale(acceptedId: id)
             return true
         case .conflict(let id):
+            // A different AUTHORIZED locator, heard while ours is still live. Warn, but
+            // leave the connection where it is — switching is the user's call.
             conflictingLocatorIds.insert(id)
             lastForeignBroadcast = Date()
+            noteConflict(id)
             return false
         case .unauthorized(let id):
             unauthorizedLocatorIds.insert(id)
+            // Never disturbs a standing connection: an armed stranger on the channel
+            // must not knock out the locator we are connected to.
+            noteConflict(id)
             // Keep the challenge frame current while its dialog is open.
             if challenge?.locatorId == id { challengeFrame = frame }
             if policy.shouldChallenge(locatorId: id,

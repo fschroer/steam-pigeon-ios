@@ -20,6 +20,10 @@ struct ReceiverSettingsView: View {
     @State private var staged = ReceiverConfig()
     @State private var edited = false
 
+    /// Android formats the id as `%08X`, and it is worth matching exactly: this is the
+    /// number a user reads out to someone else on the flight line.
+    private static func hex(_ id: UInt32) -> String { String(format: "%08X", id) }
+
     /// The ADR-0011 move cycle, reported as it happens.
     ///
     /// It can legitimately run for several seconds with the link DOWN — the locator
@@ -45,6 +49,34 @@ struct ReceiverSettingsView: View {
 
     var body: some View {
         Form {
+            // Conflicting traffic (ADR-0006). Non-blocking on purpose: it is a fact
+            // about the channel, not a modal decision, and the two actions are the
+            // whole point — switch to it, or move to an uncontested channel using the
+            // survey directly below.
+            if let id = model.conflictLocatorId {
+                Section {
+                    // Two different situations, and only one of them is a problem.
+                    // Already connected to a DIFFERENT locator: this is genuine
+                    // conflicting traffic. Not connected at all: it is simply a new
+                    // locator to connect to, so the wording invites rather than warns.
+                    let connected = model.connectedLocatorId != nil
+                    Text(connected
+                         ? "Another locator (ID \(Self.hex(id))) is on the air and is not "
+                           + "being displayed. Connect to switch to it, or move to an "
+                           + "uncontested channel."
+                         : "Locator ID \(Self.hex(id)) found. Enter its password to connect.")
+                        .font(SPFont.bodySmall)
+                        .foregroundStyle(connected ? SPColor.error : SPColor.onBackground)
+
+                    HStack {
+                        Button("Connect") { model.requestConnectToConflict() }
+                        Spacer()
+                        Button("Dismiss") { model.dismissConflict() }
+                    }
+                    .buttonStyle(.borderless)
+                }
+            }
+
             ChannelSurveySection(
                 survey: model.channelSurvey,
                 inProgress: model.surveyInProgress,
@@ -136,6 +168,9 @@ struct ReceiverSettingsView: View {
             // its channel never volunteers anything, and that is precisely the state
             // someone opens this screen to get out of.
             if !model.isLocatorFresh { model.requestReceiverInfo() }
+            // Re-entering the screen is the user asking to see conflicts again, so a
+            // dismissal from a previous visit does not persist.
+            model.resetConflictDismissals()
         }
     }
 }

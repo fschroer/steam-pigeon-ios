@@ -490,7 +490,39 @@ fields in a broadcast, which is a firmware change across three binaries and belo
 an ADR. **Recorded here rather than fixed, because it is a system decision, not an iOS
 one.**
 
-**Still to come on this screen:** the ADR-0006 conflicting-locator banner.
+**Conflicting-locator banner — landed (ADR-0006).** Non-blocking on purpose: it is a
+fact about the channel, not a modal decision, and its two actions are the point —
+switch to it, or move to an uncontested channel using the survey directly below.
+
+Two framings, because there are two situations and only one is a problem. Already
+connected to a DIFFERENT locator: genuine conflicting traffic, worded as a warning and
+coloured with the error tone. Not connected at all: simply a new locator to connect to,
+so the wording invites.
+
+Two rules make it usable rather than merely present, and neither is visible from the
+feature description:
+
+- **An 8 s hold.** With two locators on one channel the broadcasts INTERLEAVE, so
+  clearing the banner whenever our own locator is heard made it flash on and off at the
+  broadcast rate — visible, but gone again before Connect could be pressed. It clears
+  when the named locator is itself accepted, or once it has been quiet for the hold.
+- **Dismiss is remembered.** The conflicting locator keeps broadcasting at 1 Hz, so
+  clearing the id alone put the banner back on the next packet and Dismiss did nothing
+  at all. Re-entering the screen clears the dismissals, because that is the user asking
+  to see conflicts again.
+
+Connect only acts on a frame from THAT locator. Armed locators raise conflicts too, and
+an armed stranger carries no identity to check a password against — verifying one
+against another locator's tag is meaningless at best and a false accept at worst. It
+switches when the frame authorises, and raises the password challenge when it does not.
+
+The single `conflictLocatorId` sits alongside the existing `conflictingLocatorIds` set
+rather than replacing it: the banner offers an ACTION and an action needs one subject,
+while the diagnostics screen lists everything audible, which is a different question.
+
+**Receiver Settings is now complete** apart from what the survey's "Move here" depends
+on, which also landed. Locator Settings is the next screen, and it is where the
+placeholder-fields problem above has to be confronted properly.
 
 ### Icon substitutions, and why they are substitutions
 

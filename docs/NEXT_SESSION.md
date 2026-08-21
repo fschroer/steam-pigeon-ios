@@ -1,6 +1,6 @@
 # Resume here — iOS port
 
-Updated 2026-08-20. **390 tests passing**, clean build with no warnings from our own
+Updated 2026-08-20. **398 tests passing**, clean build with no warnings from our own
 sources. Three pieces of work below: the sheet crash and its companion non-bug, the
 flight-map parity pass, and the nine gaps that pass turned up.
 
@@ -191,7 +191,15 @@ seconds when the link is legitimately down.
 placeholders — 30 m and 1.0 s, matching Android, and they MUST match or nothing ever
 confirms. One of them is pyro firing time. It is a system-level gap, not an iOS one.
 
-**Next on this screen:** the ADR-0006 conflicting-locator banner.
+The **ADR-0006 conflicting-locator banner** has landed too, which completes Receiver
+Settings. Two framings (warning when already connected to another locator, invitation
+when not), an 8 s hold so interleaved broadcasts cannot flash it away before Connect can
+be pressed, and a remembered Dismiss — clearing the id alone put it straight back on the
+next 1 Hz packet.
+
+**Next screen:** Locator Settings (759 lines). It is where the placeholder-fields
+problem above has to be confronted properly, since that screen edits the very fields the
+app cannot read back.
 
 **NOT confirmable on the simulator, needs the phone plus a locator:**
 
