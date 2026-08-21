@@ -241,7 +241,6 @@ private struct NudgeButton: View {
 /// that is the string a user reads on the other platform and the one the manual has to
 /// name. Prettier spacing here would be a second vocabulary.
 struct ConfigPickerRow<T: Hashable>: View {
-    let title: String
     @Binding var selection: T
     let options: [T]
     let label: (T) -> String
@@ -253,7 +252,9 @@ struct ConfigPickerRow<T: Hashable>: View {
                 Button(label(option)) { selection = option }
             }
         } label: {
-            OutlinedFieldChrome(title: title, enabled: enabled) {
+            // No floating label: Android's `EnumDropdown` passes none, and the caption
+            // above the control is the field's name.
+            OutlinedFieldChrome(title: "", enabled: enabled) {
                 HStack {
                     Text(label(selection))
                     Spacer()
@@ -284,13 +285,17 @@ struct OutlinedFieldChrome<Content: View>: View {
                 RoundedRectangle(cornerRadius: 4)
                     .stroke(enabled ? SPColor.outline : SPColor.outline.opacity(0.4), lineWidth: 1))
             .overlay(alignment: .topLeading) {
-                Text(title)
-                    .font(SPFont.bodySmall)
-                    .foregroundStyle(enabled ? SPColor.primary : SPColor.onSurfaceVariant)
-                    .padding(.horizontal, 4)
-                    .background(SPColor.background)
-                    .padding(.leading, 8)
-                    .offset(y: -8)
+                // An empty title paints nothing — otherwise the label's background
+                // would cut a gap in the border for a caption that is not there.
+                if !title.isEmpty {
+                    Text(title)
+                        .font(SPFont.bodySmall)
+                        .foregroundStyle(enabled ? SPColor.primary : SPColor.onSurfaceVariant)
+                        .padding(.horizontal, 4)
+                        .background(SPColor.background)
+                        .padding(.leading, 8)
+                        .offset(y: -8)
+                }
             }
             .padding(.top, 8)
     }

@@ -656,6 +656,28 @@ the receiver-only path, the channel it recommended has already been taken. Start
 fresh sweep clears it too, so the previous ranking cannot sit there looking current
 while the new one runs.
 
+### Locator Settings field order is Android's, and it is not the obvious one
+
+Reported: the order differs from Android. It did — iOS led with the identity fields.
+Android's order is:
+
+1. Firmware version
+2. **Deployment Channel 1–4**, each a caption, a bare dropdown, and the one numeric
+   field its selected mode needs
+3. Locator Name
+4. Locator Channel to Receive
+5. Sensor Axis Along Rocket
+
+The channels come FIRST, immediately under the firmware line, and the identity fields
+come last. That reads oddly for a settings form until you notice what the screen is for:
+the deployment channels are what changes between flights, and the rest is set once per
+installation. Putting name and channel at the top — which is what a form usually does,
+and what iOS did — buries the part being used.
+
+Also corrected: **the dropdowns carry no floating label.** Android's `EnumDropdown`
+passes no `label`, so the plain caption above it IS the field's name; iOS had invented a
+"Mode" label inside each one, which Android has nowhere on that screen.
+
 ### Icon substitutions, and why they are substitutions
 
 Android's control icons are Compose `Icons.Default.*` — a library, not drawables in the

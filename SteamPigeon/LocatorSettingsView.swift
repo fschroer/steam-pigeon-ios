@@ -24,10 +24,34 @@ struct LocatorSettingsView: View {
         VStack(spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
+                    // ORDER IS ANDROID'S, and it is not the order a form would suggest.
+                    // The four deployment channels come FIRST, immediately under the
+                    // firmware line, and the identity fields — name, channel, mounting
+                    // axis — come last. That reads oddly until you notice what the
+                    // screen is for: the channels are what changes between flights, and
+                    // the rest is set once per installation.
                     if let version = model.versionInfo, !version.locatorVersion.isEmpty {
                         Text("Firmware: \(version.locatorVersion)")
                             .font(SPFont.bodyMedium)
                             .foregroundStyle(SPColor.onSurfaceVariant)
+                    }
+
+                    ForEach(0..<4, id: \.self) { channel in
+                        // A plain caption above a bare dropdown, as Android has it —
+                        // its `EnumDropdown` passes no `label`, so the section name IS
+                        // the field's name. There is no "Mode" label anywhere on that
+                        // screen.
+                        Text("Deployment Channel \(channel + 1)")
+                            .font(SPFont.bodyLarge)
+                            .padding(.top, 4)
+                        ConfigPickerRow(selection: modeBinding(channel),
+                                        options: DeployMode.allCasesInOrder,
+                                        label: { $0.label },
+                                        enabled: !busy)
+                        // Only the field belonging to the SELECTED mode is shown, as
+                        // Android does — a delay box under a channel set to Main is a
+                        // value with nothing to apply to.
+                        modeDetail(for: mode(channel))
                     }
 
                     ConfigTextRow(title: "Locator Name",
@@ -45,27 +69,14 @@ struct LocatorSettingsView: View {
                     // which is only the nose axis if the rocket happens to be vertical.
                     // Stating it is what makes tilt-from-vertical measurable off the pad
                     // (ADR-0021 Decision 6).
-                    ConfigPickerRow(title: "Sensor Axis Along Rocket",
-                                    selection: Binding(get: { staged.noseAxis },
+                    Text("Sensor Axis Along Rocket")
+                        .font(SPFont.bodyLarge)
+                        .padding(.top, 4)
+                    ConfigPickerRow(selection: Binding(get: { staged.noseAxis },
                                                        set: { staged.noseAxis = $0; edited = true }),
                                     options: NoseAxis.allCasesInOrder,
                                     label: { $0.label },
                                     enabled: !busy)
-
-                    ForEach(0..<4, id: \.self) { channel in
-                        Text("Deployment Channel \(channel + 1)")
-                            .font(SPFont.titleSmall)
-                            .padding(.top, 8)
-                        ConfigPickerRow(title: "Mode",
-                                        selection: modeBinding(channel),
-                                        options: DeployMode.allCasesInOrder,
-                                        label: { $0.label },
-                                        enabled: !busy)
-                        // Only the field belonging to the SELECTED mode is shown, as
-                        // Android does — a delay box under a channel set to Main is a
-                        // value with nothing to apply to.
-                        modeDetail(for: mode(channel))
-                    }
                 }
                 .padding(16)
             }
