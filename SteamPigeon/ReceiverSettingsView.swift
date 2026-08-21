@@ -20,6 +20,29 @@ struct ReceiverSettingsView: View {
     @State private var staged = ReceiverConfig()
     @State private var edited = false
 
+    /// The ADR-0011 move cycle, reported as it happens.
+    ///
+    /// It can legitimately run for several seconds with the link DOWN — the locator
+    /// switches, the receiver follows, and a failed move is recovered by pulling the
+    /// receiver back and retrying once. Silence through all that reads as a hang, which
+    /// is why every state says something.
+    private func moveProgress(_ channel: Int) -> (text: String, isError: Bool)? {
+        switch model.locatorConfigMessageState {
+        case .sendRequested, .sent:
+            return ("Moving to channel \(channel)… the link drops briefly while both "
+                    + "devices switch.", false)
+        case .ackUpdated:
+            return ("Now on channel \(channel).", false)
+        case .sendFailure:
+            return ("Could not send the channel change. Check the receiver connection.", true)
+        case .notAcknowledged:
+            return ("The locator did not confirm channel \(channel). It has been left on "
+                    + "its previous channel.", true)
+        case .idle:
+            return nil
+        }
+    }
+
     var body: some View {
         Form {
             ChannelSurveySection(
@@ -28,15 +51,32 @@ struct ReceiverSettingsView: View {
                 enabled: model.state == .ready,
                 locatorConnected: model.connectedLocatorId != nil,
                 onScan: { model.requestChannelSurvey() },
-                // Withheld while a locator is connected — moving the whole system is
-                // ADR-0011 and needs Locator Settings, which is not ported. Staging the
-                // receiver-only half would strand the locator on the old channel.
-                onPick: model.connectedLocatorId == nil
-                    ? { channel in
+                // Two different actions behind one control, and the difference is the
+                // point: with a locator connected this moves the WHOLE system, because
+                // re-pointing the receiver alone would strand the locator on the old
+                // channel (ADR-0011 invariant 1 vs 5).
+                onPick: { channel in
+                    if model.connectedLocatorId != nil {
+                        model.moveLocatorToChannel(channel)
+                    } else {
                         staged.channel = channel
                         edited = true
-                      }
-                    : nil)
+                    }
+                })
+
+            if let channel = model.pendingChannelMove, let progress = moveProgress(channel) {
+                Section {
+                    HStack(alignment: .top) {
+                        Text(progress.text)
+                            .font(SPFont.labelSmall)
+                            .foregroundStyle(progress.isError ? SPColor.error
+                                                              : SPColor.onSurfaceVariant)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Button("Dismiss") { model.clearPendingChannelMove() }
+                            .buttonStyle(.borderless)
+                    }
+                }
+            }
 
             Section {
                 if let version = model.versionInfo, !version.receiverVersion.isEmpty {

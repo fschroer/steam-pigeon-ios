@@ -452,8 +452,45 @@ Settings, which is not ported, so the choice is withheld with an explanation rat
 quietly doing the damaging half of it. With no locator connected there is nothing to
 strand, and "point receiver" is the legitimate go-look-at-that-channel case.
 
-**Still to come on this screen:** the ADR-0011 channel-move flow (which unblocks "Move
-here"), and the ADR-0006 conflicting-locator banner.
+**Channel move — landed (ADR-0011).** "Move here" now retunes the whole system. The
+request goes out on the OLD channel, the locator applies it at runtime, its next
+broadcast returns on the NEW one, and the receiver follows only after its forward has
+finished transmitting. There is no acknowledgement message: **confirmation is the
+resumption of broadcasts carrying the new channel** (invariant 3), tested as
+whole-object equality against a config rebuilt from that broadcast.
+
+Recovery is ported too, and it is the part that matters. If the locator never appears on
+the new channel it most likely missed the LoRa command while the receiver — which
+forwarded it — already followed. The link is split, and the user cannot fix that from
+the app because the locator is out of reach by definition. So the receiver is pulled
+back over BLE, which is always reachable, and the change retried once before reporting
+"not acknowledged" (invariant 4). Recovery is skipped when the BLE send itself failed:
+nothing was transmitted, so nothing moved.
+
+The progress row states every stage, because the cycle legitimately runs for several
+seconds with the link DOWN and silence through that reads as a hang.
+
+### ⚠️ A locator config change writes two fields the app cannot read
+
+`LocatorCfgChgRequest` carries the WHOLE `LocatorRocketSettings`, but `PreLaunchData`
+carries neither `launch_detect_altitude` nor `deploy_signal_duration` — so the app has
+no way to learn what the locator actually holds, and **every config change, including a
+pure channel move, writes them.**
+
+Android has the same behaviour with the same two constants, 30 m and 1.0 s, and a
+`// To do: remove from UI` beside them. iOS must use the identical values, and not
+merely for parity: confirmation is whole-object equality against a config rebuilt from
+the next broadcast using the same placeholders, so a different value would never compare
+equal and every change would report as unacknowledged.
+
+They are the firmware defaults, so on an unmodified locator this is a no-op. On one
+whose values were changed over the USB console, a channel move silently restores them —
+and `deploy_signal_duration` is pyro firing time. Fixing it properly means carrying both
+fields in a broadcast, which is a firmware change across three binaries and belongs in
+an ADR. **Recorded here rather than fixed, because it is a system decision, not an iOS
+one.**
+
+**Still to come on this screen:** the ADR-0006 conflicting-locator banner.
 
 ### Icon substitutions, and why they are substitutions
 

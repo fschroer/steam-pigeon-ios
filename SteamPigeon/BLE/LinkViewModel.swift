@@ -96,6 +96,120 @@ final class LinkViewModel: ObservableObject {
     @Published private(set) var remoteReceiverConfig = ReceiverConfig()
     @Published private(set) var receiverConfigMessageState: ConfigMessageState = .idle
 
+    // MARK: - Locator channel move (ADR-0011)
+
+    /// What the locator is believed to hold, rebuilt from every recognised broadcast.
+    @Published private(set) var remoteLocatorConfig = LocatorConfig()
+    @Published private(set) var locatorConfigMessageState: ConfigMessageState = .idle
+    /// The channel a move is aiming at, while one is in flight or has just finished.
+    @Published private(set) var pendingChannelMove: Int?
+
+    func clearPendingChannelMove() { pendingChannelMove = nil }
+
+    /// Move the locator — and therefore the whole system — to `channel`.
+    ///
+    /// **This retunes a live locator.** ADR-0011: the request goes out on the OLD
+    /// channel, the locator applies it at runtime and its next broadcast comes back on
+    /// the NEW one, and the receiver follows only after its forward has finished
+    /// transmitting. There is no acknowledgement message — confirmation is the
+    /// resumption of broadcasts carrying the new channel (invariant 3).
+    ///
+    /// Sending the whole settings struct is the design, not an accident, which is why
+    /// ADR-0020's target matters so much here: an unaddressed one would rewrite a
+    /// bystander's pyro configuration.
+    func moveLocatorToChannel(_ channel: Int) {
+        guard let id = connectedLocatorId, gate.mayCommand(id) else { return }
+
+        pendingChannelMove = channel
+        var target = remoteLocatorConfig
+        target.loraChannel = channel
+
+        // Captured BEFORE polling, while remoteLocatorConfig still reflects the channel
+        // the last broadcast arrived on — the one to fall back to.
+        let oldChannel = remoteLocatorConfig.loraChannel
+
+        locatorConfigMessageState = .sendRequested
+        guard let msg = OutboundMessage.locatorDirected(.locatorCfgChgRequest,
+                                                        targetLocatorId: id,
+                                                        payload: target.payload) else {
+            locatorConfigMessageState = .sendFailure
+            return
+        }
+        transport.send(msg)
+        locatorConfigMessageState = .sent
+
+        Task { @MainActor in
+            if await waitForLocatorConfig(target) {
+                locatorConfigMessageState = .ackUpdated
+            } else if locatorConfigMessageState == .sendFailure {
+                // Nothing left the phone, so the receiver never switched and there is
+                // nothing to recover. Leave the failure standing.
+            } else if channel != oldChannel {
+                locatorConfigMessageState =
+                    await recoverLocatorChannel(target: target, oldChannel: oldChannel)
+                    ? .ackUpdated : .notAcknowledged
+            } else if locatorConfigMessageState.isInFlight {
+                locatorConfigMessageState = .notAcknowledged
+            }
+            try? await Task.sleep(for: .seconds(2))
+            locatorConfigMessageState = .idle
+        }
+    }
+
+    /// Poll ~5 s for the locator's config to come back echoed in a broadcast.
+    ///
+    /// Whole-object equality, as Android uses. It is why the two placeholder fields in
+    /// `LocatorConfig` must match Android's exactly: the config this is compared
+    /// against is rebuilt from the next broadcast using the same placeholders, and a
+    /// different value would never compare equal, so every change would report as
+    /// unacknowledged.
+    private func waitForLocatorConfig(_ target: LocatorConfig) async -> Bool {
+        for _ in 0..<50 {
+            try? await Task.sleep(for: .milliseconds(100))
+            if remoteLocatorConfig == target { return true }
+            if locatorConfigMessageState == .sendFailure { return false }
+        }
+        return false
+    }
+
+    /// ADR-0011 invariant 4, and the reason a failed move is not simply reported.
+    ///
+    /// If the locator never appears on the new channel it most likely missed the LoRa
+    /// command and is still on the old one — while the receiver, which forwarded that
+    /// command, has already followed onto the new channel. **The link is split, and the
+    /// user cannot fix it from here**: the locator is out of reach by definition.
+    ///
+    /// So pull the RECEIVER back over BLE, which is always reachable, wait for
+    /// broadcasts to resume on the old channel, and retry the locator change once.
+    private func recoverLocatorChannel(target: LocatorConfig, oldChannel: Int) async -> Bool {
+        guard let id = connectedLocatorId,
+              let back = OutboundMessage.receiverDirected(
+                .receiverCfgChgRequest,
+                payload: ReceiverConfig(channel: oldChannel,
+                                        deviceName: remoteReceiverConfig.deviceName).payload)
+        else { return false }
+        transport.send(back)
+
+        var relinked = false
+        for _ in 0..<50 {
+            try? await Task.sleep(for: .milliseconds(100))
+            if remoteReceiverConfig.channel == oldChannel,
+               remoteLocatorConfig.loraChannel == oldChannel {
+                relinked = true
+                break
+            }
+        }
+        guard relinked else { return false }
+
+        guard let retry = OutboundMessage.locatorDirected(.locatorCfgChgRequest,
+                                                          targetLocatorId: id,
+                                                          payload: target.payload)
+        else { return false }
+        transport.send(retry)
+        locatorConfigMessageState = .sent
+        return await waitForLocatorConfig(target)
+    }
+
     /// Ask the receiver to sweep the band (ADR-0019 tier 3).
     ///
     /// On demand only: a sweep costs about a second of deafness, and the decision it
@@ -581,6 +695,8 @@ final class LinkViewModel: ObservableObject {
         receiverInfo = nil
         channelSurvey = nil
         surveyInProgress = false
+        remoteLocatorConfig = LocatorConfig()
+        pendingChannelMove = nil
         quietestPolledFloor = LinkQuality.noiseFloorUnknown
         liveNoiseFloor = LinkQuality.noiseFloorUnknown
         lastFloorMeasurement = nil
@@ -767,6 +883,7 @@ final class LinkViewModel: ObservableObject {
                     lastPreLaunchMessage = Date()
                     padAlert = m.padAlert
                     padAlertSnoozeMinutes = m.padAlertSnoozeMinutes
+                    remoteLocatorConfig = LocatorConfig.from(m)
                     armed = m.armed                     // newest broadcast wins
                     updateVector(lat: m.latitude, lon: m.longitude,
                                  satellites: m.satellites, gpsStatus: m.gpsStatus,

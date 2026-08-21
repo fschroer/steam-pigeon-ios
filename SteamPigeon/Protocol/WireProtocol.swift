@@ -77,6 +77,13 @@ enum WireProtocol {
 
     static let deviceNameLength = 20
 
+    /// `sizeof(LocatorRocketSettings)`, asserted at 45 by BOTH firmwares.
+    ///
+    /// Pinned here because nothing pinned it until #36, and a drift from the locator's
+    /// `LocatorSettings` silently dropped every config change the app sent — a failure
+    /// indistinguishable from the command never arriving.
+    static let locatorSettingsSize = 45
+
     /// `target_locator_id` carried by every app→locator command (ADR-0020). The
     /// locator discards anything not matching its UID **before any state change**,
     /// and 0 matches nothing, so an older app fails closed.

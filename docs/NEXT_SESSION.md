@@ -1,6 +1,6 @@
 # Resume here — iOS port
 
-Updated 2026-08-20. **383 tests passing**, clean build with no warnings from our own
+Updated 2026-08-20. **390 tests passing**, clean build with no warnings from our own
 sources. Three pieces of work below: the sheet crash and its companion non-bug, the
 flight-map parity pass, and the nine gaps that pass turned up.
 
@@ -180,8 +180,18 @@ withheld while a locator is connected and explains why: moving the system is ADR
 and needs Locator Settings, and staging the receiver-only half would strand the locator
 on the old channel.
 
-**Next on this screen:** the ADR-0011 channel-move flow (which unblocks "Move here"),
-and the ADR-0006 conflicting-locator banner.
+The **ADR-0011 channel move** has landed: "Move here" retunes the whole system,
+confirmed by broadcasts resuming on the new channel, with the split-link recovery
+(pull the receiver back over BLE, retry once) and a progress row that speaks through the
+seconds when the link is legitimately down.
+
+⚠️ **Read the "A locator config change writes two fields the app cannot read" note in
+`UI_PARITY.md` before touching locator config.** `PreLaunchData` carries neither
+`launch_detect_altitude` nor `deploy_signal_duration`, so every config change writes
+placeholders — 30 m and 1.0 s, matching Android, and they MUST match or nothing ever
+confirms. One of them is pyro firing time. It is a system-level gap, not an iOS one.
+
+**Next on this screen:** the ADR-0006 conflicting-locator banner.
 
 **NOT confirmable on the simulator, needs the phone plus a locator:**
 

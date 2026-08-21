@@ -17,8 +17,7 @@ struct ChannelSurveySection: View {
     let enabled: Bool
     let locatorConnected: Bool
     let onScan: () -> Void
-    /// Nil when picking is unavailable — see the note in the body.
-    let onPick: ((Int) -> Void)?
+    let onPick: (Int) -> Void
 
     var body: some View {
         Section {
@@ -78,28 +77,18 @@ struct ChannelSurveySection: View {
                 // precision the reading does not have.
                 ProgressView(value: survey.relativeLevel(s))
                     .padding(.trailing, 8)
-                if let onPick {
-                    Button(locatorConnected ? "Move here" : "Point receiver") { onPick(s.channel) }
-                        .buttonStyle(.borderless)
-                }
+                // Different actions, so different labels: with a locator connected
+                // this moves the whole system, without one it only re-points the
+                // receiver.
+                Button(locatorConnected ? "Move here" : "Point receiver") { onPick(s.channel) }
+                    .buttonStyle(.borderless)
             }
         }
 
-        if onPick == nil {
-            // The honest version of a control that cannot work yet. With a locator
-            // connected, picking a channel has to move the WHOLE system — staging a
-            // receiver-only change would point the receiver at an empty channel and
-            // strand the locator on the old one (ADR-0011). That move needs Locator
-            // Settings, which is not ported, so the choice is withheld rather than
-            // quietly doing the damaging half of it.
-            note("Moving a connected locator needs Locator Settings, which is not built on "
-                 + "iOS yet. Disconnect the locator to re-point the receiver on its own.", .error)
-        } else {
-            note(locatorConnected
-                 ? "Moves your locator to the chosen channel; the receiver follows automatically."
-                 : "No locator connected, so this only re-points the receiver. Your locator "
-                   + "stays where it is.", .muted)
-        }
+        note(locatorConnected
+             ? "Moves your locator to the chosen channel; the receiver follows automatically."
+             : "No locator connected, so this only re-points the receiver. Your locator "
+               + "stays where it is.", .muted)
 
         // Naming the channels that were excluded, and why, so a short list does not read
         // as a failed scan.
