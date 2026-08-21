@@ -209,6 +209,13 @@ the locator has in fact accepted the change. fschroer decided on 2026-08-20 to o
 rather than ship a control that cannot work. The full chain, and what would close it, is
 in `UI_PARITY.md`. This is the only deliberate UI divergence on these screens.
 
+**The settings widgets were then rebuilt** after "text entry areas appear as labels" and
+"numeric fields can't be edited directly" — both true, and the same failure as the map
+round: written in SwiftUI idiom instead of read off Android's `ConfigurationItemText` /
+`ConfigurationItemNumeric`. `ConfigRows.swift` now has the outlined labelled field, the
+stacked nudge arrows with Android's hold-to-repeat decay, and the dropdown. **Use those
+rows for every settings screen from here** rather than reaching for `Form` + `Stepper`.
+
 **Remaining screens:** Flight Profiles (1,002 lines), Deployment Test (160), Download
 maps (677) — the last two of which depend on flight-data download.
 

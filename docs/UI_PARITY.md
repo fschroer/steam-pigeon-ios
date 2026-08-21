@@ -564,6 +564,54 @@ these screens. It closes when the firmware carries both fields in a broadcast, w
 a change across three binaries and wants an ADR. `DeploymentLimitsTests` fails first if a
 control for either reappears.
 
+### The settings-screen widgets — rebuilt to match Android (2026-08-20)
+
+Reported: "text entry areas appear as labels, so it's not apparent that they are
+editable" and "numeric entry fields can't be edited directly."
+
+Both true, and the cause is the same one as the map round: **the first pass was written
+in SwiftUI idiom instead of read off Android's widgets.** A grouped `Form` of `TextField`
+and `Stepper` rows renders as a list of LABELS — nothing shows a value is editable, and a
+number can only be nudged, never typed.
+
+Android uses `ConfigurationItemText` and `ConfigurationItemNumeric`, which are a Material
+`OutlinedTextField` — a bordered box with the label floated onto the border — with, for
+numerics, two stacked nudge arrows beside it. Both affordances are present at once:
+type it, or step it.
+
+Ported now, in `ConfigRows.swift`:
+
+| Android | here |
+|---|---|
+| `OutlinedTextField` with floating `label` | `OutlinedFieldChrome` — same bordered box, label cut into the border |
+| directly editable, number keypad, Done | same, `.numberPad` / `.decimalPad` |
+| coerce to min/max in `onFocusChanged` | same, on focus loss |
+| `onValueChange` fires per keystroke | same — it is what lights the Update button as you type |
+| two stacked `NudgeButton`s | `NudgeColumn`, same chevrons, same enable-at-bounds |
+| hold-to-repeat, 500 ms → 100 ms, decay .25 | same constants |
+| `ExposedDropdownMenuBox` | `ConfigPickerRow`, read-only field + chevron + menu |
+| grouped scroll with the action row pinned below | same — `ScrollView` + pinned button, not a `Form` |
+
+**Two rules worth keeping straight**, because they pull in opposite directions and both
+came from Android's own handling:
+
+- **Report every keystroke.** The Update button has to light as you type; a user who
+  types a value and finds Update dead has no way to know why.
+- **Coerce only on commit.** Clamping per keystroke makes a field impossible to clear
+  and fights every intermediate value — typing "15" into a field with a minimum of 10
+  would rewrite the "1" to "10" before the "5" arrived.
+
+**Enum labels are Android's case names** — `DroguePrimary`, not "Drogue Primary". Android
+renders `enumValue.name`, and that is the string the manual has to name; prettier spacing
+here would be a second vocabulary.
+
+**On ADR-0016's sanctioned departure.** That ADR permits "SwiftUI switches, pickers and
+steppers rather than Material clones", and this is not an exception to it: the departure
+covers controls that look BROKEN when imitated. A bordered, labelled text box is not one
+— it is the ordinary way to show an editable value on either platform, and here it was
+also the fix for a real usability defect. The sanctioned list is not a licence to reach
+for a different control whenever one is handier.
+
 ### Icon substitutions, and why they are substitutions
 
 Android's control icons are Compose `Icons.Default.*` — a library, not drawables in the

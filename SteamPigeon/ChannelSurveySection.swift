@@ -20,14 +20,14 @@ struct ChannelSurveySection: View {
     let onPick: (Int) -> Void
 
     var body: some View {
-        Section {
+        VStack(alignment: .leading, spacing: 4) {
             Button(inProgress ? "Scanning… (about 7 seconds)" : "Find a clean channel", action: onScan)
+                .buttonStyle(.bordered)
                 .disabled(!enabled || inProgress)
 
             if let survey { results(survey) }
-        } header: {
-            Text("Channel")
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     @ViewBuilder private func results(_ survey: ChannelSurvey.Result) -> some View {

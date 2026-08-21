@@ -48,117 +48,112 @@ struct ReceiverSettingsView: View {
     }
 
     var body: some View {
-        Form {
-            // Conflicting traffic (ADR-0006). Non-blocking on purpose: it is a fact
-            // about the channel, not a modal decision, and the two actions are the
-            // whole point — switch to it, or move to an uncontested channel using the
-            // survey directly below.
-            if let id = model.conflictLocatorId {
-                Section {
-                    // Two different situations, and only one of them is a problem.
-                    // Already connected to a DIFFERENT locator: this is genuine
-                    // conflicting traffic. Not connected at all: it is simply a new
-                    // locator to connect to, so the wording invites rather than warns.
-                    let connected = model.connectedLocatorId != nil
-                    Text(connected
-                         ? "Another locator (ID \(Self.hex(id))) is on the air and is not "
-                           + "being displayed. Connect to switch to it, or move to an "
-                           + "uncontested channel."
-                         : "Locator ID \(Self.hex(id)) found. Enter its password to connect.")
-                        .font(SPFont.bodySmall)
-                        .foregroundStyle(connected ? SPColor.error : SPColor.onBackground)
-
-                    HStack {
-                        Button("Connect") { model.requestConnectToConflict() }
-                        Spacer()
-                        Button("Dismiss") { model.dismissConflict() }
+        // Scrolling column with the Update button pinned below, matching Android's
+        // layout — and matching Locator Settings, which is the screen it is most often
+        // compared with.
+        VStack(spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    // Conflicting traffic (ADR-0006). Non-blocking on purpose: it is a
+                    // fact about the channel, not a modal decision, and the two actions
+                    // are the whole point — switch to it, or move to an uncontested
+                    // channel using the survey directly below.
+                    if let id = model.conflictLocatorId {
+                        // Two different situations, and only one of them is a problem.
+                        // Already connected to a DIFFERENT locator: genuine conflicting
+                        // traffic. Not connected at all: simply a new locator to connect
+                        // to, so the wording invites rather than warns.
+                        let connected = model.connectedLocatorId != nil
+                        Text(connected
+                             ? "Another locator (ID \(Self.hex(id))) is on the air and is "
+                               + "not being displayed. Connect to switch to it, or move to "
+                               + "an uncontested channel."
+                             : "Locator ID \(Self.hex(id)) found. Enter its password to connect.")
+                            .font(SPFont.bodySmall)
+                            .foregroundStyle(connected ? SPColor.error : SPColor.onBackground)
+                        HStack {
+                            Button("Connect") { model.requestConnectToConflict() }
+                            Spacer()
+                            Button("Dismiss") { model.dismissConflict() }
+                        }
+                        .buttonStyle(.borderless)
+                        Divider()
                     }
-                    .buttonStyle(.borderless)
-                }
-            }
 
-            ChannelSurveySection(
-                survey: model.channelSurvey,
-                inProgress: model.surveyInProgress,
-                enabled: model.state == .ready,
-                locatorConnected: model.connectedLocatorId != nil,
-                onScan: { model.requestChannelSurvey() },
-                // Two different actions behind one control, and the difference is the
-                // point: with a locator connected this moves the WHOLE system, because
-                // re-pointing the receiver alone would strand the locator on the old
-                // channel (ADR-0011 invariant 1 vs 5).
-                onPick: { channel in
-                    if model.connectedLocatorId != nil {
-                        model.moveLocatorToChannel(channel)
-                    } else {
-                        staged.channel = channel
-                        edited = true
+                    ChannelSurveySection(
+                        survey: model.channelSurvey,
+                        inProgress: model.surveyInProgress,
+                        enabled: model.state == .ready,
+                        locatorConnected: model.connectedLocatorId != nil,
+                        onScan: { model.requestChannelSurvey() },
+                        // Two different actions behind one control, and the difference
+                        // is the point: with a locator connected this moves the WHOLE
+                        // system, because re-pointing the receiver alone would strand
+                        // the locator on the old channel (ADR-0011 invariant 1 vs 5).
+                        onPick: { channel in
+                            if model.connectedLocatorId != nil {
+                                model.moveLocatorToChannel(channel)
+                            } else {
+                                staged.channel = channel
+                                edited = true
+                            }
+                        })
+
+                    if let channel = model.pendingChannelMove, let progress = moveProgress(channel) {
+                        HStack(alignment: .top) {
+                            Text(progress.text)
+                                .font(SPFont.labelSmall)
+                                .foregroundStyle(progress.isError ? SPColor.error
+                                                                  : SPColor.onSurfaceVariant)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            Button("Dismiss") { model.clearPendingChannelMove() }
+                                .buttonStyle(.borderless)
+                        }
                     }
-                })
 
-            if let channel = model.pendingChannelMove, let progress = moveProgress(channel) {
-                Section {
-                    HStack(alignment: .top) {
-                        Text(progress.text)
-                            .font(SPFont.labelSmall)
-                            .foregroundStyle(progress.isError ? SPColor.error
-                                                              : SPColor.onSurfaceVariant)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        Button("Dismiss") { model.clearPendingChannelMove() }
-                            .buttonStyle(.borderless)
+                    Divider().padding(.vertical, 4)
+
+                    if let version = model.versionInfo, !version.receiverVersion.isEmpty {
+                        Text("Firmware: \(version.receiverVersion)")
+                            .font(SPFont.bodyMedium)
+                            .foregroundStyle(SPColor.onSurfaceVariant)
                     }
+
+                    ConfigTextRow(title: "Receiver Name",
+                                  text: Binding(get: { staged.deviceName },
+                                                set: { staged.deviceName = $0; edited = true }),
+                                  enabled: model.receiverConfigMessageState == .idle)
+
+                    ConfigIntRow(title: "Locator Channel to Receive",
+                                 value: Binding(get: { staged.channel },
+                                                set: { staged.channel = $0; edited = true }),
+                                 range: ReceiverConfig.channelRange,
+                                 enabled: model.receiverConfigMessageState == .idle)
+
+                    // Android's own framing: this points the RECEIVER at a different
+                    // locator's channel. Changing a locator's own channel is Locator
+                    // Settings, where the receiver follows automatically.
+                    Text("Changes the channel this receiver listens on, to reach a locator "
+                         + "already using another channel. To move a connected locator, use "
+                         + "Locator Settings.")
+                        .font(SPFont.labelSmall)
+                        .foregroundStyle(SPColor.onSurfaceVariant)
                 }
+                .padding(16)
             }
 
-            Section {
-                if let version = model.versionInfo, !version.receiverVersion.isEmpty {
-                    LabeledContent("Firmware", value: version.receiverVersion)
-                }
-
-                TextField("Receiver Name", text: Binding(
-                    get: { staged.deviceName },
-                    set: {
-                        // The field is fixed-width on the wire; truncate as it is typed
-                        // rather than silently dropping the tail on send.
-                        staged.deviceName = String($0.prefix(WireProtocol.deviceNameLength))
-                        edited = true
-                    }))
-                .disabled(model.receiverConfigMessageState.isInFlight)
-
-                Stepper(value: Binding(
-                    get: { staged.channel },
-                    set: { staged.channel = $0; edited = true }),
-                        in: ReceiverConfig.channelRange) {
-                    LabeledContent("LoRa Channel", value: "\(staged.channel)")
-                }
-                .disabled(model.receiverConfigMessageState.isInFlight)
-            } footer: {
-                // Android's own framing: this points the RECEIVER at a different
-                // locator's channel. Changing a locator's own channel is Locator
-                // Settings, where the receiver follows automatically.
-                Text("Changes the channel this receiver listens on, to reach a locator "
-                     + "already using another channel. To move a connected locator, use "
-                     + "Locator Settings.")
+            Divider()
+            Button(model.receiverConfigMessageState.buttonLabel) {
+                model.changeReceiverConfig(staged)
+                edited = false
             }
-
-            // Android pairs Update with a "Return to main" button. On iOS that is the
-            // sheet's own Done, which ADR-0016 already sanctions in place of an app-bar
-            // control — so the row is Update alone rather than Update plus a second way
-            // to leave. A Revert button was drafted here and removed: Android has none,
-            // and inventing one is how the two apps stop needing the same manual.
-            Section {
-                Button(model.receiverConfigMessageState.buttonLabel) {
-                    model.changeReceiverConfig(staged)
-                    edited = false
-                }
-                .disabled(!edited || model.receiverConfigMessageState != .idle)
-            }
+            .buttonStyle(.borderedProminent)
+            .disabled(!edited || model.receiverConfigMessageState != .idle)
+            .padding(16)
         }
+        .background(SPColor.background)
         .navigationTitle("Receiver Settings")
         .navigationBarTitleDisplayMode(.inline)
-        // Keep the staged copy in step with the receiver as long as the user has not
-        // edited it, so an arriving broadcast or a receiver switch shows immediately
-        // rather than leaving last session's values on screen.
         .onChange(of: model.remoteReceiverConfig) { latest in
             if !edited { staged = latest }
         }
@@ -173,4 +168,5 @@ struct ReceiverSettingsView: View {
             model.resetConflictDismissals()
         }
     }
+
 }

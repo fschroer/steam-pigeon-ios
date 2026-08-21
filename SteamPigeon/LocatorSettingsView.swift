@@ -18,61 +18,68 @@ struct LocatorSettingsView: View {
     private var busy: Bool { model.locatorConfigMessageState != .idle }
 
     var body: some View {
-        Form {
-            Section {
-                if let version = model.versionInfo, !version.locatorVersion.isEmpty {
-                    LabeledContent("Firmware", value: version.locatorVersion)
-                }
-                TextField("Locator Name", text: Binding(
-                    get: { staged.deviceName },
-                    set: {
-                        staged.deviceName = String($0.prefix(WireProtocol.deviceNameLength))
-                        edited = true
-                    }))
-                .disabled(busy)
-
-                Stepper(value: channelBinding, in: ReceiverConfig.channelRange) {
-                    LabeledContent("Locator Channel to Receive", value: "\(staged.loraChannel)")
-                }
-                .disabled(busy)
-
-                // Static per installation, but the locator cannot infer it: mounting
-                // calibration finds the axis gravity lies along and calls it "up",
-                // which is only the nose axis if the rocket happens to be vertical.
-                // Stating it is what makes tilt-from-vertical measurable off the pad
-                // (ADR-0021 Decision 6).
-                Picker("Sensor Axis Along Rocket", selection: Binding(
-                    get: { staged.noseAxis },
-                    set: { staged.noseAxis = $0; edited = true })) {
-                    ForEach(NoseAxis.allCasesInOrder, id: \.self) { Text($0.label).tag($0) }
-                }
-                .disabled(busy)
-            }
-
-            ForEach(0..<4, id: \.self) { channel in
-                Section("Deployment Channel \(channel + 1)") {
-                    Picker("Mode", selection: modeBinding(channel)) {
-                        ForEach(DeployMode.allCasesInOrder, id: \.self) { Text($0.label).tag($0) }
+        // A scrolling column with the Update row pinned below it, as Android lays this
+        // out — not a grouped Form. The grouped style is what made every value read as
+        // a list entry rather than as a field.
+        VStack(spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    if let version = model.versionInfo, !version.locatorVersion.isEmpty {
+                        Text("Firmware: \(version.locatorVersion)")
+                            .font(SPFont.bodyMedium)
+                            .foregroundStyle(SPColor.onSurfaceVariant)
                     }
-                    .disabled(busy)
-                    // Only the field belonging to the SELECTED mode is shown, as
-                    // Android does — a delay box under a channel set to Main is a
-                    // value with nothing to apply to.
-                    modeDetail(for: mode(channel))
+
+                    ConfigTextRow(title: "Locator Name",
+                                  text: Binding(get: { staged.deviceName },
+                                                set: { staged.deviceName = $0; edited = true }),
+                                  enabled: !busy)
+
+                    ConfigIntRow(title: "Locator Channel to Receive",
+                                 value: channelBinding,
+                                 range: ReceiverConfig.channelRange,
+                                 enabled: !busy)
+
+                    // Static per installation, but the locator cannot infer it: mounting
+                    // calibration finds the axis gravity lies along and calls it "up",
+                    // which is only the nose axis if the rocket happens to be vertical.
+                    // Stating it is what makes tilt-from-vertical measurable off the pad
+                    // (ADR-0021 Decision 6).
+                    ConfigPickerRow(title: "Sensor Axis Along Rocket",
+                                    selection: Binding(get: { staged.noseAxis },
+                                                       set: { staged.noseAxis = $0; edited = true }),
+                                    options: NoseAxis.allCasesInOrder,
+                                    label: { $0.label },
+                                    enabled: !busy)
+
+                    ForEach(0..<4, id: \.self) { channel in
+                        Text("Deployment Channel \(channel + 1)")
+                            .font(SPFont.titleSmall)
+                            .padding(.top, 8)
+                        ConfigPickerRow(title: "Mode",
+                                        selection: modeBinding(channel),
+                                        options: DeployMode.allCasesInOrder,
+                                        label: { $0.label },
+                                        enabled: !busy)
+                        // Only the field belonging to the SELECTED mode is shown, as
+                        // Android does — a delay box under a channel set to Main is a
+                        // value with nothing to apply to.
+                        modeDetail(for: mode(channel))
+                    }
                 }
+                .padding(16)
             }
 
-            Section {
-                Button(model.locatorConfigMessageState.buttonLabel) {
-                    model.changeLocatorConfig(staged)
-                    edited = false
-                }
-                .disabled(!edited || busy)
-            } footer: {
-                Text("Sends the locator's complete settings. The link drops briefly if the "
-                     + "channel changed, while both devices switch.")
+            Divider()
+            Button(model.locatorConfigMessageState.buttonLabel) {
+                model.changeLocatorConfig(staged)
+                edited = false
             }
+            .buttonStyle(.borderedProminent)
+            .disabled(!edited || busy)
+            .padding(16)
         }
+        .background(SPColor.background)
         .navigationTitle("Locator Settings")
         .navigationBarTitleDisplayMode(.inline)
         .onChange(of: model.remoteLocatorConfig) { latest in
@@ -112,49 +119,38 @@ struct LocatorSettingsView: View {
     @ViewBuilder private func modeDetail(for mode: DeployMode) -> some View {
         switch mode {
         case .droguePrimary:
-            tenthsStepper("Drogue Primary Deploy Delay (s)",
-                          value: Binding(get: { staged.droguePrimaryDelay },
-                                         set: { staged.droguePrimaryDelay = $0; edited = true }),
-                          range: 0...max(Int(staged.drogueBackupDelay) - 1, 0))
+            ConfigDecimalRow(title: "Drogue Primary Deploy Delay (s)",
+                             tenths: intBinding(\.droguePrimaryDelay),
+                             range: 0...max(Int(staged.drogueBackupDelay) - 1, 0),
+                             enabled: !busy)
         case .drogueBackup:
-            tenthsStepper("Drogue Backup Deploy Delay (s)",
-                          value: Binding(get: { staged.drogueBackupDelay },
-                                         set: { staged.drogueBackupDelay = $0; edited = true }),
-                          range: min(Int(staged.droguePrimaryDelay) + 1, 30)...30)
+            ConfigDecimalRow(title: "Drogue Backup Deploy Delay (s)",
+                             tenths: intBinding(\.drogueBackupDelay),
+                             range: min(Int(staged.droguePrimaryDelay) + 1, 30)...30,
+                             enabled: !busy)
         case .mainPrimary:
-            metresStepper("Main Primary Deploy Altitude (m)",
-                          value: Binding(get: { staged.mainPrimaryAltitude },
-                                         set: { staged.mainPrimaryAltitude = $0; edited = true }),
-                          range: min(Int(staged.mainBackupAltitude) + 1, 500)...500)
+            ConfigIntRow(title: "Main Primary Deploy Altitude (m)",
+                         value: int16Binding(\.mainPrimaryAltitude),
+                         range: min(Int(staged.mainBackupAltitude) + 1, 500)...500,
+                         enabled: !busy)
         case .mainBackup:
-            metresStepper("Main Backup Deploy Altitude (m)",
-                          value: Binding(get: { staged.mainBackupAltitude },
-                                         set: { staged.mainBackupAltitude = $0; edited = true }),
-                          range: 0...max(Int(staged.mainPrimaryAltitude) - 1, 0))
+            ConfigIntRow(title: "Main Backup Deploy Altitude (m)",
+                         value: int16Binding(\.mainBackupAltitude),
+                         range: 0...max(Int(staged.mainPrimaryAltitude) - 1, 0),
+                         enabled: !busy)
         case .unused:
             EmptyView()
         }
     }
 
-    /// Delays are stored in TENTHS of a second and shown in seconds.
-    private func tenthsStepper(_ title: String, value: Binding<UInt8>,
-                               range: ClosedRange<Int>) -> some View {
-        Stepper(value: Binding(get: { Int(value.wrappedValue) },
-                               set: { value.wrappedValue = UInt8(clamping: $0) }),
-                in: range) {
-            LabeledContent(title, value: String(format: "%.1f", Double(value.wrappedValue) / 10))
-        }
-        .disabled(busy || range.isEmpty)
+    private func intBinding(_ path: WritableKeyPath<LocatorConfig, UInt8>) -> Binding<Int> {
+        Binding(get: { Int(staged[keyPath: path]) },
+                set: { staged[keyPath: path] = UInt8(clamping: $0); edited = true })
     }
 
-    private func metresStepper(_ title: String, value: Binding<UInt16>,
-                               range: ClosedRange<Int>) -> some View {
-        Stepper(value: Binding(get: { Int(value.wrappedValue) },
-                               set: { value.wrappedValue = UInt16(clamping: $0) }),
-                in: range) {
-            LabeledContent(title, value: "\(value.wrappedValue)")
-        }
-        .disabled(busy || range.isEmpty)
+    private func int16Binding(_ path: WritableKeyPath<LocatorConfig, UInt16>) -> Binding<Int> {
+        Binding(get: { Int(staged[keyPath: path]) },
+                set: { staged[keyPath: path] = UInt16(clamping: $0); edited = true })
     }
 }
 
@@ -163,12 +159,14 @@ extension DeployMode {
     static let allCasesInOrder: [DeployMode] =
         [.droguePrimary, .drogueBackup, .mainPrimary, .mainBackup, .unused]
 
+    /// Android renders `enumValue.name`, so these are the Kotlin case names verbatim.
+    /// Prettier spacing would be a second vocabulary for the manual to explain.
     var label: String {
         switch self {
-        case .droguePrimary: return "Drogue Primary"
-        case .drogueBackup:  return "Drogue Backup"
-        case .mainPrimary:   return "Main Primary"
-        case .mainBackup:    return "Main Backup"
+        case .droguePrimary: return "DroguePrimary"
+        case .drogueBackup:  return "DrogueBackup"
+        case .mainPrimary:   return "MainPrimary"
+        case .mainBackup:    return "MainBackup"
         case .unused:        return "Unused"
         }
     }
