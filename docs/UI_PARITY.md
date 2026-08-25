@@ -966,14 +966,23 @@ silent — they corrupt flight data rather than failing:
    inserted into the flight as real samples. iOS keeps the sender's frame untouched and
    recovers as `parity XOR (received members)`, which has no order to get wrong.
    `testParityStillRecoversWhenAMemberArrivesAfterTheParityFrame` pins it.
-2. **A recovered short packet decodes the parity buffer's padding as samples.** The last
-   packet of a transfer is shorter than the parity frame, so a recovered payload carries
-   trailing zeros; zero deltas decode as duplicates of the final sample. iOS caps the
-   decode at the sample count the transfer header implies.
+2. **A recovered packet decodes the parity buffer's padding as samples.** A recovered
+   payload carries trailing zeros, and zero deltas decode as duplicates of the last real
+   sample. iOS caps the decode at the sample count the transfer header implies.
 
-Both want the same fix on Android — recorded here rather than made silently, because
-"Android is the reference implementation" cuts both ways: a fix that lands here first is
-a divergence until it lands there.
+   ⚠️ **This entry said "a recovered SHORT packet", and that understated it.** Reading
+   Android's fix back (`ec6fb0d`, 2026-08-21) shows it is **every recovery**: the parity
+   frame carries the full 239-byte payload capacity while a full data packet is 216, so
+   there is padding to misread even when nothing is short. iOS was already right in both
+   cases — the cap is on sample count, not on a short tail — but the reasoning written
+   here was not, and the two platforms fix it differently: Android trims the recovered
+   payload to the missing packet's real length via `compressedPayloadBytes`.
+
+**Both landed on Android 2026-08-21 (`ec6fb0d`)**, so the divergence is closed and the
+platforms agree. They were recorded here rather than fixed silently, because "Android is
+the reference implementation" cuts both ways: a fix that lands here first is a divergence
+until it lands there. **Neither platform has run the FEC path against a real lossy
+transfer**, which is what would actually trust it.
 
 ### Download maps — ported 2026-08-21, against `DownloadMapScreen.kt`
 

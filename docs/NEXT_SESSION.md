@@ -11,7 +11,7 @@ nothing on that list is still owed here:
 |---|---|---|
 | `3f921a4` | the download estimate counted one zoom level fewer than it fetches | **ported 2026-08-23** |
 | `b209671` | name a locator that was already armed when the app opened | already here — **closes divergence #7**, the iOS-first one |
-| `ec6fb0d` | parity recovery rebuilt a packet out of the wrong bytes | already fixed here when Flight Profiles landed; the parity-matrix note owing it to Android is now stale |
+| `ec6fb0d` | parity recovery rebuilt a packet out of the wrong bytes | already fixed here when Flight Profiles landed. Reading it back corrected one of our notes: the padding bug was **every recovery**, not only a short tail — iOS's cap on decoded sample count covered both anyway. Parity matrix updated 2026-08-24 |
 | `2b54807` | the app is called SteamPigeon, on both home screens | nothing owed — closes the first "Android owes iOS" item below |
 | `b878c32` | the download picker opens where you are, not on the whole world | nothing owed — closes the second |
 | `5d52383` | the altitude axis was losing the first digit of its own labels | **ported 2026-08-23** — gutter 112 px, plus the left-edge clamp. Held for real flight data before it is judged |
