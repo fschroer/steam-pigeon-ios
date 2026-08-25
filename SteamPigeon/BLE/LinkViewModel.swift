@@ -735,7 +735,16 @@ final class LinkViewModel: ObservableObject {
     /// so speed and attitude survive landing, which made that reading report armed
     /// forever once a locator had ever been armed — and with it, in-flight forever.
     /// A disarmed locator sends PreLaunchData, so the newest packet is the answer.
-    @Published private(set) var armed = false
+    @Published private(set) var armed = false {
+        didSet {
+            // Android clears the pending blink in `LaunchedEffect(armedState)`, beside
+            // the arm/disarm announcement: the acknowledgment IS the locator changing
+            // what it broadcasts, so the icon settles on its final colour the moment it
+            // does rather than blinking out the whole 2 s timeout. The timeout only has
+            // to cover a command that is never answered.
+            if armed != oldValue { armCommandPending = false }
+        }
+    }
 
     // MARK: - Commands (ADR-0020: gated on CONNECTED, not merely authorized)
 
@@ -1345,11 +1354,6 @@ final class LinkViewModel: ObservableObject {
                     padAlert = m.padAlert
                     padAlertSnoozeMinutes = m.padAlertSnoozeMinutes
                     remoteLocatorConfig = LocatorConfig.from(m)
-                    // Remembered for the next launch, and for the rest of THIS one:
-                    // arming the locator stops these broadcasts, and `TelemetryData`
-                    // carries no name. Kept for open locators too, which is where this
-                    // goes past Android — see `KnownLocatorStore` and UI_PARITY.md.
-                    store.noteName(locatorId: m.locatorId, name: m.deviceName)
                     armed = m.armed                     // newest broadcast wins
                     updateVector(lat: m.latitude, lon: m.longitude,
                                  satellites: m.satellites, gpsStatus: m.gpsStatus,
@@ -1474,6 +1478,7 @@ final class LinkViewModel: ObservableObject {
                        deviceName: String? = nil) -> Bool {
         switch gate.evaluate(frame: frame, locatorId: locatorId, baseSize: baseSize) {
         case .accepted(let id):
+            noteName(id, deviceName)
             connectedLocatorId = id
             lastLocatorMessage = Date()
             conflictingLocatorIds.remove(id)
@@ -1484,6 +1489,7 @@ final class LinkViewModel: ObservableObject {
         case .conflict(let id):
             // A different AUTHORIZED locator, heard while ours is still live. Warn, but
             // leave the connection where it is — switching is the user's call.
+            noteName(id, deviceName)
             conflictingLocatorIds.insert(id)
             lastForeignBroadcast = Date()
             noteConflict(id)
@@ -1505,6 +1511,29 @@ final class LinkViewModel: ObservableObject {
             }
             return false
         }
+    }
+
+    /// Remember what an **authorized** locator calls itself, for the flight in which it
+    /// stops saying so.
+    ///
+    /// Arming stops `PreLaunchData` and `TelemetryData` has no name field, so a name has
+    /// to come from something remembered; `adoptStoredLabel` is the other half.
+    ///
+    /// Called on `.accepted` **and on `.conflict`** — Android does this before its
+    /// `mayConnect` check (`RocketViewModel.noteLocatorName`, app `b209671`), so an
+    /// authorized locator it declines to connect to is still named. That case is
+    /// precisely the two-locator one: hear the second rocket's broadcast while the first
+    /// holds the link, then switch to it after it is armed, and the name has to have
+    /// been kept from the broadcast the app declined to act on. Not called on
+    /// `.unauthorized` — a name is only worth keeping for a locator this app is entitled
+    /// to display.
+    ///
+    /// `deviceName` is nil for `TelemetryData`, which carries no name; an empty or
+    /// unchanged name is dropped inside `noteName`, so this is cheap at the 1 Hz
+    /// broadcast rate.
+    private func noteName(_ locatorId: UInt32, _ deviceName: String?) {
+        guard let deviceName else { return }
+        store.noteName(locatorId: locatorId, name: deviceName)
     }
 
     /// Name an accepted locator from what was stored when it was authorized.

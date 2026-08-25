@@ -35,7 +35,27 @@ enum FlightChart {
     static let androidChartDensity: CGFloat = 3
 
     /// Left gutter for the altitude labels.
-    static let marginX: CGFloat = 64 / androidChartDensity
+    ///
+    /// Android's `CHART_MARGIN_X`, which was **64 px and clipped the first character off
+    /// any label wider than 56 px**: a label is right-aligned into the gutter 8 px from
+    /// its edge, and "900m" measures about 79 px at the 32 px axis size, putting its left
+    /// edge at −23. The altitude axis of an altitude chart was losing its leading digit,
+    /// on both platforms — reproduced here deliberately, since Android is the reference
+    /// implementation and a silent divergence is worse than a shared defect.
+    ///
+    /// **112 px** covers the widest realistic integer label: Roboto digits advance
+    /// ~0.556 em and `m` ~0.86 em, so "1234m" is about 99 px plus the 8 px gap, and four
+    /// digits is the practical ceiling at 9999 m = 32,800 ft. Deep zoom can still produce
+    /// a decimal label ("900.5m") too wide for it, so `FlightProfilesView` also clamps the
+    /// label's left edge to 0 — it butts against the plot rather than losing a character,
+    /// which is the failure worth having.
+    ///
+    /// The gutter rather than the text size, of the two levers: these are raw pixels, so
+    /// 32 px is already only ~11 sp on a 3× phone, and shrinking it to fix a legibility
+    /// bug reads badly. Ported from Android `5d52383`; **not yet seen on a device on
+    /// either platform** — it is a legibility judgement and wants a flight with 3- and
+    /// 4-digit altitudes.
+    static let marginX: CGFloat = 112 / androidChartDensity
     /// Bottom gutter for the time labels.
     static let marginY: CGFloat = 32 / androidChartDensity
     static let axisTextSize: CGFloat = 32 / androidChartDensity

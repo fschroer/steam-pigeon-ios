@@ -13,20 +13,20 @@ by the flight-data transfer layer), and path export. `NEXT_SESSION.md` has the l
 **How to use this file.** The audits below are the record of what was compared against
 Android and what was found — read the one for the screen you are about to touch before
 writing anything, rather than re-deriving it. The **deliberate divergences** are listed
-with what would close each one; there are only six, and every other difference found in
-this port was a defect.
+with what would close each one; every other difference found in this port was a defect.
 
-**The seven deliberate divergences:**
+**The seven deliberate divergences** — **five now.** Two closed on the Android side on
+2026-08-21 and are left in the table as the record of what closed them:
 
 | Divergence | Why | Closes when |
 |---|---|---|
-| No launch-detect altitude / deploy-signal duration controls in Locator Settings | Neither field rides in a broadcast, so a change can never be confirmed — on Android editing either reports "not acknowledged" while the locator has accepted it | the firmware carries both fields in a broadcast (three binaries, wants an ADR) |
+| ~~No launch-detect altitude / deploy-signal duration controls in Locator Settings~~ **CLOSED 2026-08-21** — Android removed both controls too (`b6c67ad`), and ADR-0028 makes both fields reserved wire slots the locator owns. Neither platform offers them; it reopens only when the firmware carries them in a broadcast | — | — |
 | Icon substitutions in the map control column | Android's are Compose `Icons.Default.*`, a library with nothing to convert | never — the mapping is recorded below |
 | No archived-path map control | Android offers it only once a record is downloaded | **now unblocked** — flight-data download landed 2026-08-21; the control itself is still to build |
 | Flight-profile chart constants converted at a 3.0 display density | Android draws the chart in raw **pixels** (`CHART_MARGIN_X = 64f`, `textSize = 32f`), so its apparent size changes with the phone; SwiftUI's Canvas works in points | never exactly — see the chart audit below. A side-by-side screenshot would settle whether 3.0 is the right divisor |
 | Download maps uses SwiftUI's `Menu` and `Slider` where Android uses `DropdownMenu` and a Material `Slider`, and an SF Symbol for the delete icon | ADR-0016's sanctioned list covers pickers and sliders outright; the delete glyph is a Compose `Icons.Filled.Delete`, a library with nothing to convert, so `trash` stands in as the map-column icons do | never — `trash` is pinned in `SFSymbolAvailabilityTests` like the rest |
 | Chart legend checkboxes are SF Symbols, not a Material `Checkbox` | ADR-0016 sanctioned departure: a Material checkbox clone next to iOS type reads as broken, and `checkmark.square.fill` / `square` carry the same two states in the same two colours | never |
-| iOS remembers the name of **every** locator it accepts a broadcast from; Android remembers one only for locators whose password it holds | An armed locator sends no device name, so a name has to come from something remembered — and Android's version never covers an **open** locator, which is the default state. fschroer saw the resulting blank row on the phone (2026-08-21) and asked for it closed | Android stores the name from every accepted `PreLaunchData`, not only from `rememberLocator` — see below |
+| ~~iOS remembers the name of **every** locator it accepts a broadcast from; Android remembers one only for locators whose password it holds~~ **CLOSED 2026-08-21** by Android `b209671`, which stores the name from every accepted broadcast exactly as described below. The one asymmetry left — Android noted the name **before** its `mayConnect` check and iOS only on `.accepted` — was closed here 2026-08-23: `noteName` now runs on the conflict path too, so a second authorized locator heard while ours holds the link is remembered | — | — |
 
 Everything else on these screens matches Android, including field order, widget shapes,
 wording and type weights. **Silence reads as parity**, so a divergence that is not written
@@ -499,6 +499,48 @@ heard disarmed by this install. Nothing anywhere carries that name — the only 
 be a `locator_id`-to-name field in `TelemetryData`, which is a firmware change and wants
 an ADR.
 
+**Landed on Android 2026-08-21 (`b209671`), and one detail came back the other way.**
+Android notes the name inside its `authorized` branch, **before** the `mayConnect`
+check — so it names an authorized locator it declines to connect to. iOS noted it only on
+`.accepted`, which lost exactly the two-rocket case: hear the second locator while the
+first holds the link and the only broadcast that ever carried its name went unremembered,
+so switching to it once armed left the row blank. `noteName` now runs on `.conflict` too
+(2026-08-23), and not on `.unauthorized` — a name is only worth keeping for a locator this
+app is entitled to display. Both halves are pinned in `ReceiverLocatorRecoveryTests`.
+
+### Eleventh round, 2026-08-23 — the rocket icon said nothing about being armed
+
+Reported from the phone. The status panel's rocket glyph is the **only** thing on the map
+that says whether the locator is armed, and it says it in colour alone — so a wrong tint
+rule is not cosmetic.
+
+| Gap | Android | iOS before |
+|---|---|---|
+| Resting tint | `armedState -> Color.Green`, else `Color.White` (`FlightMapScreen.kt:2198`) | `gpsStatus == .ok ? primary : tertiary`, with `outline` for no reading — **armed and disarmed looked identical**, and the icon changed for a reason Android never changes it for |
+| The green | Compose `Color.Green`, pure `#00FF00` | SwiftUI `.green` in the pending branch — the adaptive system green, `#34C759` |
+| Blink easing | `tween(450, easing = LinearEasing)`, reversing 1f→0.15f | `.easeInOut(duration: 0.45)` |
+| Acknowledgment | `LaunchedEffect(armedState) { armCommandPending = false }` — the locator changing what it broadcasts IS the acknowledgment, so the icon settles at once | nothing cleared it; the icon blinked out the full 2 s timeout every time, so a confirmed arm looked identical to one that was never answered |
+| Satellite superscript | takes the panel's default content colour; **never** follows the rocket's tint | shared `rocketTint`, so the count would have turned green with the glyph |
+
+The pending branch was already right — while a command is in flight the icon shows the
+colour it is heading **for**, green while arming and white while disarming, so the blink
+reads as *taken* rather than as the state being left. Only the three resting cases were
+invented. `gpsStatus` is no longer passed to the panel at all; GPS health is reported by
+`LocatorStats`, where Android reports it.
+
+The rule is pinned by `RocketIconTintTests`, including a case that fails if the green
+ever goes back to being SwiftUI's. **Confirmed on hardware 2026-08-24 (fschroer),
+arming and disarming a real locator** — which is the only way to see the half a test
+cannot reach: the blink running while the command is in flight, and stopping on the
+locator's own change of broadcast rather than on the 2 s timeout.
+
+**The satellite superscript is a small deliberate divergence, recorded here rather than
+left silent.** Android's is Material's default `LocalContentColor`, which with no
+`Surface` above it is **black** — as the radio and battery glyphs on this panel also are.
+iOS themes those three against the overlay instead. Nothing about the rocket icon depends
+on it, and matching Android exactly here means three black glyphs on a slate panel: worth
+a side-by-side screenshot before changing, not worth changing blind.
+
 ### Receiver Settings — protocol layer and form (2026-08-20)
 
 Staged deliberately: the three parsers and the ranking model first, then the form.
@@ -589,25 +631,57 @@ nothing was transmitted, so nothing moved.
 The progress row states every stage, because the cycle legitimately runs for several
 seconds with the link DOWN and silence through that reads as a hang.
 
-### ⚠️ A locator config change writes two fields the app cannot read
+### ✅ The two fields the app cannot read are RESERVED — ADR-0028
 
-`LocatorCfgChgRequest` carries the WHOLE `LocatorRocketSettings`, but `PreLaunchData`
-carries neither `launch_detect_altitude` nor `deploy_signal_duration` — so the app has
-no way to learn what the locator actually holds, and **every config change, including a
-pure channel move, writes them.**
+**Closed 2026-08-23**, porting Android `b6c67ad` ("reserved config fields v1"), with the
+locator's half in `4ffce9c` and the decision in
+`../steam-pigeon-locator/docs/adr/0028-app-does-not-transmit-unconfirmable-settings.md`.
 
-Android has the same behaviour with the same two constants, 30 m and 1.0 s, and a
-`// To do: remove from UI` beside them. iOS must use the identical values, and not
-merely for parity: confirmation is whole-object equality against a config rebuilt from
-the next broadcast using the same placeholders, so a different value would never compare
-equal and every change would report as unacknowledged.
+**What it used to say, and what was wrong with it.** `LocatorCfgChgRequest` carries the
+WHOLE `LocatorRocketSettings`, but `PreLaunchData` carries neither
+`launch_detect_altitude` nor `deploy_signal_duration` — so the app could not learn what
+the locator held, and **every config change, including a pure channel move, wrote the
+app's guess over both.** `deploy_signal_duration` is pyro firing time. This page recorded
+that as "a silent reset of a value configured over the USB console"; **the console never
+set either field** — `UserInteraction`'s config save assigns eight fields by name and
+neither is among them. The app was the only writer, and it was writing a value it had
+invented.
 
-They are the firmware defaults, so on an unmodified locator this is a no-op. On one
-whose values were changed over the USB console, a channel move silently restores them —
-and `deploy_signal_duration` is pyro firing time. Fixing it properly means carrying both
-fields in a broadcast, which is a firmware change across three binaries and belongs in
-an ADR. **Recorded here rather than fixed, because it is a system decision, not an iOS
-one.**
+**The decision: a setting the app cannot read back is not a setting the app transmits.**
+
+- Both fields are gone from `LocatorConfig`, on both platforms. Nothing left in the
+  confirmation comparison is a value the app invented, which is exactly what makes every
+  OTHER field on the settings screen confirmable — a reported success is now a real one.
+- The **slots stay on the wire as reserved**. Removing them would move `lora_channel`,
+  the one byte the receiver reads by `offsetof` to follow a channel change (ADR-0011),
+  and would change `sizeof(LocatorSettings)` from the 45 that three `static_assert`s and
+  both apps pin. Keeping the layout is also what lets the three binaries be flashed
+  independently.
+- The filler is the **firmware defaults, deliberately not zero**
+  (`LocatorConfig.reservedLaunchDetectAltitudeM` / `reservedDeploySignalDurationTenths`,
+  byte for byte Android's `LocatorConfigWire.RESERVED_*`). A locator on older firmware
+  still adopts whatever arrives there, and for it zero would mean launch detected at 0 m
+  AGL — true on the pad — and a pyro signal held for 0 s, a charge that never fires.
+- The locator restores its own values for both after copying the message, so an app
+  predating the change stops being able to reset them the moment the firmware is flashed.
+
+**The cost, recorded as a cost:** both fields are now fixed at their defaults, 30 m and
+1.0 s, on every device. Nothing can change them — not the app, not the console. It closes
+when the firmware carries them in a broadcast, at which point the controls can come back.
+
+The 35-byte body is now pinned field by field in `WireLayoutTests` — including that
+`lora_channel` sits at offset 13 and that the two reserved slots carry 30 and 10 rather
+than zeros — mirroring the cases Android added in the same commit. **iOS's bytes did not
+change**; it was already sending these exact values as "placeholders". What changed is
+that they are no longer fields anyone can set, and that the third leg of the triad now
+covers this body at all.
+
+**Confirmed on hardware 2026-08-24 (fschroer): a config change and a channel move both
+against a real locator.** That is the pair this needed — the change proves the locator
+accepts and confirms a body it no longer takes those two fields from, and the move proves
+`lora_channel` is still at the offset the RECEIVER reads it by out of the relayed frame
+(ADR-0011). A drift in either is silent: the message is length-validated and dropped, or
+the receiver retunes to the wrong byte and the link splits with the locator out of reach.
 
 **Conflicting-locator banner — landed (ADR-0006).** Non-blocking on purpose: it is a
 fact about the channel, not a modal decision, and its two actions are the point —
@@ -655,33 +729,31 @@ the degenerate ends: an unconfigured locator reports zeros, and a `ClosedRange` 
 lower > upper traps at construction in Swift, so an inverted bound would crash the
 screen rather than merely misbehave.
 
-### ⚠️ Launch-detect altitude and deploy-signal duration are NOT offered here
+### ✅ Launch-detect altitude and deploy-signal duration are not offered on EITHER platform
 
-Android shows both. **On Android, editing either can never succeed**, and the chain is
-worth stating because it is not obvious from any one place:
+Omitted here on 2026-08-20 as this port's one deliberate UI divergence; **Android removed
+both controls on 2026-08-21** (`b6c67ad`) and ADR-0028 makes it the system's decision. The
+divergence closes because Android moved, not because iOS did.
 
-1. Both are editable on that screen.
+The chain that made the controls impossible is worth keeping, because it is not obvious
+from any one place:
+
+1. Both were editable on Android's screen.
 2. Neither rides in `PreLaunchData`, so `remoteLocatorConfig` is rebuilt from every
    broadcast with hardcoded 30 and 10.
 3. Confirmation is whole-object equality against that rebuilt config, and Android's
-   `LocatorConfig` is a `data class`, so both fields count.
+   `LocatorConfig` is a `data class`, so both fields counted.
 
-Set launch-detect altitude to 50 and press Update: the locator receives and saves it,
-the comparison never matches, the app reports **"Update not acknowledged"**, and the
-display reverts to 30 m on the next broadcast. The change took effect; the app says it
-failed and shows the old value. That is why `// To do: remove from UI` sits beside both
-constants.
+Set launch-detect altitude to 50 and press Update: the locator receives and saves it, the
+comparison never matches, the app reports **"Update not acknowledged"**, and the display
+reverts to 30 m on the next broadcast. The change took effect; the app said it failed and
+showed the old value. A `// To do: remove from UI` had sat beside both constants for
+months.
 
-**Decision (fschroer, 2026-08-20): omit both controls on iOS.** A control that can never
-report success is worse than an absent one, and this is what the Android TODO intends.
-The placeholder VALUES stay in `LocatorConfig`, because the confirmation comparison needs
-them to match — omitting the controls is in fact what makes every other field on this
-screen confirmable.
-
-This is a **deliberate, explained divergence from Android's UI**, and the only one on
-these screens. It closes when the firmware carries both fields in a broadcast, which is
-a change across three binaries and wants an ADR. `DeploymentLimitsTests` fails first if a
-control for either reappears.
+Both fields are now **reserved wire slots** rather than app-settable values — see "The
+two fields the app cannot read are RESERVED" above for the layout and the reasoning.
+`DeploymentLimitsTests` fails first if a control for either reappears, and
+`WireLayoutTests` fails if the reserved bytes stop being the firmware defaults.
 
 ### The settings-screen widgets — rebuilt to match Android (2026-08-20)
 
@@ -857,13 +929,30 @@ radii are NOT converted, because Android writes those as `1.dp.toPx()` / `3.dp.t
 and a dp is a point — which is also the check that 3.0 is self-consistent: at that
 divisor the indicator circles keep exactly Android's radius-to-spacing ratio.
 
-**⚠️ The altitude axis labels are clipped, on BOTH platforms.** The left gutter is 64 px
-and a label like `900m` measures about 79 px at the 32 px axis size, so its first
-character is cut off. iOS reproduces this exactly rather than quietly widening the
-gutter — Android is the reference implementation, and this is a shared defect, not an
-iOS one. **The fix belongs on Android first** (widen `CHART_MARGIN_X`, or shrink
-`CHART_AXIS_TEXT_SIZE`), and then here in the same session. It is listed in
-`NEXT_SESSION.md` as fschroer's call, since it is a legibility judgement.
+**✅ The altitude axis labels were clipped, on BOTH platforms — fixed 2026-08-23.** The
+left gutter was 64 px and a label like `900m` measures about 79 px at the 32 px axis
+size, so a label is right-aligned to `gutter − width − 8` and lands at **x = −23**: the
+altitude axis of an altitude chart was cutting the first digit off its own labels. iOS
+reproduced it exactly rather than quietly widening the gutter, because Android is the
+reference implementation and a shared defect is better than a silent divergence — so it
+was fixed on Android first (`5d52383`) and ported here in this session.
+
+**112 px**, of the two available levers. Roboto digits advance ~0.556 em and `m` ~0.86 em,
+so a four-digit `1234m` is ~99 px plus the 8 px gap, and four digits is the practical
+ceiling at 9999 m = 32,800 ft. The text size was the other lever and is the wrong one:
+these are raw pixels, so 32 px is already only ~11 sp on a 3× phone, and shrinking type
+to fix a legibility bug reads badly.
+
+The draw also **clamps the label's left edge to zero**, because deep zoom can still
+produce a decimal label (`900.5m`, ~124 px) that does not fit: it butts against the plot
+rather than losing a character, which is the failure worth having. Android clamps `tx`;
+iOS anchors trailing, so the clamp is on the anchor minus the measured width
+(`drawAltitudeLabel`). `ChartViewportTests` measures the real face at the real size and
+fails if a four-digit label stops fitting — or if the gutter goes back to something that
+could not fit three digits. **Still unseen on a device, on either platform, and
+deliberately so:** fschroer is holding the judgement until there is real flight data to
+draw (2026-08-24). It is a legibility question with 3- and 4-digit altitudes on screen,
+and the gutter is space taken from the plot, so a fixture would not settle it.
 
 **Two Android bugs fixed here rather than reproduced**, both in the parity FEC and both
 silent — they corrupt flight data rather than failing:
@@ -951,8 +1040,10 @@ change there is `RegionPickerMap`'s factory plus a location source.
   bearings on site. `TileMathTests` pins that the levels below the maximum cost under
   half the deepest one.
 - **The estimate sums per zoom**, because measured tile size swings ~5× across the range.
-  A flat average badly misprices whichever end the user picks. The simulator download came
-  in at 743 kB against a 690 kB estimate — 8% low, on a 30-tile region.
+  A flat average badly misprices whichever end the user picks. It also sums over the
+  **source** zooms actually fetched, one level deeper than the map zoom — see the section
+  below, which is where that 8%-low simulator reading (743 kB against a 690 kB estimate,
+  on a 30-tile region) turned out to be the small end of a ~2.7× error.
 - **The 1 GB limit states itself in the button label.** As a separate warning line it sat
   rows away from the control it disabled, so an over-budget region read as a dead button.
 - **"Offline regions", not "Downloaded regions".** The row is written when a download
@@ -1051,26 +1142,47 @@ during a map download is the HTTPS connection fetching thousands of tiles. Nothi
 app reads those timestamps. It would only be worth chasing if it coincided with a
 download stalling — it did not.
 
-#### ⚠️ The size estimate is low, on BOTH platforms — around 2× on bytes, 4× on tiles
+#### The size estimate was ~2.7× low on BOTH platforms — fixed on Android first, then here
 
-Measured while testing the above. A 9.1 × 9.1 km region at z10–z17 estimated **2,761
-tiles / ~64 MB** and actually downloaded **139 MB**; a 22 × 22 km region estimated 12,484
-tiles against MapLibre's **49,155** resources — a ratio of 3.94, which is one whole zoom
-level.
+**Closed 2026-08-23**, porting Android `3f921a4` (`fix(maps): the download estimate
+counted one zoom level fewer than it fetches`). It was found here on 2026-08-21 and
+deliberately left alone, because the arithmetic is shared and fixing one side would have
+had the two apps quote different sizes for the same region. Android is the reference
+implementation, so it landed there and then here — unchanged, including the constant.
 
-The likely cause is the tile-size convention: the style declares `"tileSize": 256`, and
-MapLibre's logical tile grid is 512, so it fetches source tiles one level deeper than the
-map zoom asked for. Android's `tileCount` does exactly the same arithmetic over the same
-range, so **Android under-reports identically** — its own Mapbox note even says "MapLibre
-zoom runs ~1 level deeper than Google's (512- vs 256-px tile convention)", which is the
-same fact, applied to detail but not to the count.
+**Two errors that partly cancelled**, which is why the total read as ~2.7× rather than 4×:
 
-**Deliberately NOT changed here.** Android is the reference implementation, the estimate
-is shared arithmetic, and fixing one side would make the two apps quote different sizes
-for the same region — which is worse than both being consistently low. It wants a
-decision and a change on Android first; it is written up in `NEXT_SESSION.md` as such.
-The direction of the error is at least the safe one for the 1 GB gate: real downloads are
-bigger than promised, so the cap bites sooner than the estimate suggests.
+1. **The count was one zoom level short.** The style declares `"tileSize": 256` against
+   MapLibre's 512-point logical grid, so it fetches source tiles one level deeper than the
+   map zoom asks for — four tiles where `TileMath.tileCount` counted one. A 22 × 22 km
+   region estimated 12,484 tiles against MapLibre's own 49,155 resources: a ratio of 3.94,
+   which is one whole level. `TileMath.sourceZoom(of:)` is now the one place that says so.
+2. **`avgTileBytes` was ~1.5× high**, because those per-zoom figures were derived by
+   dividing a real download by that same under-count. Fixing the count alone would have
+   flipped the estimate from 2.7× low to 1.46× **high**, so both halves land together.
+
+Rather than rewrite five numbers that would then read as measurements, Android kept the
+historical table and named the one factor reconciling it with reality —
+`TILE_BYTES_CALIBRATION = 0.68`, here `TileMath.tileBytesCalibration`, the same value from
+the same anchor: the 9.1 × 9.1 km z10–z17 region that downloaded **139 MB** where the
+corrected count and the untouched table predict ~205 MB. It is a calibration, not a
+measurement — one anchor at one depth, inheriting the shape of everything else — and both
+providers carry it, since both tables were built the same way in the same commit.
+
+**The download is unaffected.** It is defined by the map-zoom range handed to
+`MLNTilePyramidOfflineRegion` (Android: `OfflineTilePyramidRegionDefinition`) and always
+fetched these tiles. Only the estimate was wrong.
+
+**Correcting what this page used to say: low is NOT the safe direction.** The 1 GB guard
+reads this number, so an under-estimate waves through a region that is really over budget
+rather than refusing one that would have fit.
+
+User-visible: the same regions now quote ~2.7× more, because that is what they cost. The
+20 × 20 km BALLS region at z17 goes from ~230 MB to ~635 MB here (Android quotes 289 → 790
+MB for its own slightly larger box). `TileMathTests` gained Android's six cases —
+the convention, the ~3.9 ratio, the pyramid shape, the estimate against that 139 MB
+download within 15%, and the direction guard that fails if either half of the fix is
+reverted — and three existing tests changed, because they asserted the old arithmetic.
 
 
 ### Deployment Test — ported 2026-08-21, against `DeploymentTest.kt`

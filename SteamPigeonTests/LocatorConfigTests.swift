@@ -11,12 +11,10 @@ final class LocatorConfigTests: XCTestCase {
     private func config() -> LocatorConfig {
         LocatorConfig(
             deployChannelModes: [.droguePrimary, .drogueBackup, .mainPrimary, .mainBackup],
-            launchDetectAltitude: 30,
             droguePrimaryDelay: 4,
             drogueBackupDelay: 7,
             mainPrimaryAltitude: 150,
             mainBackupAltitude: 120,
-            deploySignalDuration: 10,
             loraChannel: 42,
             deviceName: "Rocket One",
             noseAxis: .z)
@@ -33,12 +31,12 @@ final class LocatorConfigTests: XCTestCase {
     func testFieldsAtTheirFirmwareOffsets() {
         let p = config().payload
         XCTAssertEqual([0, 1, 2, 3], Array(p[0..<4]), "deployment ch1..4 modes")
-        XCTAssertEqual([30, 0], Array(p[4..<6]), "launch_detect_altitude, little-endian")
+        XCTAssertEqual([30, 0], Array(p[4..<6]), "launch_detect_altitude — reserved, little-endian")
         XCTAssertEqual(4, p[6], "drogue primary delay")
         XCTAssertEqual(7, p[7], "drogue backup delay")
         XCTAssertEqual([150, 0], Array(p[8..<10]), "main primary altitude")
         XCTAssertEqual([120, 0], Array(p[10..<12]), "main backup altitude")
-        XCTAssertEqual(10, p[12], "deploy signal duration")
+        XCTAssertEqual(10, p[12], "deploy_signal_duration — reserved")
         XCTAssertEqual(42, p[13], "lora_channel")
         XCTAssertEqual("Rocket One",
                        String(decoding: p[14..<34].prefix { $0 != 0 }, as: UTF8.self))
@@ -62,22 +60,23 @@ final class LocatorConfigTests: XCTestCase {
         XCTAssertEqual(NoseAxis.z.rawValue, p[34])
     }
 
-    // MARK: - The placeholders, and why they must match Android's
+    // MARK: - The reserved slots (ADR-0028)
 
-    /// `PreLaunchData` carries neither field, so the app cannot learn them — but the
-    /// whole struct is sent, so every change WRITES them. They are the firmware
-    /// defaults, so this is a no-op on an unmodified locator and a silent reset on one
-    /// configured over the USB console.
-    func testThePlaceholdersAreTheValuesAndroidWritesBack() {
-        XCTAssertEqual(30, LocatorConfig.launchDetectAltitudePlaceholder)
-        XCTAssertEqual(10, LocatorConfig.deploySignalDurationPlaceholder)
+    /// The two slots the app fills but does not own. They must be the **firmware
+    /// defaults, not zero** — a locator on firmware predating ADR-0028 still adopts
+    /// what arrives here, and zero would mean launch detected at 0 m AGL and a pyro
+    /// signal held for 0 s. Byte for byte Android's `LocatorConfigWire.RESERVED_*`.
+    func testTheReservedSlotsCarryTheFirmwareDefaults() {
+        XCTAssertEqual(30, LocatorConfig.reservedLaunchDetectAltitudeM)
+        XCTAssertEqual(10, LocatorConfig.reservedDeploySignalDurationTenths)
     }
 
-    /// The move is confirmed by whole-object equality against a config rebuilt from the
-    /// next broadcast. If the placeholders differed from the ones `from(_:)` fills in,
-    /// nothing would ever compare equal and every change would report as
-    /// unacknowledged — which is why they are constants shared by both paths rather
-    /// than literals at two call sites.
+    /// **What ADR-0028 buys.** The move is confirmed by whole-object equality against a
+    /// config rebuilt from the next broadcast, so every field in the comparison has to
+    /// be one the app can read back. Neither reserved field is a property of
+    /// `LocatorConfig` any more, so nothing in this comparison is a value the app
+    /// invented — which is what makes every OTHER field on the settings screen
+    /// confirmable.
     func testAConfigRebuiltFromABroadcastComparesEqualToOneSentOut() {
         var broadcast = PreLaunchData()
         broadcast.deployChannelModes = [.droguePrimary, .drogueBackup, .mainPrimary, .mainBackup]

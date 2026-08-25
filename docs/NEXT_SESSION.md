@@ -1,10 +1,42 @@
 # Resume here — iOS port
 
-Updated 2026-08-21. **500 tests passing**, clean build with no warnings from our own
+Updated 2026-08-24. **518 tests passing**, clean build with no warnings from our own
 sources.
+
+**Read this first: Android moved on 2026-08-21, and iOS has now caught up with all of
+it.** `git -C ../rocket-flight-manager log 39559b3..origin/main` lists seven commits;
+nothing on that list is still owed here:
+
+| Android | What it is | iOS |
+|---|---|---|
+| `3f921a4` | the download estimate counted one zoom level fewer than it fetches | **ported 2026-08-23** |
+| `b209671` | name a locator that was already armed when the app opened | already here — **closes divergence #7**, the iOS-first one |
+| `ec6fb0d` | parity recovery rebuilt a packet out of the wrong bytes | already fixed here when Flight Profiles landed; the parity-matrix note owing it to Android is now stale |
+| `2b54807` | the app is called SteamPigeon, on both home screens | nothing owed — closes the first "Android owes iOS" item below |
+| `b878c32` | the download picker opens where you are, not on the whole world | nothing owed — closes the second |
+| `5d52383` | the altitude axis was losing the first digit of its own labels | **ported 2026-08-23** — gutter 112 px, plus the left-edge clamp. Held for real flight data before it is judged |
+| `b6c67ad` + locator `4ffce9c` + ADR-0028 | the app stops sending two settings it can never confirm; the fields become **reserved wire slots** | **ported 2026-08-23.** iOS's bytes did not change — it already sent 30 and 10 — but both are gone from `LocatorConfig`, and `WireLayoutTests` now pins the 35-byte body field by field. **Closes divergence #1**, and **confirmed on hardware 2026-08-24** |
+
+The locator repo has moved too (`56b0422..origin/master`): ADR-0028, the firmware side of
+the reserved fields, and a UserManual pass. **Neither sibling checkout has been merged
+locally — both were only fetched**, so `git log` in either shows a stale `main`/`master`
+until someone pulls.
+
+One thing went the other way while porting `b209671`: Android names an authorized locator
+it declines to connect to, because it notes the name before its `mayConnect` check. iOS
+only did so on accept, so the two-rocket case lost the one broadcast carrying the second
+locator's name. Fixed here 2026-08-23 — `UI_PARITY.md`, "naming a locator heard only
+while armed".
 
 **Every Android screen is now ported.** What is left is features inside screens, and
 hardware time — see below.
+
+**Confirmed on hardware 2026-08-24 (fschroer):** the ADR-0028 reserved-fields change,
+with both a config change and a channel move against a real locator — the pair that
+proves the locator accepts a body it no longer takes those two fields from AND that
+`lora_channel` still sits where the receiver reads it — and the rocket icon's arm/disarm
+tint, including the blink stopping on the locator's own acknowledgment. The widened chart
+gutter is deliberately held for real flight data.
 
 **Hardware status: everything testable has been tested on the phone except an actual
 flight — and except the three screens that landed 2026-08-21 (Flight Profiles, Download
@@ -73,6 +105,10 @@ structure before writing anything.
   `UI_PARITY.md`.
 - **Enum labels are Android's case names** — `DroguePrimary`, not "Drogue Primary".
   Android renders `enumValue.name`.
+- **Colour on the status panel is a rule, not a palette choice.** The rocket glyph is
+  green when armed and white when not (`MapStatusPanel.rocketTint`), and it is the only
+  thing on the map that says so. Tinting it by GPS health looked reasonable and said
+  nothing — reported off the phone 2026-08-23.
 - **SF Symbols must exist on iOS 16.0.** A later symbol resolves fine on the 26.5
   simulator and is a blank box on the phone. Check against
   `CoreGlyphs.bundle/name_availability.plist` — the command is in
@@ -80,7 +116,11 @@ structure before writing anything.
 
 ---
 
-## Three things Android owes iOS
+## Three things Android owed iOS — all three landed 2026-08-21
+
+**Delivered.** `2b54807` (the name), `b878c32` (the opening camera) and `b209671` (naming
+an armed locator) are on `origin/main`. Nothing is owed here for any of them; the three
+descriptions below are kept as the record of what was asked for and why.
 
 **The app's name.** fschroer decided on 2026-08-21 that the app is **SteamPigeon**.
 Android's `app_name` still reads "Wherezit?" — in `values/strings.xml` and in the header
@@ -194,6 +234,11 @@ reproduced, and the one number in the chart with no exact answer.
 - **Double-tap to reset the chart zoom.** The recognizer is wired and pinch/pan were both
   verified on the simulator; a synthesized double-tap could not be delivered inside the
   tap window, so this one gesture is unproven.
+- **The chart's widened altitude gutter** — the one 2026-08-23 parity port still open.
+  fschroer is holding it for **real flight data** (2026-08-24): the question is whether
+  3- and 4-digit altitude labels now read, and the gutter is space taken from the plot,
+  so a fixture cannot settle it. The other two ports were confirmed on hardware
+  2026-08-24 — see the top of this file.
 - **An actual flight.** Everything downstream of launch detection: the landing freeze,
   the new-flight track reset, auto-zoom through a real ascent, the camera filter under
   fast movement, telemetry-only fields.
@@ -206,32 +251,36 @@ reproduced, and the one number in the chart with no exact answer.
 
 ---
 
-## Four system-level questions, none an iOS decision
+## Four system-level questions, none an iOS decision — three now answered
 
-1. **`launch_detect_altitude` and `deploy_signal_duration` cannot be read back.** Neither
-   rides in `PreLaunchData`, so every locator config change writes placeholders (30 m,
-   1.0 s — matching Android, and they MUST match or nothing ever confirms). On Android
-   both are editable and editing either can never succeed: it reports "not acknowledged"
-   while the locator has in fact accepted the change. fschroer decided on 2026-08-20 to
-   omit both controls on iOS. Closing it properly means carrying both fields in a
-   broadcast — a change across three binaries, and an ADR.
-2. **The offline size estimate is low on both platforms — ~2× on bytes, ~4× on tiles.**
-   Measured 2026-08-21: a 9.1 km region estimated ~64 MB and downloaded 139 MB; a 22 km
-   region estimated 12,484 tiles against MapLibre's 49,155. The ratio is one zoom level,
-   and the likely cause is the 256-px source against MapLibre's 512-px logical tile grid,
-   so the downloader fetches a level deeper than the estimate counts. **Android's
-   estimator is the same arithmetic and is low by the same factor**, so this was NOT
-   changed on iOS alone — quoting different sizes for the same region on the two phones
-   would be worse than both being consistently low. Needs a decision and a change on
-   Android first. The error is at least in the safe direction for the 1 GB gate.
-3. **The flight-profile chart clips its altitude axis labels — on both platforms.**
-   Android's left gutter is 64 px and `900m` measures about 79 px at the 32 px axis text
-   size, so the first character is cut. iOS reproduces this exactly rather than quietly
-   widening the gutter, because Android is the reference implementation and a silent
-   divergence is worse than a shared defect. **The fix is one constant** (widen
-   `CHART_MARGIN_X`, or drop `CHART_AXIS_TEXT_SIZE`), and it lands on Android first, then
-   here in the same session. It needs fschroer's eye on the phone: it is a legibility
-   judgement, and the gutter is space taken from the plot.
+Three of the four were decided on the Android/firmware side on 2026-08-21 and ported here
+on 2026-08-23. Only the pad-alert banner is still open, and it needs an eye rather than a
+decision.
+
+1. ~~**`launch_detect_altitude` and `deploy_signal_duration` cannot be read back.**~~
+   **Resolved 2026-08-21 by ADR-0028**, and ported here 2026-08-23. Both fields are now
+   **reserved wire slots**: the app fills them with the firmware defaults and offers no
+   control, and the locator restores its own values after copying the message. The slots
+   stay occupied because removing them would move `lora_channel` and break the receiver's
+   `offsetof` channel-follow (ADR-0011). **Both fields are consequently fixed at 30 m and
+   1.0 s on every device** — the ADR records that as a real reduction in capability, not
+   a pure fix — and it reopens when the firmware carries them in a broadcast. Note the
+   premise this file had wrong: the USB-C console never set either field either.
+
+2. ~~**The offline size estimate is low on both platforms.**~~ **Resolved 2026-08-23.**
+   Android fixed it (`3f921a4`) and it is ported here: `TileMath.sourceZoom(of:)` counts
+   the source tiles actually fetched, and `tileBytesCalibration` (0.68, Android's constant
+   from Android's anchor) corrects a table that had been divided by the old under-count.
+   Same regions now quote ~2.7× more. **The claim that low was the safe direction was
+   wrong** — the 1 GB guard reads this number, so an under-estimate waves through a region
+   that is over budget. Full write-up in `UI_PARITY.md`.
+3. ~~**The flight-profile chart clips its altitude axis labels — on both platforms.**~~
+   **Fixed on Android 2026-08-21 (`5d52383`) and ported here 2026-08-23.** The gutter,
+   not the text size: `CHART_MARGIN_X` 64 → 112 px, plus a clamp so a label too wide for
+   it butts against the plot instead of losing a character. Still **unseen on a device on
+   either platform** — it is a legibility judgement, and the gutter is space taken from
+   the plot, so it wants fschroer's eye on a flight with 3- and 4-digit altitudes.
+
 4. **The escalated pad-alert banner** wraps to five lines at 57 pt and runs under the
    control column. Android composes it identically at the same size on a near-identical
    screen width, so this is believed faithful — but it is a legibility question and wants

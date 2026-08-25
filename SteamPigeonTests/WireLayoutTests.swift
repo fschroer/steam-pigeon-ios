@@ -190,4 +190,80 @@ final class WireLayoutTests: XCTestCase {
     func testMaxPacketSize() {
         XCTAssertEqual(256, WireProtocol.maxPacketSize)
     }
+
+    // ---------------------------------------------------------------------
+    //  LocatorCfgChgRequest body — the one message the app builds byte by byte
+    // ---------------------------------------------------------------------
+    //
+    // C++ sizeof(LocatorSettings) == 45 = header 6 + target 4 +
+    // sizeof(RocketPersistentSettings) 35. The receiver ALSO pins 45, on its own
+    // LocatorRocketSettings, and length-validates the relay against it — a drift
+    // silently drops every config change the app sends, which is indistinguishable
+    // from the command never arriving.
+    //
+    // Ported from Android `WireLayoutTest.kt` at app `b6c67ad` ("reserved config
+    // fields v1"), case for case, so the third leg of the triad covers this body too.
+
+    private var cfg: LocatorConfig {
+        LocatorConfig(
+            deployChannelModes: [.droguePrimary, .drogueBackup, .mainPrimary, .mainBackup],
+            droguePrimaryDelay: 3,
+            drogueBackupDelay: 20,
+            mainPrimaryAltitude: 130,
+            mainBackupAltitude: 100,
+            loraChannel: 7,
+            deviceName: "Pigeon 1",
+            noseAxis: .x)
+    }
+
+    func testLocatorConfigBodySize() {
+        XCTAssertEqual(35, cfg.payload.count)
+        XCTAssertEqual(LocatorConfig.payloadSize, cfg.payload.count)
+    }
+
+    func testLocatorConfigOnWireMatchesTheFirmwareStruct() {
+        XCTAssertEqual(45, WireProtocol.headerSize + 4 + cfg.payload.count)
+    }
+
+    // The receiver reads this ONE byte out of the relayed frame, by offsetof, to
+    // follow the locator onto a new channel (ADR-0011 invariant 5). If it moves, the
+    // receiver retunes to whatever byte now sits there and the link splits — with the
+    // locator out of reach by definition.
+    func testLoraChannelSitsWhereTheReceiverReadsIt() {
+        XCTAssertEqual(7, cfg.payload[LocatorConfig.loraChannelOffset])
+        XCTAssertEqual(13, LocatorConfig.loraChannelOffset)
+    }
+
+    // launch_detect_altitude (u16 @4) and deploy_signal_duration (u8 @12) are
+    // reserved: the app does not set them and the locator keeps its own (ADR-0028).
+    // They carry the firmware defaults rather than zeros, because a locator running
+    // firmware from before that change still adopts whatever arrives here, and for it
+    // zero means launch detected at 0 m AGL and a pyro signal held for 0 s.
+    func testReservedSlotsCarryTheFirmwareDefaultsNotZero() {
+        let body = cfg.payload
+        XCTAssertEqual(30, UInt16(body[4]) | (UInt16(body[5]) << 8))
+        XCTAssertEqual(10, body[12])
+        XCTAssertEqual(LocatorConfig.reservedLaunchDetectAltitudeM, 30)
+        XCTAssertEqual(LocatorConfig.reservedDeploySignalDurationTenths, 10)
+    }
+
+    // The whole body, so any field moving is caught rather than only the two offsets
+    // named above. Byte for byte the same expectation as Android's.
+    func testLocatorConfigBodyLayout() {
+        var expected: [UInt8] = [
+            0, 1, 2, 3,        // deployment_ch1..4_mode
+            30, 0,             // launch_detect_altitude — reserved (u16 le)
+            3,                 // drogue_primary_deploy_delay
+            20,                // drogue_backup_deploy_delay
+            130, 0,            // main_primary_deploy_altitude (u16 le)
+            100, 0,            // main_backup_deploy_altitude (u16 le)
+            10,                // deploy_signal_duration — reserved
+            7,                 // lora_channel
+        ]
+        expected += Array("Pigeon 1".utf8)
+        expected += [UInt8](repeating: 0, count: 12)    // device_name[20], zero-filled
+        expected.append(NoseAxis.x.rawValue)
+        XCTAssertEqual(35, expected.count)
+        XCTAssertEqual(expected, cfg.payload)
+    }
 }

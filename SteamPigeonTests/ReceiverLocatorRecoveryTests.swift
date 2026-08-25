@@ -134,6 +134,50 @@ final class ReceiverLocatorRecoveryTests: XCTestCase {
         XCTAssertEqual("Callisto", second.remoteLocatorConfig.deviceName)
     }
 
+    /// **The conflict path names its locator too** — Android calls `noteLocatorName`
+    /// before its `mayConnect` check (app `b209671`), so an authorized locator it
+    /// declines to connect to is still remembered. iOS used to note the name only on
+    /// `.accepted`, which lost exactly the two-rocket case: hear the second locator
+    /// while the first holds the link, and the only broadcast that ever carried its name
+    /// went unremembered — so switching to it after it was armed left the row blank.
+    func testAnAuthorizedLocatorWeDeclineToConnectToIsStillNamed() {
+        let first: UInt32 = 0x0C0F_0001
+        let second: UInt32 = 0x0C0F_0002
+        var store = KnownLocatorStore()
+        store.forget(locatorId: first)
+        store.forget(locatorId: second)
+        defer { store.forget(locatorId: first); store.forget(locatorId: second) }
+
+        let m = LinkViewModel()
+        m.ingestForTesting(prelaunchFrame(locatorId: first, key: 0, deviceName: "Callisto"))
+        XCTAssertEqual(first, m.connectedLocatorId)
+
+        // The second rocket, authorized (open) but heard while the first still holds the
+        // connection — the conflict path, not the accepted one.
+        m.ingestForTesting(prelaunchFrame(locatorId: second, key: 0, deviceName: "Big Bertha"))
+        XCTAssertEqual(first, m.connectedLocatorId, "the standing connection is not switched")
+        XCTAssertEqual(second, m.conflictLocatorId, "this must be the conflict path")
+
+        XCTAssertEqual("Big Bertha", KnownLocatorStore().label(for: second),
+                       "the one broadcast that carried its name must have been remembered")
+    }
+
+    /// The other half of the same rule: an UNAUTHORIZED locator is not named. A name is
+    /// only worth keeping for a locator this app is entitled to display, and Android
+    /// stores one only inside its `authorized` branch.
+    func testAnUnauthorizedLocatorIsNotNamed() {
+        let id: UInt32 = 0x0C0F_0003
+        var store = KnownLocatorStore()
+        store.forget(locatorId: id)
+        defer { store.forget(locatorId: id) }
+
+        let m = LinkViewModel()
+        m.ingestForTesting(prelaunchFrame(locatorId: id, key: 0xABCD_1234,
+                                          deviceName: "Stranger"))
+        XCTAssertNotEqual(id, m.connectedLocatorId)
+        XCTAssertNil(KnownLocatorStore().label(for: id))
+    }
+
     /// `PreLaunchData` arrives at 1 Hz. Re-writing the same name to `UserDefaults` at
     /// that rate is churn, so an unchanged name is not a write.
     func testARepeatedNameIsNotWrittenAgain() {

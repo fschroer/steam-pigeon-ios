@@ -333,7 +333,6 @@ struct MapScreen: View {
                     locatorName: model.remoteLocatorConfig.deviceName,
                     locatorFresh: model.isLocatorFresh,
                     satellites: model.satellites,
-                    gpsStatus: model.gpsStatus,
                     armed: model.armed,
                     locatorBatteryMv: model.isPreLaunchFresh ? model.prelaunch?.locatorBatteryMv : nil,
                     rssi: rssi,

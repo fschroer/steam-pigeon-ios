@@ -391,12 +391,9 @@ private struct FlightProfileChart: View {
                         let label = yGridInterval < 1
                             ? String(format: "%.1fm", Double(gridAlt))
                             : "\(Int(gridAlt.rounded()))m"
-                        draw(context, label,
-                             size: FlightChart.axisTextSize, color: SPColor.secondaryContainer,
-                             at: CGPoint(x: FlightChart.marginX - px(8),
-                                         y: baseline(gy + FlightChart.axisTextSize / 2,
-                                                     size: FlightChart.axisTextSize)),
-                             anchor: .trailing)
+                        drawAltitudeLabel(context, label,
+                                          y: baseline(gy + FlightChart.axisTextSize / 2,
+                                                      size: FlightChart.axisTextSize))
                     }
                 }
                 gridAlt += yGridInterval
@@ -638,6 +635,27 @@ private struct FlightProfileChart: View {
                       color: Color, at point: CGPoint, anchor: UnitPoint) {
         context.draw(Text(string).font(SPFont.chartLabel(size: size)).foregroundColor(color),
                      at: point, anchor: anchor)
+    }
+
+    /// An altitude label, right-aligned into the left gutter 8 px from its edge — and
+    /// **clamped so its left edge never goes negative**.
+    ///
+    /// Android's `tx = (chartMarginX - measureText - 8f).coerceAtLeast(0f)`, expressed
+    /// for a trailing anchor: the anchor is the label's RIGHT edge here, so the clamp is
+    /// on the anchor minus the measured width. A label too wide for the gutter — a
+    /// decimal one at deep zoom, "900.5m" — then butts against the plot instead of losing
+    /// its leading character off the canvas. See `FlightChart.marginX` for why the gutter
+    /// is 112 px rather than the 64 it was.
+    private func drawAltitudeLabel(_ context: GraphicsContext, _ label: String, y: CGFloat) {
+        let text = Text(label)
+            .font(SPFont.chartLabel(size: FlightChart.axisTextSize))
+            .foregroundColor(SPColor.secondaryContainer)
+        let resolved = context.resolve(text)
+        let unbounded = CGSize(width: CGFloat.greatestFiniteMagnitude,
+                               height: CGFloat.greatestFiniteMagnitude)
+        let width = resolved.measure(in: unbounded).width
+        let x = max(FlightChart.marginX - px(8), width)
+        context.draw(resolved, at: CGPoint(x: x, y: y), anchor: .trailing)
     }
 }
 

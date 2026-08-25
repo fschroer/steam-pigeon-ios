@@ -41,8 +41,14 @@ enum SatelliteProvider: String, CaseIterable, Identifiable {
         }
     }
 
-    /// Measured average payload of one 256-px tile at `z`. Varies strongly by zoom,
-    /// which is why the estimate sums per level instead of multiplying one constant.
+    /// Measured average payload of one 256-px SOURCE tile at source zoom `z` — the zoom
+    /// in the tile URL, which is one deeper than the map zoom (see
+    /// `TileMath.sourceZoom(of:)`). Varies strongly by zoom, which is why the estimate
+    /// sums per level instead of multiplying one constant.
+    ///
+    /// Read through `TileMath.tileBytesCalibration`, which reconciles these historical
+    /// figures with a real download; see the note there before trusting the absolute
+    /// values.
     func avgTileBytes(_ z: Int) -> Int {
         switch self {
         // Measured flat across z13–z17 (21.6–24.0 KB, mean 22.7 KB) on a real download.

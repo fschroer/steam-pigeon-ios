@@ -76,12 +76,16 @@ final class DeploymentLimitsTests: XCTestCase {
         XCTAssertEqual(5, DeployMode.allCasesInOrder.count)
     }
 
-    /// The two fields the app cannot read back are NOT offered for editing — see
-    /// UI_PARITY. They keep their placeholder values so the confirmation comparison
-    /// still matches; if a control for either ever appears, this test should fail first.
-    func testTheUnreadableFieldsKeepTheirPlaceholders() {
-        let c = LocatorConfig()
-        XCTAssertEqual(LocatorConfig.launchDetectAltitudePlaceholder, c.launchDetectAltitude)
-        XCTAssertEqual(LocatorConfig.deploySignalDurationPlaceholder, c.deploySignalDuration)
+    /// The two fields the app cannot read back are NOT offered for editing, and under
+    /// ADR-0028 they are not settable at all: they are reserved wire slots filled with
+    /// the firmware defaults, and the locator keeps its own values for both. Every
+    /// config built by the app carries the same two bytes, whatever else it changes —
+    /// if a control for either ever reappears, this is what should fail first.
+    func testTheUnreadableFieldsAreReservedOnEveryConfig() {
+        var c = LocatorConfig()
+        c.loraChannel = 12
+        c.mainPrimaryAltitude = 250
+        XCTAssertEqual([30, 0], Array(c.payload[4..<6]), "launch_detect_altitude")
+        XCTAssertEqual(10, c.payload[12], "deploy_signal_duration")
     }
 }

@@ -19,7 +19,6 @@ struct MapStatusPanel: View {
     /// spoken recently enough for its name — or its absence — to be worth reporting.
     var locatorFresh: Bool = false
     let satellites: UInt8?
-    let gpsStatus: SensorHealth?
     let armed: Bool
     let locatorBatteryMv: UInt16?
 
@@ -202,19 +201,20 @@ struct MapStatusPanel: View {
                     // While a command is in flight the icon blinks toward its TARGET
                     // colour — green when arming, white when disarming — so the user
                     // sees the request was taken before the locator confirms.
-                    .foregroundStyle(armPending
-                                     ? (armed ? Color.white : Color.green)
-                                     : rocketTint)
+                    .foregroundStyle(Self.rocketTint(armed: armed, pending: armPending))
                     .opacity(armPending && !blinkOn ? 0.15 : 1)
+                    // Android's `tween(450, easing = LinearEasing)`, reversing, 1f→0.15f.
                     .animation(armPending
-                               ? .easeInOut(duration: 0.45).repeatForever(autoreverses: true)
+                               ? .linear(duration: 0.45).repeatForever(autoreverses: true)
                                : .default, value: blinkOn)
                     .onChange(of: armPending) { pending in blinkOn = !pending }
                 if let s = satellites {
                     Text("\(s)")
                         .font(.custom("Poppins-Regular", size: 10, relativeTo: .caption2))
                         .baselineOffset(7)          // superscript, as Android sets
-                        .foregroundStyle(rocketTint)
+                        // NOT the rocket's tint: Android's superscript takes the
+                        // default content colour and never changes with armed state.
+                        .foregroundStyle(SPColor.onBackground)
                 }
             }
             .frame(width: iconGutter, alignment: .leading)
@@ -323,8 +323,30 @@ struct MapStatusPanel: View {
         return state == .ready ? "No Locator" : ""
     }
 
-    private var rocketTint: Color {
-        guard let g = gpsStatus else { return SPColor.outline }
-        return g == .ok ? SPColor.primary : SPColor.tertiary
+    /// Android's `rocketIconTint` (`FlightMapScreen.kt:2198`), value for value:
+    ///
+    /// ```kotlin
+    /// val rocketIconTint = when {
+    ///     armCommandPending -> if (!armedState) Color.Green else Color.White
+    ///     armedState        -> Color.Green
+    ///     else              -> Color.White
+    /// }
+    /// ```
+    ///
+    /// **Green means armed, white means not.** While a command is in flight the icon
+    /// takes the colour it is heading FOR — green while arming, white while disarming —
+    /// and blinks there, so the request is visibly taken before the locator confirms it.
+    ///
+    /// Nothing here reads GPS status. This tint used to be `gpsStatus == .ok ? primary :
+    /// tertiary`, which said something Android never says with this glyph and left the
+    /// one indicator of armed state on the screen looking identical either way.
+    static func rocketTint(armed: Bool, pending: Bool) -> Color {
+        if pending { return armed ? androidWhite : androidGreen }
+        return armed ? androidGreen : androidWhite
     }
+
+    /// Compose's `Color.Green`/`Color.White` — pure #00FF00 and #FFFFFF, not SwiftUI's
+    /// `.green`, which is the adaptive system green and reads as a different colour.
+    private static let androidGreen = Color(hex: 0x00FF00)
+    private static let androidWhite = Color(hex: 0xFFFFFF)
 }

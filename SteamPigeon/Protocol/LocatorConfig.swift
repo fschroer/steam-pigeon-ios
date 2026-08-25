@@ -7,10 +7,10 @@ import Foundation
 ///
 ///     6  target_locator_id u32   (ADR-0020, prepended by OutboundMessage)
 ///     10 deployment_ch1..4 mode u8 ×4
-///     14 launch_detect_altitude u16
+///     14 launch_detect_altitude u16   ← RESERVED (ADR-0028)
 ///     16 drogue_primary_deploy_delay u8 | 17 drogue_backup_deploy_delay u8
 ///     18 main_primary_deploy_altitude u16 | 20 main_backup_deploy_altitude u16
-///     22 deploy_signal_duration u8 | 23 lora_channel u8
+///     22 deploy_signal_duration u8   ← RESERVED (ADR-0028) | 23 lora_channel u8
 ///     24 device_name char[20]
 ///     44 nose_axis u8
 ///
@@ -18,40 +18,63 @@ import Foundation
 /// existing field kept its offset — the receiver reads `lora_channel` by offset to
 /// follow a channel change (ADR-0011), and that offset must not move.
 ///
+/// **The two reserved slots stay on the wire and are not fields of this struct.** The
+/// locator keeps its own values for both; see `reservedLaunchDetectAltitudeM`.
+///
 /// **The whole struct is sent for any change.** That is what makes ADR-0020's target
 /// load-bearing: an unaddressed one rewrote a bystander's deployment channel modes,
 /// delays and altitudes.
 struct LocatorConfig: Equatable {
     var deployChannelModes: [DeployMode] = [.droguePrimary, .drogueBackup, .mainPrimary, .mainBackup]
-    var launchDetectAltitude: UInt16 = LocatorConfig.launchDetectAltitudePlaceholder
+    // launch_detect_altitude sits here on the wire and is NOT a field of this struct —
+    // see `reservedLaunchDetectAltitudeM` below. Neither it nor deploy_signal_duration
+    // rides in `PreLaunchData`, so the app can never learn what the locator holds for
+    // either, and confirmation is whole-object equality against a config rebuilt from
+    // that broadcast. Carrying them here meant every change reported "not acknowledged"
+    // while the locator had accepted it.
     var droguePrimaryDelay: UInt8 = 0
     var drogueBackupDelay: UInt8 = 0
     var mainPrimaryAltitude: UInt16 = 0
     var mainBackupAltitude: UInt16 = 0
-    var deploySignalDuration: UInt8 = LocatorConfig.deploySignalDurationPlaceholder
+    // deploy_signal_duration sits here on the wire; see above.
     var loraChannel: Int = 0
     var deviceName: String = ""
     var noseAxis: NoseAxis = .auto
 
-    /// ⚠️ **Placeholders, not readings — and they are WRITTEN BACK to the locator.**
+    /// Bytes of `RocketPersistentSettings` — `sizeof(LocatorSettings) - 6 - 4`.
+    static let payloadSize = 35
+
+    /// Offset of `lora_channel` within the payload. The receiver reads the byte at this
+    /// offset out of the relayed frame to follow a channel change (ADR-0011), so it may
+    /// not move while that `offsetof` stands.
+    static let loraChannelOffset = 13
+
+    /// ⚠️ **The two reserved slots — ADR-0028, "the app does not transmit a setting it
+    /// cannot read back".**
     ///
-    /// `PreLaunchData` does not carry `launch_detect_altitude` or
-    /// `deploy_signal_duration`, so the app has no way to learn what the locator
-    /// actually holds; but `LocatorCfgChgRequest` sends the whole struct, so every
-    /// config change — including a pure channel move — writes these two values.
+    /// `launch_detect_altitude` and `deploy_signal_duration` still occupy their places
+    /// on the wire, because removing them would move `lora_channel` and change
+    /// `sizeof(LocatorSettings)` from the 45 that three firmware `static_assert`s pin —
+    /// and with no version negotiation, all three binaries could then only ever be
+    /// flashed together. **The locator keeps its own values for both** and no longer
+    /// adopts what arrives here.
     ///
-    /// Android does exactly the same, with the same constants and a `// To do: remove
-    /// from UI` beside them, and they must MATCH Android's: the confirmation test is
-    /// whole-object equality against a config rebuilt from the next broadcast, so a
-    /// different placeholder here would never compare equal and every change would
-    /// report as unacknowledged.
+    /// The filler is the **firmware defaults, deliberately not zero**: a locator running
+    /// firmware from before ADR-0028 still adopts whatever arrives in these slots, and
+    /// for it zero would mean launch detected at 0 m AGL — true on the pad — and a pyro
+    /// signal held for 0 s, a charge that never fires. The defaults leave such a locator
+    /// exactly where it already is, which is what makes the app safe to ship ahead of
+    /// the firmware. They can become zeros once no locator predating it is in service.
     ///
-    /// These are the firmware defaults, so on an unmodified locator this is a no-op.
-    /// On one whose values were changed over the USB console it is not: a channel move
-    /// silently restores 30 m and 1.0 s. Fixing it properly means carrying both fields
-    /// in a broadcast, which is a firmware change and belongs in an ADR.
-    static let launchDetectAltitudePlaceholder: UInt16 = 30      // metres
-    static let deploySignalDurationPlaceholder: UInt8 = 10       // tenths of a second
+    /// They must match Android's `LocatorConfigWire.RESERVED_*` byte for byte.
+    ///
+    /// **Correcting what this file used to say:** the USB-C console never set either
+    /// field either — `UserInteraction`'s config save assigns eight fields by name and
+    /// neither is among them. So these are not "a silent reset of something the console
+    /// configured"; both fields are now simply fixed at their defaults on every device,
+    /// which ADR-0028 records as a real reduction in capability.
+    static let reservedLaunchDetectAltitudeM: UInt16 = 30        // metres
+    static let reservedDeploySignalDurationTenths: UInt8 = 10    // tenths of a second
 
     /// Everything after `target_locator_id`, which `OutboundMessage.locatorDirected`
     /// prepends. 35 bytes: 6 header + 4 target + 35 = the asserted 45.
@@ -61,12 +84,12 @@ struct LocatorConfig: Equatable {
             let mode = deployChannelModes.indices.contains(i) ? deployChannelModes[i] : .unused
             out.append(mode.rawValue)
         }
-        out += le16(launchDetectAltitude)
+        out += le16(Self.reservedLaunchDetectAltitudeM)   // reserved — locator keeps its own
         out.append(droguePrimaryDelay)
         out.append(drogueBackupDelay)
         out += le16(mainPrimaryAltitude)
         out += le16(mainBackupAltitude)
-        out.append(deploySignalDuration)
+        out.append(Self.reservedDeploySignalDurationTenths)  // reserved — locator keeps its own
         out.append(UInt8(clamping: loraChannel))
 
         var name = [UInt8](repeating: 0, count: WireProtocol.deviceNameLength)
@@ -92,12 +115,10 @@ struct LocatorConfig: Equatable {
     static func from(_ m: PreLaunchData) -> LocatorConfig {
         LocatorConfig(
             deployChannelModes: m.deployChannelModes,
-            launchDetectAltitude: launchDetectAltitudePlaceholder,
             droguePrimaryDelay: m.droguePrimaryDelay,
             drogueBackupDelay: m.drogueBackupDelay,
             mainPrimaryAltitude: m.mainPrimaryAltitude,
             mainBackupAltitude: m.mainBackupAltitude,
-            deploySignalDuration: deploySignalDurationPlaceholder,
             loraChannel: Int(m.channel),
             deviceName: m.deviceName,
             // Read back rather than remembered: the whole struct is sent, so a field

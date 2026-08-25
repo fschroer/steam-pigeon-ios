@@ -1,3 +1,4 @@
+import UIKit
 import XCTest
 @testable import SteamPigeon
 
@@ -168,6 +169,32 @@ final class ChartViewportTests: XCTestCase {
     }
 
     // MARK: - Gridline intervals
+
+    // MARK: - The altitude gutter
+
+    /// The defect Android fixed in `5d52383` and this port reproduced: the gutter was
+    /// 64 px and "900m" measures ~79 px at the 32 px axis size, so the altitude axis of
+    /// an altitude chart clipped the leading digit off its own labels.
+    ///
+    /// Measured in the real face at the real size, because that is what the bug was —
+    /// arithmetic on the constant alone would have looked fine either way.
+    func testTheAltitudeGutterFitsAFourDigitLabel() throws {
+        let font = try XCTUnwrap(UIFont(name: "Roboto-Regular", size: FlightChart.axisTextSize))
+        let gap = 8 / FlightChart.androidChartDensity
+        let width = ("1234m" as NSString).size(withAttributes: [.font: font]).width
+        XCTAssertLessThanOrEqual(width, FlightChart.marginX - gap,
+                                 "a four-digit label must fit: 9999 m is 32,800 ft")
+    }
+
+    /// Why the number moved, pinned so it cannot quietly move back: the old gutter did
+    /// not fit even a three-digit label.
+    func testTheOldGutterCouldNotFitAThreeDigitLabel() throws {
+        let font = try XCTUnwrap(UIFont(name: "Roboto-Regular", size: FlightChart.axisTextSize))
+        let oldMarginX = 64 / FlightChart.androidChartDensity
+        let gap = 8 / FlightChart.androidChartDensity
+        let width = ("900m" as NSString).size(withAttributes: [.font: font]).width
+        XCTAssertGreaterThan(width, oldMarginX - gap)
+    }
 
     /// `niceInterval` divides the gridline loops, so it must never return zero, a
     /// negative, or a NaN however degenerate the range it is handed.
