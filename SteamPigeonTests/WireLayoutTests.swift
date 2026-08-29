@@ -101,11 +101,20 @@ final class WireLayoutTests: XCTestCase {
         XCTAssertEqual(128, WireProtocol.versionInfoPayloadSize)
     }
 
-    // ChannelSurveyResponse: C++ sizeof 84 → payload 78 (status 1 + channel_count 1
+    // ChannelSurveyResponse: C++ sizeof 104 → payload 98 (status 1 + channel_count 1
     // + home_channel 1 + level[64] + confirmed_count 1 + confirmed_channel[5]
-    // + confirmed_frames[5]).
+    // + confirmed_frames[5] + confirmed_locator_id[5] × 4).
+    //
+    // **Breaking, 2026-08-27 (ADR-0029)**: was 84 / 78. Any client that frames this
+    // message by exact length before checking its CRC fails against mismatched
+    // firmware in BOTH directions, so this number and the receiver's static_assert
+    // move together or not at all.
     func testChannelSurveyPayloadSize() {
-        XCTAssertEqual(78, WireProtocol.channelSurveyPayloadSize)
+        XCTAssertEqual(98, WireProtocol.channelSurveyPayloadSize)
+    }
+
+    func testChannelSurveyOnWireMatchesTheFirmwareStruct() {
+        XCTAssertEqual(104, WireProtocol.headerSize + WireProtocol.channelSurveyPayloadSize)
     }
 
     func testSurveyChannelCount() {
@@ -116,11 +125,143 @@ final class WireLayoutTests: XCTestCase {
         XCTAssertEqual(5, WireProtocol.surveyConfirmCount)
     }
 
+    // A parts sum, not just a total: a total-size assertion cannot catch a field-order
+    // mistake, and this can. Android's `WireLayoutTest.kt` pins the same decomposition.
     func testChannelSurveyPayloadIsItsParts() {
         XCTAssertEqual(
             WireProtocol.channelSurveyPayloadSize,
-            3 + WireProtocol.surveyChannelCount + 1 + 2 * WireProtocol.surveyConfirmCount
+            3 + WireProtocol.surveyChannelCount
+              + 1 + 2 * WireProtocol.surveyConfirmCount
+              + 4 * WireProtocol.surveyConfirmCount
         )
+    }
+
+    /// `Cancelled` is one more value in a byte that already existed — no size change,
+    /// but a build that folded it into `RefusedBusy` would tell the user a flight-data
+    /// transfer is in progress, which is a plain lie about what happened.
+    func testSurveyCancelledDecodesAsItself() {
+        XCTAssertEqual(.cancelled, ChannelSurvey.Status.from(3))
+        XCTAssertEqual(.refusedBusy, ChannelSurvey.Status.from(2))
+        XCTAssertEqual(.unknown, ChannelSurvey.Status.from(4))
+    }
+
+    // ── Locator search (ADR-0029) ───────────────────────────────────────────────
+    //
+    // Additive and receiver-directed: the locator reserves MsgType 23/24 and implements
+    // neither, so no locator reflash is involved. Both sizes are static_asserted by the
+    // receiver's MessageProtocol.hpp.
+
+    // LocatorSearchRequest: C++ sizeof 28 → payload 22
+    // (flags 1 + channel_count 1 + target_locator_id 4 + channel[16]).
+    func testLocatorSearchRequestPayloadSize() {
+        XCTAssertEqual(22, WireProtocol.locatorSearchRequestPayloadSize)
+    }
+
+    func testLocatorSearchRequestOnWireMatchesTheFirmwareStruct() {
+        XCTAssertEqual(28, WireProtocol.headerSize
+                           + WireProtocol.locatorSearchRequestPayloadSize)
+    }
+
+    func testLocatorSearchRequestPayloadIsItsParts() {
+        XCTAssertEqual(WireProtocol.locatorSearchRequestPayloadSize,
+                       1 + 1 + 4 + WireProtocol.searchMaxChannels)
+    }
+
+    func testSearchMaxChannels() {
+        XCTAssertEqual(16, WireProtocol.searchMaxChannels)
+    }
+
+    // LocatorSearchResult: C++ sizeof **39** → payload 33 (status 1 + channel 1 +
+    // searched 1 + total 1 + found 1 + armed 1 + rssi 2 + snr 1 + locator_id 4 +
+    // device_name[20]).
+    //
+    // 39, not the 38 this message shipped as for a day: it grew an `int8_t snr` beside
+    // its `rssi` on 2026-08-27, because neither number separates a near-field artifact
+    // from a genuine occupant alone.
+    func testLocatorSearchResultPayloadSize() {
+        XCTAssertEqual(33, WireProtocol.locatorSearchResultPayloadSize)
+    }
+
+    func testLocatorSearchResultOnWireMatchesTheFirmwareStruct() {
+        XCTAssertEqual(39, WireProtocol.headerSize
+                           + WireProtocol.locatorSearchResultPayloadSize)
+    }
+
+    func testLocatorSearchResultPayloadIsItsParts() {
+        XCTAssertEqual(WireProtocol.locatorSearchResultPayloadSize,
+                       1 + 1 + 1 + 1 + 1 + 1 + 2 + 1 + 4 + WireProtocol.deviceNameLength)
+    }
+
+    /// The framer computes this length **before** the CRC is checked, so a drift
+    /// desynchronises the stream rather than failing a check — the same failure mode
+    /// `receiverInfo` is pinned against.
+    func testLocatorSearchResultIsFramedAtItsExactLength() {
+        var header = [UInt8](repeating: 0, count: WireProtocol.headerSize)
+        header[0] = WireProtocol.systemId
+        header[1] = MsgType.locatorSearchResult.rawValue
+        XCTAssertEqual(.known(39), PacketFramer.expectedPacketLength(header))
+    }
+
+    /// The request is app→receiver, so the framer must never try to frame one — Android
+    /// resyncs past every message it only sends, and the CRC gate makes that correct.
+    func testLocatorSearchRequestIsNotFramed() {
+        var header = [UInt8](repeating: 0, count: WireProtocol.headerSize)
+        header[0] = WireProtocol.systemId
+        header[1] = MsgType.locatorSearchRequest.rawValue
+        XCTAssertEqual(.unframeable, PacketFramer.expectedPacketLength(header))
+    }
+
+    /// Message-type values are the contract with two firmwares and the Android app.
+    func testSearchMessageTypeValues() {
+        XCTAssertEqual(23, MsgType.locatorSearchRequest.rawValue)
+        XCTAssertEqual(24, MsgType.locatorSearchResult.rawValue)
+    }
+
+    /// A search request is receiver-directed and carries **no** target: it is started
+    /// precisely when no locator is connected, so requiring one would disable it in the
+    /// only state it is for.
+    func testSearchRequestIsReceiverDirectedAndCarriesNoTarget() throws {
+        let msg = try XCTUnwrap(OutboundMessage.locatorSearch(channels: [4, 12],
+                                                              targetLocatorId: 0x1234_5678))
+        XCTAssertEqual(28, msg.count)
+        XCTAssertNil(OutboundMessage.locatorDirected(.locatorSearchRequest,
+                                                     targetLocatorId: 0x1234_5678))
+    }
+
+    /// Field order in the request body, so a target written where the channel list
+    /// starts is caught here rather than as a search that looks for the wrong thing.
+    func testSearchRequestBodyLayout() throws {
+        let msg = try XCTUnwrap(OutboundMessage.locatorSearch(channels: [48, 3],
+                                                              targetLocatorId: 0x0403_0201))
+        let body = Array(msg.dropFirst(WireProtocol.headerSize))
+        XCTAssertEqual(WireProtocol.locatorSearchRequestPayloadSize, body.count)
+        XCTAssertEqual(0, body[0])                       // flags
+        XCTAssertEqual(2, body[1])                       // channel_count
+        XCTAssertEqual([1, 2, 3, 4], Array(body[2..<6])) // target_locator_id, little-endian
+        XCTAssertEqual(48, body[6])
+        XCTAssertEqual(3, body[7])
+        // Everything past the listed channels is zero — the struct is fixed-size and
+        // `channel_count` is what says how much of it means anything.
+        XCTAssertTrue(body[8...].allSatisfy { $0 == 0 })
+    }
+
+    /// Cancel is a FLAG on the request, not a message of its own: it is meaningless
+    /// except while a search is running, and the app already knows how to send this one.
+    func testCancelIsAFlagOnTheSameRequest() throws {
+        let msg = try XCTUnwrap(OutboundMessage.cancelLocatorSearch())
+        XCTAssertEqual(MsgType.locatorSearchRequest.rawValue, msg[1])
+        XCTAssertEqual(28, msg.count)
+        XCTAssertEqual(WireProtocol.searchFlagCancel, msg[WireProtocol.headerSize])
+        XCTAssertEqual(0x01, WireProtocol.searchFlagCancel)
+    }
+
+    /// The firmware truncates a longer list, so a request built past the cap would
+    /// silently not search the channels the UI promised.
+    func testSearchRequestTruncatesToTheFirmwareCap() throws {
+        let msg = try XCTUnwrap(OutboundMessage.locatorSearch(channels: Array(0..<40)))
+        let body = Array(msg.dropFirst(WireProtocol.headerSize))
+        XCTAssertEqual(UInt8(WireProtocol.searchMaxChannels), body[1])
+        XCTAssertEqual(WireProtocol.locatorSearchRequestPayloadSize, body.count)
     }
 
     // ── Addressed app→locator commands (ADR-0020) ───────────────────────────────

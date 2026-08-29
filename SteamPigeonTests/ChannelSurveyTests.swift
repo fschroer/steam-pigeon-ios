@@ -237,6 +237,67 @@ extension ChannelSurveyTests {
         XCTAssertFalse(value.isNaN)
         XCTAssertEqual(0, value)
     }
+    // MARK: - Decoding the 104-byte response (ADR-0029)
+
+    /// Build a `ChannelSurveyResponse` exactly as the receiver lays it out, so the
+    /// offsets are pinned against the firmware rather than against `parse`'s own idea of
+    /// them.
+    private func responseFrame(status: UInt8 = 0, home: UInt8 = 0,
+                               levels: [Int8],
+                               confirmedChannels: [UInt8],
+                               confirmedFrames: [UInt8],
+                               confirmedIds: [UInt32]) -> [UInt8] {
+        var f = [UInt8](repeating: 0,
+                        count: WireProtocol.headerSize + WireProtocol.channelSurveyPayloadSize)
+        f[0] = WireProtocol.systemId
+        f[1] = MsgType.channelSurvey.rawValue
+        f[6] = status
+        f[7] = UInt8(levels.count)
+        f[8] = home
+        for (i, l) in levels.enumerated() { f[9 + i] = UInt8(bitPattern: l) }
+        var o = 9 + WireProtocol.surveyChannelCount
+        f[o] = UInt8(confirmedChannels.count); o += 1
+        for (i, c) in confirmedChannels.enumerated() { f[o + i] = c }
+        o += WireProtocol.surveyConfirmCount
+        for (i, c) in confirmedFrames.enumerated() { f[o + i] = c }
+        o += WireProtocol.surveyConfirmCount
+        for (i, id) in confirmedIds.enumerated() {
+            for (b, byte) in OutboundMessage.u32le(id).enumerated() { f[o + i * 4 + b] = byte }
+        }
+        return f
+    }
+
+    /// The whole reason the message grew: a confirmed channel now names its occupant, so
+    /// "another locator is on 12" can become "your other rocket is on 12".
+    func testConfirmedLocatorIdsDecodeAgainstTheirOwnChannels() throws {
+        var levels = [Int8](repeating: -110, count: WireProtocol.surveyChannelCount)
+        levels[12] = -60
+        let f = responseFrame(home: 34, levels: levels,
+                              confirmedChannels: [12, 40],
+                              confirmedFrames: [3, 0],
+                              confirmedIds: [0x2222_2222, 0])
+        let r = try XCTUnwrap(ChannelSurvey.parse(f))
+        XCTAssertEqual(104, f.count)
+        XCTAssertEqual(0x2222_2222, r.confirmed.first { $0.channel == 12 }?.locatorId)
+        // A channel with nothing decoded on it carries no id — not a stale neighbour's.
+        XCTAssertEqual(0, r.confirmed.first { $0.channel == 40 }?.locatorId)
+    }
+
+    /// A receiver running firmware from before this field simply ends the frame early.
+    /// The ids come back empty and the rest of the sweep still reads — an out-of-range
+    /// index would trap in Swift where Android merely caught an exception.
+    func testAnOldShorterResponseStillDecodesWithoutIds() throws {
+        var levels = [Int8](repeating: -110, count: WireProtocol.surveyChannelCount)
+        levels[12] = -60
+        let full = responseFrame(home: 34, levels: levels,
+                                 confirmedChannels: [12], confirmedFrames: [3],
+                                 confirmedIds: [0x2222_2222])
+        let old = Array(full.prefix(84))          // the pre-ADR-0029 size
+        let r = try XCTUnwrap(ChannelSurvey.parse(old))
+        XCTAssertEqual(1, r.confirmed.count)
+        XCTAssertEqual(12, r.confirmed.first?.channel)
+        XCTAssertEqual(0, r.confirmed.first?.locatorId)
+    }
 }
 
 /// Putting the survey away.

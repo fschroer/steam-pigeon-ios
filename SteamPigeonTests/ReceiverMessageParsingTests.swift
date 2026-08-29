@@ -98,8 +98,9 @@ final class ReceiverMessageParsingTests: XCTestCase {
     //   73 confirmed_count u8 | 74 confirmed_channel u8[5] | 79 confirmed_frames u8[5]
 
     private func surveyFrame(status: UInt8 = 0, home: UInt8 = 3,
-                             levels: [Int8], confirmed: [UInt8], frames: [UInt8]) -> [UInt8] {
-        var f = blank(.channelSurvey, total: 84)
+                             levels: [Int8], confirmed: [UInt8], frames: [UInt8],
+                             ids: [UInt32] = []) -> [UInt8] {
+        var f = blank(.channelSurvey, total: 104)
         f[6] = status
         f[7] = UInt8(levels.count)
         f[8] = home
@@ -107,11 +108,19 @@ final class ReceiverMessageParsingTests: XCTestCase {
         f[73] = UInt8(confirmed.count)
         for (i, v) in confirmed.enumerated() { f[74 + i] = v }
         for (i, v) in frames.enumerated() { f[79 + i] = v }
+        // confirmed_locator_id[5] at 84, appended 2026-08-27 (ADR-0029).
+        for (i, id) in ids.enumerated() {
+            for (b, byte) in OutboundMessage.u32le(id).enumerated() { f[84 + i * 4 + b] = byte }
+        }
         return f
     }
 
-    func testChannelSurveyIsEightyFourBytesOnTheWire() {
-        XCTAssertEqual(84, WireProtocol.headerSize + WireProtocol.channelSurveyPayloadSize)
+    /// **104, was 84.** `confirmed_locator_id[5]` was appended on 2026-08-27, and this is
+    /// framed by exact length before its CRC is checked — so a client on the old number
+    /// desynchronises against new firmware, and one on the new number desynchronises
+    /// against old firmware. Both directions, and neither reads as a clean rejection.
+    func testChannelSurveyIsOneHundredAndFourBytesOnTheWire() {
+        XCTAssertEqual(104, WireProtocol.headerSize + WireProtocol.channelSurveyPayloadSize)
         XCTAssertEqual(64, WireProtocol.surveyChannelCount)
         XCTAssertEqual(5, WireProtocol.surveyConfirmCount)
     }

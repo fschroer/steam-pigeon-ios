@@ -2,6 +2,7 @@ import SwiftUI
 
 /// The app's non-map screens, mirroring Android's `NavDestination`.
 enum MenuDestination: String, Identifiable, CaseIterable {
+    case communication
     case appSettings
     case receiverSettings
     case locatorSettings
@@ -14,6 +15,7 @@ enum MenuDestination: String, Identifiable, CaseIterable {
     /// Android's exact labels.
     var title: String {
         switch self {
+        case .communication:    return "Communication"
         case .appSettings:      return "Application Settings"
         case .receiverSettings: return "Receiver Settings"
         case .locatorSettings:  return "Locator Settings"
@@ -26,6 +28,9 @@ enum MenuDestination: String, Identifiable, CaseIterable {
     /// The app's own glyphs, matching Android's drawer icons.
     var iconName: String {
         switch self {
+        // A transmitter with signal arcs — deliberately NOT `radio`, which is the
+        // receiver device. This entry is about the link.
+        case .communication:    return "broadcast"
         case .appSettings:      return "settings_applications"
         case .receiverSettings: return "radio"
         case .locatorSettings:  return "navigation"
@@ -43,25 +48,34 @@ enum MenuDestination: String, Identifiable, CaseIterable {
 /// reads backwards until you notice that testing a deployment channel is exactly
 /// what arming enables; and locator settings and flight profiles appear only while
 /// DISARMED, because the locator refuses configuration changes in any other state.
+///
+/// **The order changed with ADR-0029 and the show/hide conditions did not.**
+/// Communication is first because "where is my locator" is the question that brings
+/// someone to this menu, and Flight Profiles rose above Locator Settings because it is
+/// reached far more often. Deployment Test moved to the bottom: it is armed-only, so it
+/// never shares the list with the disarmed entries anyway, and putting the rarest and
+/// most consequential entry last keeps it out from under a thumb.
 enum MenuGating {
     static func destinations(linkReady: Bool,
                              locatorActive: Bool,
                              armed: Bool) -> [MenuDestination] {
-        var items: [MenuDestination] = [.appSettings]
+        var items: [MenuDestination] = []
+
+        if linkReady { items.append(.communication) }
+
+        if locatorActive && !armed {
+            items.append(.flightProfiles)
+            items.append(.locatorSettings)
+        }
 
         if linkReady { items.append(.receiverSettings) }
 
-        if locatorActive && !armed {
-            items.append(.locatorSettings)
-            items.append(.flightProfiles)
-        }
+        items.append(.appSettings)
+        items.append(.downloadMap)
+
         if locatorActive && armed {
             items.append(.deploymentTest)
         }
-
-        // Last on purpose: site prep is done at home on Wi-Fi, not reached for at the
-        // pad, so it sits below the entries that track what is connected and armed.
-        items.append(.downloadMap)
         return items
     }
 }

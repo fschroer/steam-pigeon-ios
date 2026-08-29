@@ -20,6 +20,15 @@ final class MenuGatingTests: XCTestCase {
                        menu(linkReady: false, locatorActive: false))
     }
 
+    /// Communication needs the receiver, not a locator — it is the screen you open
+    /// BECAUSE no locator is being heard, so gating it on one would hide it in the only
+    /// state it is for.
+    func testCommunicationNeedsTheLinkAndNotALocator() {
+        XCTAssertFalse(menu(linkReady: false, locatorActive: false).contains(.communication))
+        XCTAssertTrue(menu(linkReady: true, locatorActive: false).contains(.communication))
+        XCTAssertEqual(.communication, menu(linkReady: true, locatorActive: false).first)
+    }
+
     func testReceiverSettingsNeedTheLink() {
         XCTAssertFalse(menu(linkReady: false, locatorActive: false).contains(.receiverSettings))
         XCTAssertTrue(menu(linkReady: true, locatorActive: false).contains(.receiverSettings))
@@ -55,29 +64,37 @@ final class MenuGatingTests: XCTestCase {
         }
     }
 
-    /// Map download is LAST on purpose — site prep is done at home, not reached for
-    /// at the pad, so it sits below the entries tracking what is connected now.
-    func testMapDownloadIsAlwaysLast() {
+    /// Application Settings and Download maps are always offered, whatever is connected:
+    /// neither needs hardware, and map download is done at home precisely when nothing
+    /// is.
+    func testSettingsAndMapDownloadAreAlwaysOffered() {
         for ready in [true, false] {
             for active in [true, false] {
                 for armed in [true, false] {
                     let items = MenuGating.destinations(linkReady: ready,
                                                         locatorActive: active, armed: armed)
-                    XCTAssertEqual(.downloadMap, items.last)
-                    XCTAssertEqual(.appSettings, items.first)
+                    XCTAssertTrue(items.contains(.appSettings))
+                    XCTAssertTrue(items.contains(.downloadMap))
                 }
             }
         }
     }
 
+    /// Android's order after ADR-0029: Communication, Flight Profiles, Locator Settings,
+    /// Receiver Settings, Application Settings, Download maps, Deployment Test.
+    /// **Flight Profiles above Locator Settings**, which is the pair that swapped.
     func testFullyConnectedDisarmedOrderMatchesAndroid() {
-        XCTAssertEqual([.appSettings, .receiverSettings, .locatorSettings,
-                        .flightProfiles, .downloadMap],
+        XCTAssertEqual([.communication, .flightProfiles, .locatorSettings,
+                        .receiverSettings, .appSettings, .downloadMap],
                        menu(linkReady: true, locatorActive: true, armed: false))
     }
 
+    /// Deployment Test is last, not third: it is armed-only, so it never shares the list
+    /// with the disarmed entries, and the rarest and most consequential entry sits
+    /// furthest from a thumb.
     func testFullyConnectedArmedOrderMatchesAndroid() {
-        XCTAssertEqual([.appSettings, .receiverSettings, .deploymentTest, .downloadMap],
+        XCTAssertEqual([.communication, .receiverSettings, .appSettings,
+                        .downloadMap, .deploymentTest],
                        menu(linkReady: true, locatorActive: true, armed: true))
     }
 }

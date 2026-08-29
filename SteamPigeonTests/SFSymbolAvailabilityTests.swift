@@ -13,8 +13,13 @@ import UIKit
 ///    nothing and says nothing. Caught here.
 /// 2. **A symbol that exists but was added after iOS 16.0**, the deployment target. It
 ///    renders on any simulator this Mac can run (only iOS 26.5 runtimes are installed)
-///    and is a blank box on the 16.7 phone the app is flown with. **A test cannot
-///    catch that here** — the simulator is too new to disagree.
+///    and is a blank box on any phone older than the symbol. **A test cannot catch that
+///    here** — the simulator is too new to disagree.
+///
+///    The app is flown across **multiple iOS versions**, so the floor is what governs:
+///    a symbol added after 16.0 is fine on the newer phones and blank on the oldest, and
+///    the newer ones cannot vouch for it. Check every name against the availability data
+///    below rather than against whichever device is in hand.
 ///
 /// So the iOS-16 floor was checked against the system's own availability data instead,
 /// on 2026-08-20, and every name below came back iOS 13.0–15.0. Re-run when changing a
@@ -41,6 +46,8 @@ final class SFSymbolAvailabilityTests: XCTestCase {
         "line.3.horizontal":                 "13.0",   // Android Menu
         "stethoscope":                       "14.0",   // no Android counterpart
         "trash":                             "13.0",   // Android Icons.Filled.Delete
+        "info.circle":                       "13.0",   // Android Icons.Default.Info
+        "chevron.down":                      "13.0",   // Android ExposedDropdownMenu chevron
     ]
 
     func testEverySymbolResolves() {

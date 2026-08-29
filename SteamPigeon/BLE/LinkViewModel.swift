@@ -127,7 +127,7 @@ final class LinkViewModel: ObservableObject {
     @Published var challenge: LocatorChallenge?
 
     private var policy = ChallengePolicy()
-    private var store = KnownLocatorStore()
+    private var store: KnownLocatorStore
     /// The most recent frame from the challenged locator, kept fresh while the dialog
     /// is open so the password is checked against current bytes rather than a stale
     /// frame whose fields have since moved on.
@@ -378,6 +378,279 @@ final class LinkViewModel: ObservableObject {
     /// Guards the timeout against a later sweep — without it, an old timer could fail a
     /// survey that has since been restarted and answered.
     private var surveyToken: UInt64 = 0
+
+    // MARK: - Locator search (ADR-0029)
+
+    /// The run in progress or just finished; nil means none this session.
+    @Published private(set) var locatorSearch: LocatorSearch.Run?
+
+    /// Android's `SEARCH_SILENCE_TIMEOUT_MS`.
+    ///
+    /// A **silence** timeout, not a run-length one. A whole-band run is ~77 s — far
+    /// longer than any fixed timeout that would still catch a receiver going quiet — but
+    /// it reports every ~1.2 s, so silence between messages is the thing worth watching.
+    private static let searchSilenceTimeout: TimeInterval = 8
+
+    private var searchTimeoutTask: Task<Void, Never>?
+
+    /// Channels worth trying for `targetLocatorId`, or for anything at all when it is nil.
+    ///
+    /// Exposed so the UI can say what it is about to do before it does it — a search is
+    /// seconds of deafness per channel, and "I am going to try 4, 12 and 0" is a very
+    /// different proposition from an unexplained progress bar.
+    func searchCandidates(targetLocatorId: UInt32? = nil) -> [Int] {
+        LocatorSearch.candidates(
+            currentChannel: remoteReceiverConfig.channel,
+            targetChannel: targetLocatorId.flatMap { store.lastChannel(for: $0) },
+            // Every other locator this receiver has been tuned to. A receiver shared
+            // across several rockets has been on each of their channels at some point,
+            // and that history is the whole reason the short list usually wins.
+            //
+            // Sorted by id so the order is stable across launches: `channelsById` is a
+            // dictionary, and an order that reshuffles would change which candidates
+            // survive the 16-channel cap from one run to the next.
+            knownChannels: store.channelsById
+                .filter { $0.key != targetLocatorId }
+                .sorted { $0.key < $1.key }
+                .map(\.value),
+            // A channel a move was staged to but never confirmed: the locator may have
+            // taken it while the receiver did not. Falling back to the channel a
+            // receiver-only change just left, while that change is still unresolved —
+            // nothing has been heard on the new one, so where we came from is the next
+            // best guess.
+            attemptedChannel: pendingChannelMove
+                ?? (awaitingChannelRecognition ? channelChangePreviousChannel : nil))
+    }
+
+    /// The name remembered for a locator, or nil if none is.
+    ///
+    /// Read wherever an id has to be turned into something a user can act on — an
+    /// occupied channel, a search hit for an armed locator that carried no name.
+    func storedLabel(for locatorId: UInt32) -> String? { store.label(for: locatorId) }
+
+    /// Every locator the app knows anything about, for the search's target picker.
+    /// Named where a name is held, hex where only an id is.
+    var knownLocatorLabels: [(id: UInt32, label: String)] {
+        store.knownIds
+            .sorted()
+            .map { (id: $0, label: store.label(for: $0) ?? String(format: "%08X", $0)) }
+    }
+
+    /// Start a search over `channels`, or over the whole band when it is empty.
+    ///
+    /// `targetLocatorId` stops the run on the first frame from that locator; 0 makes it a
+    /// census of everything on the listed channels. The receiver enforces its own
+    /// refusals (armed, in flight, radio busy) — this only avoids sending a request we
+    /// already know will be rejected.
+    func startLocatorSearch(channels: [Int], targetLocatorId: UInt32 = 0) {
+        guard locatorSearch?.running != true else { return }
+        let wholeBand = channels.isEmpty
+
+        guard state == .ready,
+              let msg = OutboundMessage.locatorSearch(channels: channels,
+                                                      targetLocatorId: targetLocatorId) else {
+            locatorSearch = LocatorSearch.Run(running: false, status: .unknown,
+                                              wholeBand: wholeBand)
+            return
+        }
+        transport.send(msg)
+        locatorSearch = LocatorSearch.Run(
+            running: true,
+            total: wholeBand ? WireProtocol.surveyChannelCount : channels.count,
+            wholeBand: wholeBand,
+            targetLocatorId: targetLocatorId)
+        armSearchTimeout()
+    }
+
+    /// Ask the receiver to stop. It answers with a `Cancelled` terminator, so the UI
+    /// settles through the same path as a normal ending rather than a local guess.
+    func cancelLocatorSearch() {
+        guard locatorSearch?.running == true else { return }
+        guard let msg = OutboundMessage.cancelLocatorSearch() else {
+            // The request did not even go out, so no terminator is coming.
+            searchTimeoutTask?.cancel()
+            locatorSearch?.running = false
+            locatorSearch?.status = .cancelled
+            return
+        }
+        transport.send(msg)
+    }
+
+    func clearLocatorSearch() {
+        searchTimeoutTask?.cancel()
+        locatorSearch = nil
+    }
+
+    /// Seam for the tests: a real run only arrives from a receiver.
+    func setLocatorSearchForTesting(_ run: LocatorSearch.Run?) { locatorSearch = run }
+
+    /// Drop what the previous visit left on the Communication screen — **except** a scan
+    /// that is still running.
+    ///
+    /// Both halves were learned the hard way on Android. Keeping the results meant
+    /// re-entering the screen showed a run from minutes ago as current, and offered the
+    /// whole-band sweep on the strength of it; and a stale refusal ("the locator is
+    /// armed") sat there after the locator had been disarmed, describing a state that had
+    /// since gone away.
+    ///
+    /// Clearing unconditionally was worse. `onLocatorSearchResult` drops every message
+    /// that arrives while the run is nil, so wiping a run in flight orphaned it: the
+    /// receiver went on sweeping — deaf, for up to 77 s — while the app ignored the
+    /// stream and the terminator alike, and the search simply appeared to die on leaving
+    /// the screen. Anything still running is therefore left exactly as it is.
+    func clearScansForNewVisit() {
+        if locatorSearch?.running != true { clearLocatorSearch() }
+        if !surveyInProgress { clearChannelSurvey() }
+    }
+
+    /// Restarted by every streamed message rather than running one timer for the whole
+    /// sweep — see `searchSilenceTimeout`.
+    private func armSearchTimeout() {
+        searchTimeoutTask?.cancel()
+        searchTimeoutTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(Self.searchSilenceTimeout))
+            guard !Task.isCancelled, locatorSearch?.running == true else { return }
+            locatorSearch?.running = false
+            locatorSearch?.status = .unknown
+        }
+    }
+
+    /// Fold one streamed result into the run.
+    ///
+    /// A message arriving while `locatorSearch` is nil is dropped — this app did not
+    /// start that run, or has been told to forget it.
+    private func onLocatorSearchResult(_ msg: LocatorSearchResult) {
+        guard var run = locatorSearch else { return }
+
+        if msg.status == .progress {
+            armSearchTimeout()
+            run.searched = msg.searched
+            // Trust the receiver's denominator over the app's: the firmware dedupes and
+            // range-checks the list, so it may search fewer channels than were asked for.
+            if msg.total > 0 { run.total = msg.total }
+            if msg.found {
+                run.hits.append(LocatorSearch.Hit(channel: msg.channel,
+                                                  locatorId: msg.locatorId,
+                                                  deviceName: msg.deviceName,
+                                                  rssi: msg.rssi,
+                                                  snr: msg.snr,
+                                                  armed: msg.armed))
+            }
+            locatorSearch = run
+            return
+        }
+
+        // Terminator: the run is over however it ended.
+        searchTimeoutTask?.cancel()
+        run.running = false
+        run.status = msg.status
+        locatorSearch = run
+    }
+
+    /// Point the receiver at `channel` now.
+    ///
+    /// The single apply path for a receiver-only channel change: the search's Connect,
+    /// the survey's pick when no locator is connected, and the manual field's Update all
+    /// land here. On Android they were three call sites doing the same four steps, which
+    /// is how one of them came to *stage* the change and leave the user hunting for an
+    /// Update button in another section to finish a decision they had already made by
+    /// choosing a channel from a list.
+    ///
+    /// **The message is built from the last read-back**, changing only the channel. The
+    /// receiver's name rides in this same message and is edited on Receiver Settings, so
+    /// sending a locally-staged copy of the whole struct would let this screen quietly
+    /// revert a rename made over there.
+    ///
+    /// A no-op when the receiver is already there, so a button press cannot start a
+    /// confirm cycle that has nothing to confirm.
+    /// - Returns: whether the change was actually started. **Callers must not stage the
+    ///   channel on a `false`**: the field would then show a channel the app never went
+    ///   to, and light an Update button offering to apply it.
+    @discardableResult
+    func pointReceiverAtChannel(_ channel: Int) -> Bool {
+        guard channel != remoteReceiverConfig.channel,
+              receiverConfigMessageState == .idle else { return false }
+        // **Armed BEFORE the change goes out**, so the first broadcast to arrive on the
+        // new channel is recognised, challenged, or reverted. That is what makes
+        // applying a pick immediately safe rather than reckless — see
+        // `beginChannelChangeRecognition`.
+        beginChannelChangeRecognition(previousChannel: remoteReceiverConfig.channel)
+        var target = remoteReceiverConfig
+        target.channel = channel
+        changeReceiverConfig(target)
+        return true
+    }
+
+    // MARK: - Channel-change recognition (ADR-0011)
+
+    /// True from a deliberate receiver-only channel change until the first broadcast on
+    /// the new channel resolves it, one way or another.
+    private var awaitingChannelRecognition = false
+    /// Where the receiver was, so a cancelled challenge can put it back.
+    private var channelChangePreviousChannel = 0
+
+    /// Arm the channel-change flow: the next `PreLaunchData` on the new channel decides
+    /// recognition, or raises a password challenge whose cancel reverts to
+    /// `previousChannel`.
+    ///
+    /// **Releases the connection outright**, and that half is not optional. The point of
+    /// the change is to go somewhere else, so the first authorized locator heard on the
+    /// new channel should claim the slot without waiting out `connectionHold`. Leaving
+    /// the old holder in place is what produced the reported failure: the receiver moved
+    /// correctly, the old locator went off-channel and silent, and the new one was
+    /// refused — as `conflict` for fifteen seconds if it was authorized, and **for ever**
+    /// if it was not, because `ChallengePolicy`'s passive trigger only prompts while
+    /// nothing is connected. The screen showed no locator at all and every search row
+    /// read Connect, which looked like the receiver having been sent to a wrong channel.
+    ///
+    /// Measurements of the OLD channel say nothing about the new one, so they are
+    /// dropped rather than allowed to age out gracefully — they are wrong immediately.
+    func beginChannelChangeRecognition(previousChannel: Int) {
+        channelChangePreviousChannel = previousChannel
+        awaitingChannelRecognition = true
+
+        gate.disconnect()
+        connectedLocatorId = nil
+        // **The config describes the locator we just let go of.** Reported from the
+        // phone 2026-08-29: the Communication screen's Locator channel field read 34
+        // while the receiver read 48, and both were real locators on those channels —
+        // the field was describing a device the app had already released, on the one
+        // screen whose whole job is "which channel am I talking to". It only corrects
+        // itself when a `PreLaunchData` from the NEW locator is admitted, so if that
+        // locator is never admitted it never corrects at all.
+        //
+        // `clearLiveReadouts` already does this when the link drops, for the same
+        // reason; releasing a connection deliberately is no different.
+        remoteLocatorConfig = LocatorConfig()
+        // Any prompt still up belongs to the channel we are leaving. Android clears it
+        // here too; without this a challenge raised on the old channel could be answered
+        // against a locator that is no longer reachable, storing a password for a frame
+        // from somewhere the receiver has already left.
+        challenge = nil
+        challengeFrame = nil
+        conflictLocatorId = nil
+        lastConflictFrame = nil
+        conflictingLocatorIds.removeAll()
+        unauthorizedLocatorIds.removeAll()
+        lastForeignBroadcast = nil
+
+        quietestFloor = LinkQuality.noiseFloorUnknown
+        quietestPolledFloor = LinkQuality.noiseFloorUnknown
+        liveNoiseFloor = LinkQuality.noiseFloorUnknown
+        lastPacketMeasurement = nil
+        lastFloorMeasurement = nil
+        floorFromPoll = false
+        linkVerdict = .normal
+    }
+
+    /// Nothing arrived after a channel change — stop waiting.
+    ///
+    /// Android defines this and never calls it; here it is the seam the tests use, and
+    /// the hook a future "nothing found on the new channel" prompt would hang off.
+    func channelChangeRecognitionTimedOut() { awaitingChannelRecognition = false }
+
+    /// Seam for the tests.
+    var isAwaitingChannelRecognition: Bool { awaitingChannelRecognition }
 
     /// Ask the receiver to describe itself. Used on entering Receiver Settings and to
     /// solicit confirmation after a change — `PreLaunchData` may stop arriving entirely
@@ -1175,6 +1448,7 @@ final class LinkViewModel: ObservableObject {
         conflictingLocatorIds.removeAll()
         unauthorizedLocatorIds.removeAll()
         linkVerdict = .normal
+        awaitingChannelRecognition = false
         quietestFloor = LinkQuality.noiseFloorUnknown
         lastLocatorMessage = nil
         gate.disconnect()
@@ -1190,6 +1464,20 @@ final class LinkViewModel: ObservableObject {
     var isLocatorFresh: Bool {
         guard let last = lastLocatorMessage else { return false }
         return Date().timeIntervalSince(last) < RocketMarkerState.messageTimeout
+    }
+
+    /// Whether a locator's broadcasts are actually arriving, on the same 5 s rule the
+    /// channel watchdog uses for "the locator has gone quiet".
+    ///
+    /// **Deliberately not `isLocatorFresh`**, which is the 2 s freshness the map applies
+    /// to a *reading*. This decides whether a whole section of the Communication screen
+    /// is on screen, and at 1 Hz a single dropped broadcast would blink it.
+    ///
+    /// Takes `now` because silence has no event: nothing arrives to trigger a redraw when
+    /// the locator stops, so the caller re-evaluates this on a tick.
+    func isHearingLocator(now: Date = Date()) -> Bool {
+        guard let last = lastLocatorMessage else { return false }
+        return now.timeIntervalSince(last) < Self.channelWatchSilence
     }
 
     var markerState: RocketMarkerState {
@@ -1219,7 +1507,14 @@ final class LinkViewModel: ObservableObject {
     private let transport = BluetoothTransport()
     private let started = Date()
 
-    init() {
+    /// - Parameter defaults: where remembered locators live. Injectable **for the tests
+    ///   only**: `UserDefaults.standard` persists across simulator runs, so a test that
+    ///   needs an *unauthorized* locator otherwise depends on what an earlier test — or
+    ///   an earlier run of the whole suite — happened to store. That is a defect the
+    ///   suite can hide rather than report, since the polluted case is the one where the
+    ///   locator authenticates and everything looks fine.
+    init(defaults: UserDefaults = .standard) {
+        store = KnownLocatorStore(defaults: defaults)
         for (id, key) in store.keysById { gate.remember(locatorId: id, passwordKey: key) }
         // A track survives the app being killed, as Android's does. The recorder's own
         // flags deliberately do NOT: `flightStateObserved` starts false so the first
@@ -1347,7 +1642,7 @@ final class LinkViewModel: ObservableObject {
                 lastPrelaunchLocatorId = m.locatorId
                 lastPrelaunchDeviceName = m.deviceName
                 if admit(frame, m.locatorId, WireProtocol.prelaunchBaseStructSize,
-                         deviceName: m.deviceName) {
+                         deviceName: m.deviceName, receiverChannel: Int(m.channel)) {
                     prelaunch = m
                     latestBroadcast = .preLaunch
                     lastPreLaunchMessage = Date()
@@ -1412,6 +1707,8 @@ final class LinkViewModel: ObservableObject {
                 channelSurvey = r
                 surveyInProgress = false
             }
+        case .locatorSearchResult:
+            if let r = LocatorSearchResult.parse(frame) { onLocatorSearchResult(r) }
 
         case .deploymentTest:
             // Adopted only while a test is believed live, exactly as Android gates it:
@@ -1474,11 +1771,22 @@ final class LinkViewModel: ObservableObject {
     /// close range even from locators on other channels — off-channel capture is
     /// expected physics that no firmware change can fix, which is precisely why the
     /// identity gate rather than the radio has to keep the wrong rocket off screen.
+    ///
+    /// - Parameter receiverChannel: the channel carried by **this frame**, where the
+    ///   message has one. `PreLaunchData` does; `TelemetryData` has no room for it and
+    ///   passes nil, which falls back to the app's cached receiver config. Using the
+    ///   frame's own value where it exists matters: the cache lags by one broadcast, and
+    ///   is wrong exactly when a locator broadcasts once and goes quiet — which is the
+    ///   case the search is for.
     private func admit(_ frame: [UInt8], _ locatorId: UInt32, _ baseSize: Int,
-                       deviceName: String? = nil) -> Bool {
+                       deviceName: String? = nil, receiverChannel: Int? = nil) -> Bool {
         switch gate.evaluate(frame: frame, locatorId: locatorId, baseSize: baseSize) {
         case .accepted(let id):
+            // The channel change resolved itself: something we are entitled to display
+            // is on the new channel, so there is nothing left to revert.
+            awaitingChannelRecognition = false
             noteName(id, deviceName)
+            noteChannel(id, receiverChannel)
             connectedLocatorId = id
             lastLocatorMessage = Date()
             conflictingLocatorIds.remove(id)
@@ -1490,17 +1798,69 @@ final class LinkViewModel: ObservableObject {
             // A different AUTHORIZED locator, heard while ours is still live. Warn, but
             // leave the connection where it is — switching is the user's call.
             noteName(id, deviceName)
+            noteChannel(id, receiverChannel)
             conflictingLocatorIds.insert(id)
             lastForeignBroadcast = Date()
             noteConflict(id)
             return false
         case .unauthorized(let id):
             unauthorizedLocatorIds.insert(id)
+            // Keep the challenge frame current while its dialog is open.
+            if challenge?.locatorId == id { challengeFrame = frame }
+
+            // A deliberate channel change landed on a locator we do not hold the
+            // password for. **Challenge it, and do not raise the conflict banner** —
+            // the user went here on purpose, so "somebody else is on your channel" is
+            // not the right thing to say about the channel they just chose. Cancelling
+            // reverts, which is the only way back: nothing else on this channel is
+            // displayable, so a dismissed prompt would leave a blank screen.
+            //
+            // The trigger matters. `.passive` refuses to prompt while anything is
+            // connected and stays silent for a locator declined before, both of which
+            // are wrong here; `.channelChange` asks regardless.
+            if awaitingChannelRecognition,
+               policy.shouldChallenge(locatorId: id,
+                                      hasDeviceName: deviceName != nil,
+                                      connected: connectedLocatorId,
+                                      challengeOpen: challenge != nil,
+                                      trigger: .channelChange) {
+                awaitingChannelRecognition = false
+                challengeFrame = frame
+                challenge = LocatorChallenge(locatorId: id, deviceName: deviceName ?? "",
+                                             previousChannel: channelChangePreviousChannel)
+                return false
+            }
+
+            // **The locator we believe we are connected to has stopped
+            // authenticating** — its password was changed on the device. Reported from
+            // the phone 2026-08-29 and reproduced: the app admitted nothing further,
+            // could not prompt (the passive trigger refuses while anything is
+            // connected), and showed the conflict banner calling this very locator
+            // "another locator" over a panel reading "No Locator". There was no way out
+            // short of dropping the BLE link.
+            //
+            // The connection is RELEASED first, because it is a stale belief rather
+            // than a live connection to protect: the evidence it rested on is this
+            // locator's own authenticated broadcasts, and those have stopped verifying.
+            // Releasing it is also what lets the prompt through, and what stops the
+            // banner describing the holder as somebody else.
+            if id == connectedLocatorId {
+                gate.disconnect()
+                connectedLocatorId = nil
+                if policy.shouldChallenge(locatorId: id,
+                                          hasDeviceName: deviceName != nil,
+                                          connected: nil,
+                                          challengeOpen: challenge != nil,
+                                          trigger: .credentialsChanged) {
+                    challengeFrame = frame
+                    challenge = LocatorChallenge(locatorId: id, deviceName: deviceName ?? "")
+                }
+                return false
+            }
+
             // Never disturbs a standing connection: an armed stranger on the channel
             // must not knock out the locator we are connected to.
             noteConflict(id)
-            // Keep the challenge frame current while its dialog is open.
-            if challenge?.locatorId == id { challengeFrame = frame }
             if policy.shouldChallenge(locatorId: id,
                                       hasDeviceName: deviceName != nil,
                                       connected: connectedLocatorId,
@@ -1534,6 +1894,22 @@ final class LinkViewModel: ObservableObject {
     private func noteName(_ locatorId: UInt32, _ deviceName: String?) {
         guard let deviceName else { return }
         store.noteName(locatorId: locatorId, name: deviceName)
+    }
+
+    /// Remember where an **authorized** locator was just heard, for the search to start
+    /// from (ADR-0029).
+    ///
+    /// Called from the same two branches as `noteName`, and for the same reason: Android
+    /// writes both before its `mayConnect` check, so a second authorized locator heard
+    /// while ours holds the link is still remembered — which is precisely the two-rocket
+    /// case the candidate list exists to exploit.
+    ///
+    /// **Not called on `.unauthorized`.** That is somebody else's rocket, and seeding
+    /// your search with their channel would spend a full broadcast period looking
+    /// somewhere you have no reason to look.
+    private func noteChannel(_ locatorId: UInt32, _ receiverChannel: Int?) {
+        store.noteChannel(locatorId: locatorId,
+                          channel: receiverChannel ?? remoteReceiverConfig.channel)
     }
 
     /// Name an accepted locator from what was stored when it was authorized.
@@ -1577,14 +1953,43 @@ final class LinkViewModel: ObservableObject {
         gate.remember(locatorId: c.locatorId, passwordKey: key)
         policy.reconsider(c.locatorId)
         unauthorizedLocatorIds.remove(c.locatorId)
+        // **Take the connection now**, as Android's `submitPassword` does, rather than
+        // leaving it to the next broadcast. Waiting works only when the slot is free:
+        // with a previous holder still inside `connectionHold` the very next frame comes
+        // back as `conflict`, so a correct password bought fifteen seconds of a blank
+        // screen. The frame that raised this dialog is one this locator authenticated,
+        // which is the same evidence the arriving-packet path would have used.
+        gate.connect(to: c.locatorId)
+        connectedLocatorId = c.locatorId
+        conflictLocatorId = nil
+        conflictingLocatorIds.remove(c.locatorId)
+        awaitingChannelRecognition = false
         challenge = nil
         challengeFrame = nil
         return true
     }
 
-    /// Dismiss without connecting. Remembered so it is not re-asked every broadcast.
+    /// Dismiss without connecting.
+    ///
+    /// **A channel-change challenge reverts the receiver**; a passive one is remembered
+    /// as declined. The two are different situations: a passive prompt is about a
+    /// stranger on the channel we were already using, and dismissing it leaves everything
+    /// as it was — but a channel-change prompt is the only thing standing between the
+    /// user and a screen with nothing on it, because the locator they left is off-channel
+    /// and the one they found is not displayable. Cancel has to mean "put it back".
+    ///
+    /// Not remembered as declined in that case, deliberately: the user declined a
+    /// *channel*, not a locator, and re-declining is free the next time they go there.
     func declineChallenge() {
-        if let c = challenge { policy.decline(c.locatorId) }
+        guard let c = challenge else { return }
+        if let previous = c.previousChannel {
+            awaitingChannelRecognition = false
+            var target = remoteReceiverConfig
+            target.channel = previous
+            changeReceiverConfig(target)
+        } else {
+            policy.decline(c.locatorId)
+        }
         challenge = nil
         challengeFrame = nil
     }

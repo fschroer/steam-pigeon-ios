@@ -23,6 +23,10 @@ enum OutboundMessage {
         .receiverCfgChgRequest,
         .receiverInfoRequest,
         .channelSurveyRequest,
+        // Same reasoning as the survey, and more load-bearing: a search is started
+        // precisely when no locator is connected, so treating it as locator-directed
+        // would disable it in the only state it is for.
+        .locatorSearchRequest,
     ]
 
     /// Build a receiver-directed message.
@@ -57,6 +61,33 @@ enum OutboundMessage {
         out[4] = UInt8(truncatingIfNeeded: crc)
         out[5] = UInt8(truncatingIfNeeded: crc >> 8)
         return out
+    }
+
+    /// `LocatorSearchRequest`: search `channels`, or the whole band when it is empty.
+    ///
+    /// `targetLocatorId` stops the run on the first frame from that locator; **0 means a
+    /// census**, and that is the only thing that works for a borrowed locator the app has
+    /// never heard of — not a fallback.
+    ///
+    /// The payload is always the full 22 bytes the firmware reads, zero-filled past the
+    /// listed channels: the struct is fixed-size on the wire, and `channel_count` is what
+    /// says how much of it means anything.
+    static func locatorSearch(channels: [Int], targetLocatorId: UInt32 = 0) -> [UInt8]? {
+        var payload = [UInt8](repeating: 0, count: WireProtocol.locatorSearchRequestPayloadSize)
+        let listed = Array(channels.prefix(WireProtocol.searchMaxChannels))
+        payload[0] = 0                                   // flags
+        payload[1] = UInt8(clamping: listed.count)       // 0 = whole band
+        for (i, byte) in u32le(targetLocatorId).enumerated() { payload[2 + i] = byte }
+        for (i, channel) in listed.enumerated() { payload[6 + i] = UInt8(clamping: channel) }
+        return receiverDirected(.locatorSearchRequest, payload: payload)
+    }
+
+    /// Stop a search in progress. Answered with a `Cancelled` terminator **even when
+    /// nothing was running**, so the app never waits on silence to find out.
+    static func cancelLocatorSearch() -> [UInt8]? {
+        var payload = [UInt8](repeating: 0, count: WireProtocol.locatorSearchRequestPayloadSize)
+        payload[0] = WireProtocol.searchFlagCancel
+        return receiverDirected(.locatorSearchRequest, payload: payload)
     }
 
     static func u32le(_ v: UInt32) -> [UInt8] {

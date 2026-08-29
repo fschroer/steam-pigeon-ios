@@ -84,12 +84,22 @@ The **Android source to port from** is `../rocket-flight-manager` (Kotlin/Compos
 
 1. Protocol + auth layer in pure Swift, with `WireLayoutTests.swift` / `LocatorAuthTests`
    ported — **no hardware needed**, and it pins the third wire-format copy.
-2. CoreBluetooth transport (needs the iPhone; Simulator has no Bluetooth).
+2. CoreBluetooth transport (needs a phone; Simulator has no Bluetooth).
 3. SwiftUI UI.
 
 ## Housekeeping
 
-- Deployment target **iOS 16.0**.
+- Deployment target **iOS 16.0**, and the app is **flown across multiple iOS versions**
+  (16.7.16 and 18.6.2 at the time of writing, more expected). Two consequences worth
+  stating, because both have already cost a debugging round:
+  - **Branch on capability, not on a device in hand.** Version-conditional UI needs an
+    `#available` check with a working fallback — see `SectionHelp`, which gives 16.4+
+    Android's anchored popup card and 16.0–16.3 an alert. The fallback is the branch that
+    will almost never run, which is exactly the branch that rots unnoticed.
+  - **One fault can read differently on every version.** The sheet-presentation bug fixed
+    2026-08-29 was *suppressed* on the 26.5 simulator and *appeared-then-vanished* on
+    18.6.2. "It looked fine on my device" is not evidence about the others; say which
+    version an observation came from.
 - The map is MapLibre (same style JSON as Android); tile-provider licensing for release is
   an open blocker (issue #26) — applies to both platforms.
 - Never commit secret tokens; scan `git diff --cached` for `sk.`/`pk.`/`AIza`.

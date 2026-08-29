@@ -232,6 +232,12 @@ struct PacketFramer {
         case .receiverInfo:   return .known(WireProtocol.headerSize + WireProtocol.receiverInfoPayloadSize)
         case .versionInfo:    return .known(WireProtocol.headerSize + WireProtocol.versionInfoPayloadSize)
         case .channelSurvey:  return .known(WireProtocol.headerSize + WireProtocol.channelSurveyPayloadSize)
+        // Fixed length, and framed for the same reason `receiverInfo` is: it is the
+        // only way the app learns a run's progress, and an unframed one would be
+        // resynced past a byte at a time — surviving on the CRC gate, but dropping
+        // the message the whole search reports through.
+        case .locatorSearchResult:
+            return .known(WireProtocol.headerSize + WireProtocol.locatorSearchResultPayloadSize)
 
         case .flightData:
             // Variable-length. Compute the EXACT length from the packet header so the
@@ -251,7 +257,7 @@ struct PacketFramer {
         case .startup, .locatorCfgChgRequest, .receiverCfgChgRequest, .armRequest,
              .disarmRequest, .flightMetadataRequest, .flightDataRequest, .flightDataAck,
              .deploymentTestRequest, .receiverInfoRequest, .versionRequest,
-             .channelSurveyRequest, .padAlertSnoozeRequest:
+             .channelSurveyRequest, .padAlertSnoozeRequest, .locatorSearchRequest:
             return .unframeable
         }
     }

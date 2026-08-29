@@ -1,10 +1,110 @@
 # Resume here — iOS port
 
-Updated 2026-08-24. **518 tests passing**, clean build with no warnings from our own
+Updated 2026-08-29. **606 tests passing**, clean build with no warnings from our own
 sources.
 
-**Read this first: Android moved on 2026-08-21, and iOS has now caught up with all of
-it.** `git -C ../rocket-flight-manager log 39559b3..origin/main` lists seven commits;
+## 2026-08-29 (latest) — changed-password recovery, and two flight-map parity items
+
+- **A changed password no longer bricks the connection.** Reproduced first: the app went
+  permanently deaf to the locator, could not prompt, and showed a conflict banner calling
+  the connected locator "another locator". **Android still has this** — fixed on iOS first
+  as an authorised exception, since there was no way out inside the app. See
+  `UI_PARITY.md` → "Android notes".
+- **Distance row colour** now follows the locator's GPS health, and the **coordinate map
+  link** is gated on a position the app stands behind, with the underline present only
+  when the tap is offered — both Android's logic.
+- **The screen is held awake on the main screen**, scoped to "no sheet is up", which is
+  the same set of screens Android excludes via composable disposal.
+
+- **The released locator's configuration is cleared** when the connection is released, so
+  the Locator channel field stops describing a locator the app has let go of.
+
+**Android owes four fixes** made here first — changed-password recovery, the in-flight
+button gating and stage-on-success, clearing the released locator's config, and
+deterministic candidate ordering. The canonical list, with the Android file and line for
+each and the iOS fix beside it, is in `UI_PARITY.md` → "ANDROID OWES THESE". One further
+defect (`ChannelOccupancy` rendering `00000000`) is known on both and deliberately fixed
+on neither, pending an Android-first change.
+
+## Flight testing spans several iOS versions
+
+fschroer runs **16.7.16** and **18.6.2** today and expects more. Version-conditional UI
+must branch on **capability, not on a device in hand**, and a fallback branch that almost
+never runs is exactly the branch that rots — write it to be correct rather than pretty.
+`SectionHelp` is the worked example: `.popover` + `presentationCompactAdaptation` on
+16.4+, an alert below that.
+
+The same fault can also read three different ways by version. The sheet-presentation bug
+below was **suppressed** on the 26.5 simulator, **appeared-then-vanished** on 18.6.2, and
+is unverified on 16.7.16 — so "fine on my device" is not evidence about the others.
+
+## 2026-08-29 (later) — three more from the phone, and the app now has ONE sheet
+
+Connecting to an unauthenticated locator from a search result. Full write-up in
+`UI_PARITY.md`.
+
+1. **Connect buttons stayed live during a change**, and the view staged the channel
+   before checking whether the send was accepted — so the field showed a channel the app
+   never visited. `pointReceiverAtChannel` now reports whether it went out; picks are
+   disabled while a change is in flight. **Android has the same defect.**
+2. **The Locator channel section vanishing** with the prompt is correct and identical on
+   Android — the connection is released, and that section is a locator-directed command.
+   Left alone.
+3. **The password prompt could not be answered from the Communication screen.** "One sheet
+   per screen" was not enough: `RootView` presented the challenge while `MapScreen`, its
+   own child, presented the destination — an ancestor cannot present while a descendant
+   is. Reproduced on the simulator, then fixed by hoisting every presentation to
+   `RootView`. **There is now exactly one `.sheet` in the app**; a second one anywhere in
+   the hierarchy reintroduces this. The prompt also refuses swipe-dismissal, and a
+   dismissal no longer counts as a decline — it was reverting channels behind the user.
+
+## 2026-08-29 — the channel-change recognition cycle, reported from the phone
+
+After a whole-band search, connecting to a *different* locator left the app showing no
+locator at all — every search row read "Connect" and the Locator channel field kept the
+old value, which looked like the receiver having been sent to a wrong channel. It was on
+the right channel; the app was refusing to display what was on it, because
+`pointReceiverAtChannel` moved the receiver without releasing the connection.
+
+**Android was never affected** — its `pointReceiverAtChannel` calls
+`beginChannelChangeRecognition` first. That is now ported (ADR-0011), along with the
+`.channelChange` challenge trigger, the revert-on-cancel, and `submitPassword` taking the
+connection immediately instead of waiting out `connectionHold`. `ChannelChangeRecognitionTests`
+pins each reported symptom; full write-up in `UI_PARITY.md`.
+
+Also: `LinkViewModel.init` now takes an injectable `UserDefaults`, because tests that need
+an unauthorized locator were silently passing on state left by earlier runs.
+
+## 2026-08-28 — ADR-0029 ported: locator search, Communication screen, version stamp
+
+Against Android `b878c32..e9f93d7` (23 commits) and receiver `b9dece4..aa9edc6`, to the
+brief in `../steam-pigeon-locator/docs/ios-port-brief-locator-search.md`. Full audit,
+including two defects found in the Android implementation and one pre-existing iOS gap,
+in `UI_PARITY.md` → "Communication screen + locator search".
+
+- **Wire format, breaking.** `ChannelSurveyResponse` 84 → **104**; new
+  `LocatorSearchRequest` 28 and `LocatorSearchResult` **39** (not 38 — it grew an
+  `int8_t snr`). All three pinned in `WireLayoutTests.swift` with parts-sum cases.
+  `ChannelSurveyStatus.Cancelled` decoded as itself, never as `RefusedBusy`.
+- **Communication screen** owns both scans, both channel fields and the conflict banner.
+  Receiver Settings keeps name + firmware; Locator Settings is flight configuration only.
+  Both build the receiver message from the **last read-back**, changing only their own
+  field. Menu reordered, show/hide conditions unchanged. **Find my locator** added to the
+  status panel's action drawer.
+- **`last_channel`** in `KnownLocatorStore`, in its own defaults key, optional so
+  "never heard" ≠ "heard on channel 0".
+- **Version stamp** is a bundle resource written by `Scripts/GenVersion.sh` on every
+  build, never a compiled-in constant — verified on the built `.app`: zero stamps in the
+  binary, one in `GitVersion.txt`, and it changes on a rebuild with no source change.
+
+**Still owed: hardware.** No search frame has been exchanged with a receiver, and the
+2026-08-28 UI changes are unverified on both platforms. The four bench procedures in
+`../steam-pigeon-locator/docs/bench-locator-search.md` port as well as the code does and
+are the next thing to run.
+
+---
+
+**Android moved on 2026-08-21, and iOS caught up with all of it.** `git -C ../rocket-flight-manager log 39559b3..origin/main` lists seven commits;
 nothing on that list is still owed here:
 
 | Android | What it is | iOS |

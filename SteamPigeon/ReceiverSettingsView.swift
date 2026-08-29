@@ -1,51 +1,33 @@
 import SwiftUI
 
-/// Receiver Settings — name, LoRa channel, firmware version.
+/// Receiver Settings — firmware version and name.
 ///
-/// Mirrors Android's `ReceiverSettingsScreen`, minus the channel survey and the
-/// ADR-0011 channel-move flow, which are a following pass. What is here is the staged
-/// form and its Cancel/Update row.
+/// Mirrors Android's `ReceiverSettingsScreen`. **The channel, both scans and the
+/// ADR-0011 move flow moved to the Communication screen** (ADR-0029): the old grouping
+/// was by *device*, and "which channel am I listening on" is not a question about a
+/// device. What is left here is the receiver's identity.
 ///
-/// **Edits are STAGED, never live.** Typing a channel does not retune anything; the
-/// Update button sends, and the button then reports what the receiver said. That
-/// matters more than it looks: a config change that silently did nothing is
-/// indistinguishable from one that never arrived, which is the failure this screen
-/// exists to make visible.
+/// **Edits are STAGED, never live.** Typing a name does not rename anything; the Update
+/// button sends, and the button then reports what the receiver said. That matters more
+/// than it looks: a config change that silently did nothing is indistinguishable from one
+/// that never arrived, which is the failure this screen exists to make visible.
+///
+/// **The message is built from the last read-back, changing only this screen's field.**
+/// Name and channel ride in one message but are now edited on two screens, so sending a
+/// locally-staged copy of the whole struct would let a rename quietly revert a channel
+/// change made over there.
 struct ReceiverSettingsView: View {
     @ObservedObject var model: LinkViewModel
 
     /// The user's pending edit. Kept in step with the receiver until they touch it —
     /// after that it is theirs, and an arriving broadcast must not overwrite what they
     /// are halfway through typing.
-    @State private var staged = ReceiverConfig()
+    @State private var stagedName = ""
     @State private var edited = false
 
     /// Android formats the id as `%08X`, and it is worth matching exactly: this is the
     /// number a user reads out to someone else on the flight line.
     private static func hex(_ id: UInt32) -> String { String(format: "%08X", id) }
-
-    /// The ADR-0011 move cycle, reported as it happens.
-    ///
-    /// It can legitimately run for several seconds with the link DOWN — the locator
-    /// switches, the receiver follows, and a failed move is recovered by pulling the
-    /// receiver back and retrying once. Silence through all that reads as a hang, which
-    /// is why every state says something.
-    private func moveProgress(_ channel: Int) -> (text: String, isError: Bool)? {
-        switch model.locatorConfigMessageState {
-        case .sendRequested, .sent:
-            return ("Moving to channel \(channel)… the link drops briefly while both "
-                    + "devices switch.", false)
-        case .ackUpdated:
-            return ("Now on channel \(channel).", false)
-        case .sendFailure:
-            return ("Could not send the channel change. Check the receiver connection.", true)
-        case .notAcknowledged:
-            return ("The locator did not confirm channel \(channel). It has been left on "
-                    + "its previous channel.", true)
-        case .idle:
-            return nil
-        }
-    }
 
     var body: some View {
         // Scrolling column with the Update button pinned below, matching Android's
@@ -55,9 +37,12 @@ struct ReceiverSettingsView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     // Conflicting traffic (ADR-0006). Non-blocking on purpose: it is a
-                    // fact about the channel, not a modal decision, and the two actions
-                    // are the whole point — switch to it, or move to an uncontested
-                    // channel using the survey directly below.
+                    // fact about the channel, not a modal decision.
+                    //
+                    // **Also shown on the Communication screen**, where the two remedies
+                    // now live. It stays here because the banner is raised by a broadcast
+                    // arriving, not by a screen being open, and a user who is on this
+                    // screen when a stranger appears should still be told.
                     if let id = model.conflictLocatorId {
                         // Two different situations, and only one of them is a problem.
                         // Already connected to a DIFFERENT locator: genuine conflicting
@@ -80,42 +65,6 @@ struct ReceiverSettingsView: View {
                         Divider()
                     }
 
-                    ChannelSurveySection(
-                        survey: model.channelSurvey,
-                        inProgress: model.surveyInProgress,
-                        enabled: model.state == .ready,
-                        locatorConnected: model.connectedLocatorId != nil,
-                        onScan: { model.requestChannelSurvey() },
-                        // Two different actions behind one control, and the difference
-                        // is the point: with a locator connected this moves the WHOLE
-                        // system, because re-pointing the receiver alone would strand
-                        // the locator on the old channel (ADR-0011 invariant 1 vs 5).
-                        onPick: { channel in
-                            if model.connectedLocatorId != nil {
-                                model.moveLocatorToChannel(channel)
-                            } else {
-                                staged.channel = channel
-                                edited = true
-                            }
-                            // Either way the ranking is spent: it described the band
-                            // before the move. Android clears it on both branches.
-                            model.clearChannelSurvey()
-                        })
-
-                    if let channel = model.pendingChannelMove, let progress = moveProgress(channel) {
-                        HStack(alignment: .top) {
-                            Text(progress.text)
-                                .font(SPFont.labelSmall)
-                                .foregroundStyle(progress.isError ? SPColor.error
-                                                                  : SPColor.onSurfaceVariant)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                            Button("Dismiss") { model.clearPendingChannelMove() }
-                                .buttonStyle(.materialText)
-                        }
-                    }
-
-                    Divider().padding(.vertical, 4)
-
                     if let version = model.versionInfo, !version.receiverVersion.isEmpty {
                         Text("Firmware: \(version.receiverVersion)")
                             .font(SPFont.bodyMedium)
@@ -123,22 +72,12 @@ struct ReceiverSettingsView: View {
                     }
 
                     ConfigTextRow(title: "Receiver Name",
-                                  text: Binding(get: { staged.deviceName },
-                                                set: { staged.deviceName = $0; edited = true }),
+                                  text: Binding(get: { stagedName },
+                                                set: { stagedName = $0; edited = true }),
                                   enabled: model.receiverConfigMessageState == .idle)
 
-                    ConfigIntRow(title: "Locator Channel to Receive",
-                                 value: Binding(get: { staged.channel },
-                                                set: { staged.channel = $0; edited = true }),
-                                 range: ReceiverConfig.channelRange,
-                                 enabled: model.receiverConfigMessageState == .idle)
-
-                    // Android's own framing: this points the RECEIVER at a different
-                    // locator's channel. Changing a locator's own channel is Locator
-                    // Settings, where the receiver follows automatically.
-                    Text("Changes the channel this receiver listens on, to reach a locator "
-                         + "already using another channel. To move a connected locator, use "
-                         + "Locator Settings.")
+                    Text("The channel this receiver listens on is set on the Communication "
+                         + "screen, next to the scans that choose one.")
                         .font(SPFont.labelSmall)
                         .foregroundStyle(SPColor.onSurfaceVariant)
                 }
@@ -147,7 +86,9 @@ struct ReceiverSettingsView: View {
 
             Divider()
             Button(model.receiverConfigMessageState.buttonLabel) {
-                model.changeReceiverConfig(staged)
+                var target = model.remoteReceiverConfig
+                target.deviceName = stagedName
+                model.changeReceiverConfig(target)
                 edited = false
             }
             .buttonStyle(.materialFilled)
@@ -158,10 +99,10 @@ struct ReceiverSettingsView: View {
         .navigationTitle("Receiver Settings")
         .navigationBarTitleDisplayMode(.inline)
         .onChange(of: model.remoteReceiverConfig) { latest in
-            if !edited { staged = latest }
+            if !edited { stagedName = latest.deviceName }
         }
         .onAppear {
-            staged = model.remoteReceiverConfig
+            stagedName = model.remoteReceiverConfig.deviceName
             // If nothing has been heard recently, ask. A receiver with no locator on
             // its channel never volunteers anything, and that is precisely the state
             // someone opens this screen to get out of.
@@ -171,5 +112,4 @@ struct ReceiverSettingsView: View {
             model.resetConflictDismissals()
         }
     }
-
 }

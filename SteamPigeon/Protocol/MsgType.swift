@@ -87,4 +87,14 @@ enum MsgType: UInt8, CaseIterable {
     /// App→locator: suppress the prepped-and-disarmed alert for N minutes.
     /// Addressed — snoozing somebody else's rocket would be a safety hole.
     case padAlertSnoozeRequest = 22
+
+    /// App→receiver: listen for locators on named channels (ADR-0029). No locator
+    /// involved; the locator firmware reserves the value and implements nothing.
+    case locatorSearchRequest = 23
+    /// Receiver→app: one result per channel searched, plus a terminator.
+    ///
+    /// **Streamed**, unlike the survey's single response: a whole-band run is ~77 s,
+    /// and one answer at the end would leave the app with a dead progress bar and no
+    /// way to show a hit the moment it happens.
+    case locatorSearchResult = 24
 }

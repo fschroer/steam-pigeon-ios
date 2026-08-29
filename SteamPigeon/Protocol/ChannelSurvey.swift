@@ -21,13 +21,18 @@ enum ChannelSurvey {
     /// receiver said the sweep succeeded, and a value this build cannot interpret must
     /// not present as a good reading.
     enum Status: Equatable {
-        case ok, refusedArmed, refusedBusy, unknown
+        case ok, refusedArmed, refusedBusy, cancelled, unknown
 
         static func from(_ v: UInt8) -> Status {
             switch v {
             case 0:  return .ok
             case 1:  return .refusedArmed      // locator armed — sweeping would drop telemetry
             case 2:  return .refusedBusy       // flight-data transfer in progress
+            // Given up so a queued app→locator command could go out. **Its own value,
+            // never folded into `refusedBusy`**: that one is worded as "a flight data
+            // transfer is in progress", which would be a plain lie about what just
+            // happened. One more value in a byte that already existed — no size change.
+            case 3:  return .cancelled
             default: return .unknown
             }
         }
@@ -61,6 +66,16 @@ enum ChannelSurvey {
         let channel: Int
         let level: Int
         var frames: Int = 0
+        /// Who sent the FIRST frame decoded here, as the frame **claimed** — the
+        /// locator broadcasts its id in the clear and the receiver never inspects the
+        /// auth tag. Diagnostic only: it labels an occupied channel, and nothing is
+        /// ever gated on it.
+        ///
+        /// 0 when nothing decoded, or when the frame carried no id — only
+        /// `PreLaunchData` and `TelemetryData` carry one, so any other decoded frame
+        /// still counts in `frames` and leaves this 0: "occupied by something that
+        /// would not say who".
+        var locatorId: UInt32 = 0
 
         /// A decoded frame had to be transmitted on this exact channel — off-channel
         /// bleed does not survive the demodulator. So this is occupancy as fact rather
@@ -151,7 +166,8 @@ enum ChannelSurvey {
                         levels: [Int],
                         homeChannel: Int,
                         confirmedChannels: [Int] = [],
-                        confirmedFrames: [Int] = []) -> Result {
+                        confirmedFrames: [Int] = [],
+                        confirmedLocatorIds: [UInt32] = []) -> Result {
         guard status == .ok, !levels.isEmpty else {
             return Result(status: status, ranked: [], allChannelsHot: false,
                           uniformFloor: false, homeChannel: homeChannel, confirmed: [])
@@ -168,7 +184,9 @@ enum ChannelSurvey {
             .map { Ranked(channel: $0.element,
                           level: levels[$0.element],
                           frames: confirmedFrames.indices.contains($0.offset)
-                                  ? confirmedFrames[$0.offset] : 0) }
+                                  ? confirmedFrames[$0.offset] : 0,
+                          locatorId: confirmedLocatorIds.indices.contains($0.offset)
+                                  ? confirmedLocatorIds[$0.offset] : 0) }
             .sorted { ($0.level, $0.channel) < ($1.level, $1.channel) }
 
         // Judged on the confirmed set, since those are the only readings that mean
@@ -192,11 +210,12 @@ enum ChannelSurvey {
 
     /// Decode a `ChannelSurveyResponse`.
     ///
-    /// Offsets from the RECEIVER firmware, which `static_assert`s the total at 84 —
-    /// header 6 + payload 78:
+    /// Offsets from the RECEIVER firmware, which `static_assert`s the total at 104 —
+    /// header 6 + payload 98:
     ///
     ///     6 status u8 | 7 channel_count u8 | 8 home_channel u8 | 9 level i8[64]
     ///     73 confirmed_count u8 | 74 confirmed_channel u8[5] | 79 confirmed_frames u8[5]
+    ///     84 confirmed_locator_id u32[5]
     ///
     /// **Every count from the frame is trusted only as far as the buffer allows.**
     /// Android bounds each one the same way, and in Swift it matters more: an
@@ -216,6 +235,7 @@ enum ChannelSurvey {
 
         var confirmedChannels: [Int] = []
         var confirmedFrames: [Int] = []
+        var confirmedLocatorIds: [UInt32] = []
         if o < f.count {
             guard let confirmedCount = Bytes.u8(f, o) else { return nil };  o += 1
             let room = min(max(f.count - o, 0), WireProtocol.surveyConfirmCount)
@@ -224,9 +244,16 @@ enum ChannelSurvey {
             o += WireProtocol.surveyConfirmCount
             let frameRoom = min(max(f.count - o, 0), WireProtocol.surveyConfirmCount)
             confirmedFrames = (0..<min(n, frameRoom)).compactMap { Bytes.u8(f, o + $0).map(Int.init) }
+            o += WireProtocol.surveyConfirmCount
+            // Bounded like everything above it, and for one concrete reason: a receiver
+            // running firmware from before this field simply ends the frame here, and
+            // the ids come back empty rather than trapping on an out-of-range index.
+            let idRoom = max(f.count - o, 0) / 4
+            confirmedLocatorIds = (0..<min(n, idRoom)).compactMap { Bytes.u32(f, o + $0 * 4) }
         }
 
         return analyze(status: status, levels: levels, homeChannel: Int(home),
-                       confirmedChannels: confirmedChannels, confirmedFrames: confirmedFrames)
+                       confirmedChannels: confirmedChannels, confirmedFrames: confirmedFrames,
+                       confirmedLocatorIds: confirmedLocatorIds)
     }
 }

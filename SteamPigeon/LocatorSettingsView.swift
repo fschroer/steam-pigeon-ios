@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Locator Settings — deployment channels, name, channel, mounting axis.
+/// Locator Settings — deployment channels, name, mounting axis.
 ///
 /// **This screen configures pyro channels.** Every value here decides when a charge
 /// fires, which is why the primary/backup limits below are interlocked rather than
@@ -26,8 +26,8 @@ struct LocatorSettingsView: View {
                 VStack(alignment: .leading, spacing: 12) {
                     // ORDER IS ANDROID'S, and it is not the order a form would suggest.
                     // The four deployment channels come FIRST, immediately under the
-                    // firmware line, and the identity fields — name, channel, mounting
-                    // axis — come last. That reads oddly until you notice what the
+                    // firmware line, and the identity fields — name and mounting axis —
+                    // come last. That reads oddly until you notice what the
                     // screen is for: the channels are what changes between flights, and
                     // the rest is set once per installation.
                     if let version = model.versionInfo, !version.locatorVersion.isEmpty {
@@ -59,10 +59,16 @@ struct LocatorSettingsView: View {
                                                 set: { staged.deviceName = $0; edited = true }),
                                   enabled: !busy)
 
-                    ConfigIntRow(title: "Locator Channel to Receive",
-                                 value: channelBinding,
-                                 range: ReceiverConfig.channelRange,
-                                 enabled: !busy)
+                    // The LoRa channel moved to the Communication screen (ADR-0029),
+                    // next to the two scans that choose one and the receiver channel
+                    // that has to follow it. This screen is flight configuration; which
+                    // frequency you are talking on is a different job, and doing it here
+                    // meant deciding a channel on one screen and verifying it on another.
+                    //
+                    // **The field is gone, not the value:** `loraChannel` still rides in
+                    // this screen's config struct, read back from the broadcast, so an
+                    // edit to any other setting sends the locator's current channel
+                    // unchanged.
 
                     // Static per installation, but the locator cannot infer it: mounting
                     // calibration finds the axis gravity lies along and calls it "up",
@@ -100,10 +106,6 @@ struct LocatorSettingsView: View {
     }
 
     // MARK: - Bindings
-
-    private var channelBinding: Binding<Int> {
-        Binding(get: { staged.loraChannel }, set: { staged.loraChannel = $0; edited = true })
-    }
 
     private func mode(_ channel: Int) -> DeployMode {
         staged.deployChannelModes.indices.contains(channel)

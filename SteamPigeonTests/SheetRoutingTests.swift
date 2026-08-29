@@ -22,10 +22,54 @@ final class SheetRoutingTests: XCTestCase {
         }
     }
 
-    /// Same rule on the root view: a challenge arriving over diagnostics must change
+    /// Same rule on the root view: a challenge arriving over anything else must change
     /// what the sheet shows, not present a second sheet.
-    func testRootChallengeAndDiagnosticsShareOneIdentity() {
+    func testEveryRootSheetSharesOneIdentity() {
         XCTAssertEqual(RootSheet.diagnostics.id, RootSheet.challenge(Self.challenge).id)
+        XCTAssertEqual(RootSheet.diagnostics.id, RootSheet.map(.menu).id)
+        for destination in MenuDestination.allCases {
+            XCTAssertEqual(RootSheet.diagnostics.id, RootSheet.map(.destination(destination)).id)
+        }
+    }
+
+    // MARK: - One presentation for the WHOLE app, not one per screen
+
+    /// The gap that cost the password prompt (2026-08-29). `MapScreen` presented the
+    /// menu and its destinations while `RootView` — which contains it — presented the
+    /// challenge. One sheet each, and still two presentations in one chain: an ancestor
+    /// cannot present while a descendant already is.
+    ///
+    /// Measured on the simulator with the Communication screen open: the prompt did not
+    /// appear at all until that sheet was dismissed, then churned appear/disappear/appear
+    /// in a single tick. It was raised exactly where it could not be shown — connecting
+    /// to a locator a search just found is a menu destination.
+    func testAChallengeOutranksAnOpenMenuDestination() {
+        XCTAssertEqual(.challenge(Self.challenge),
+                       RootSheet.active(challenge: Self.challenge,
+                                        map: .destination(.communication),
+                                        showDiagnostics: false))
+    }
+
+    /// Answering it returns to the screen underneath rather than closing it — the user
+    /// did not ask to leave the search results that raised the prompt.
+    func testAnsweringAChallengeReturnsToTheScreenUnderneath() {
+        XCTAssertEqual(.map(.destination(.communication)),
+                       RootSheet.active(challenge: nil,
+                                        map: .destination(.communication),
+                                        showDiagnostics: false))
+    }
+
+    /// A menu destination outranks diagnostics: diagnostics is a button the user pressed
+    /// once, and the destination is where they are now.
+    func testAMenuDestinationOutranksDiagnostics() {
+        XCTAssertEqual(.map(.menu),
+                       RootSheet.active(challenge: nil, map: .menu, showDiagnostics: true))
+    }
+
+    /// With nothing else open the map's sheet is what shows.
+    func testTheMapSheetShowsWhenNothingOutranksIt() {
+        XCTAssertEqual(.map(.menu),
+                       RootSheet.active(challenge: nil, map: .menu, showDiagnostics: false))
     }
 
     // MARK: - Which one wins

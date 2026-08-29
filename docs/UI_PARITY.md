@@ -15,8 +15,9 @@ Android and what was found — read the one for the screen you are about to touc
 writing anything, rather than re-deriving it. The **deliberate divergences** are listed
 with what would close each one; every other difference found in this port was a defect.
 
-**The seven deliberate divergences** — **five now.** Two closed on the Android side on
-2026-08-21 and are left in the table as the record of what closed them:
+**The seven deliberate divergences** — **seven now.** One was added and one closed on 2026-08-29: Two closed on the Android side on
+2026-08-21 and are left in the table as the record of what closed them; two were added on
+2026-08-28 with the Communication screen:
 
 | Divergence | Why | Closes when |
 |---|---|---|
@@ -26,6 +27,9 @@ with what would close each one; every other difference found in this port was a 
 | Flight-profile chart constants converted at a 3.0 display density | Android draws the chart in raw **pixels** (`CHART_MARGIN_X = 64f`, `textSize = 32f`), so its apparent size changes with the phone; SwiftUI's Canvas works in points | never exactly — see the chart audit below. A side-by-side screenshot would settle whether 3.0 is the right divisor |
 | Download maps uses SwiftUI's `Menu` and `Slider` where Android uses `DropdownMenu` and a Material `Slider`, and an SF Symbol for the delete icon | ADR-0016's sanctioned list covers pickers and sliders outright; the delete glyph is a Compose `Icons.Filled.Delete`, a library with nothing to convert, so `trash` stands in as the map-column icons do | never — `trash` is pinned in `SFSymbolAvailabilityTests` like the rest |
 | Chart legend checkboxes are SF Symbols, not a Material `Checkbox` | ADR-0016 sanctioned departure: a Material checkbox clone next to iOS type reads as broken, and `checkmark.square.fill` / `square` carry the same two states in the same two colours | never |
+| ~~Section help opens as an **alert**, where Android uses a `Popup` card anchored under the **i**~~ **CLOSED 2026-08-29 on iOS 16.4+**, which is where it matters: `SectionHelp` now branches at runtime and gives 16.4-and-up Android's anchored card (`.popover` + `presentationCompactAdaptation(.popover)` + `presentationBackground`), keeping the alert only for 16.0–16.3, where the API does not exist. Split by **capability, not device**, because flight testing spans several iOS versions | — | — |
+| The password prompt refuses interactive (swipe) dismissal, where Compose's `AlertDialog` dismisses on an outside tap | Its two buttons mean different things — one connects, the other reverts the receiver to the channel it came from — and a swipe expresses neither. On iOS a swipe is far easier to trigger by accident than a scrim tap, and the consequence here is a channel revert the user did not ask for | never — the asymmetry is in the gesture, not the design |
+| The search's **Looking for** picker is a SwiftUI `Menu` styled as a field, where Android uses `ExposedDropdownMenuBox` | ADR-0016's sanctioned list covers pickers outright, and Download maps already uses `Menu` for the same reason. The part that was **not** treated as sanctioned is the *appearance*: Android deliberately moved this control from a bare `TextButton` to a field showing its current value, because the value is what a user must check before starting a search that behaves differently depending on it — so the iOS label is a value plus a chevron in a 200 pt filled field, not a text button | never — but the field shape is the requirement, not the menu mechanism |
 | ~~iOS remembers the name of **every** locator it accepts a broadcast from; Android remembers one only for locators whose password it holds~~ **CLOSED 2026-08-21** by Android `b209671`, which stores the name from every accepted broadcast exactly as described below. The one asymmetry left — Android noted the name **before** its `mayConnect` check and iOS only on `.accepted` — was closed here 2026-08-23: `noteName` now runs on the conflict path too, so a second authorized locator heard while ours holds the link is remembered | — | — |
 
 Everything else on these screens matches Android, including field order, widget shapes,
@@ -1361,6 +1365,305 @@ Recorded so departures are deliberate rather than accidental:
    app that terminates itself reads as a crash.
 6. **Permission prompts** are one-shot on iOS; Android's rationale flows have no
    counterpart.
+
+### Communication screen + locator search — ported 2026-08-28, against `CommunicationScreen.kt`
+
+Ported from Android `b878c32..e9f93d7` (23 commits) and receiver `b9dece4..aa9edc6`, to
+[ADR-0029](../../steam-pigeon-locator/docs/adr/0029-locator-search-candidate-channels.md)
+and the port brief `docs/ios-port-brief-locator-search.md`. **The brief's first
+instruction is the one that mattered**: several decisions were reversed after first
+shipping, most of them because hardware disagreed, and the reversals are what had to be
+implemented. Each is carried into a comment at the site it governs, so the next reader
+does not re-derive the version that failed:
+
+- a scan pick **applies** on the tap; it does not stage;
+- "Connected" needs the **channel and the identity**, not either alone;
+- occupancy excludes the connected locator **by identity**, not by channel;
+- a **miss is target-aware** — with a target named, finding somebody else is still a miss;
+- **widening is offered after any *completed* short run**, not only a missed one, and
+  never after a cancelled one;
+- a queued command **ends** a sweep rather than waiting behind it, which is why
+  `ChannelSurveyStatus.Cancelled` exists and must not be folded into `RefusedBusy`;
+- the version stamp is a **resource**, not a compile-time constant.
+
+**Wire format.** `ChannelSurveyResponse` 84 → **104** (payload 78 → 98) from a new
+`confirmed_locator_id[5]`; `LocatorSearchRequest` 28 / 22 and `LocatorSearchResult`
+**39** / 33 are new. `WireLayoutTests.swift` pins all three with **parts-sum** cases as
+Android's `WireLayoutTest.kt` does — a total-size assertion cannot catch a field-order
+mistake, and both new messages carry adjacent same-width fields where one could hide.
+The survey change is **breaking in both directions**, because the app frames that message
+by exact length before checking its CRC: an app on 84 desynchronises against new firmware
+and an app on 104 desynchronises against old firmware. A decode test builds the 104-byte
+frame at the firmware's offsets and a second one truncates it to 84 to prove an older
+receiver still reads, with the ids simply absent.
+
+**What is NOT ported, deliberately.** ADR-0029 decision 7's flag-based mid-run abort. It
+is unreachable in the firmware — `locator_armed_` is assigned only in `ProcessRadioRx`
+branches a sweep returns before reaching — and beneath that sits a physical limit:
+parked on another channel the receiver cannot hear a locator arm. The start gate (refuse
+while armed or in flight) is the receiver's, and the command-path abort is the receiver's
+too; the app's share is decoding `Cancelled` and saying what happened, which it does.
+
+**`last_channel`.** Stored in a **third** `UserDefaults` key beside the password keys and
+the labels, so an existing install keeps both. Held as `[UInt32: Int]` rather than an
+`Int` defaulting to 0 — channel 0 is the factory default (ADR-0025), so "never heard" and
+"heard on channel 0" have to stay distinguishable, which is the same reason Android's
+proto field is `optional`. Written from the channel carried by **that frame** where the
+message has one (`PreLaunchData` does; `TelemetryData` has no room and falls back to the
+cached config), and written from the same two branches as the name — `.accepted` and
+`.conflict`, never `.unauthorized`, since seeding a search with a stranger's channel
+spends a dwell looking somewhere you have no reason to look.
+
+Android's merge hazard does not arise here in the same shape: the three maps are separate
+dictionaries and `persist()` rewrites all three from memory, so no writer can drop a field
+it does not know about. The hazard is recorded anyway, because the next field added is
+where it would come back.
+
+#### Found in the Android implementation
+
+The brief asks for this explicitly, and two of the three are real.
+
+**1. `ChannelOccupancy.occupantOf` reports `00000000` down the search path where the
+survey path deliberately reports nothing.** The survey branch ends with
+`occupied.locatorId.takeIf { it != 0L }?.let { "%08X".format(it) }`, and
+`ChannelOccupancyTest`'s "an occupied channel with no id reports nothing rather than zero"
+pins that: a frame that decoded but carried no id gives occupancy without identity, and
+naming it `00000000` would be a lie. The search branch above it has no such guard —
+`hit.deviceName.takeIf { it.isNotEmpty() } ?: labelOf(...) ?: "%08X".format(hit.locatorId)`
+— so a hit with `found = 1` and `locator_id = 0` renders as "00000000 was last heard on
+channel 12". Reachable: `LocatorSearchResult.locator_id` is documented as 0 "when the
+frame carried no id", exactly as the survey's is.
+
+**Mirrored rather than fixed here**, per "Android is the reference implementation": the
+iOS `ChannelOccupancy` has the same asymmetry, so the two apps still say the same thing.
+It should be fixed on Android first — the survey branch's `takeIf { it != 0 }` applied to
+the search branch too — and ported back.
+
+**2. The candidate list's middle is order-unstable across runs.**
+`RocketViewModel.searchCandidates` builds `knownChannels` from
+`known.filterKeys { … }.values`, where `known` is a protobuf map whose iteration order is
+not specified. The target channel is first and the default and current channels are
+appended last, so the *load-bearing* positions are fixed — but which of several remembered
+channels survive the 16-channel cap, and in what order, can differ between two runs with
+identical stored state. With more than 14 remembered locators that changes which channels
+are actually searched. **iOS diverges here**: `searchCandidates` sorts the other locators'
+channels by id, so the list is reproducible. This is a small, deliberate divergence in
+favour of determinism and it is recorded here rather than left silent.
+
+**3. Not a bug, checked and cleared.** `Run.suspectChannels` filters the non-best hits
+with `!==` (reference identity) rather than `!=`. That reads like a mistake and is not:
+two hits for one locator that are equal by value would both be dropped by `!=`, leaving
+neither channel offered. Swift has no reference identity for a struct, so the port
+compares `channel` instead — which is equivalent given the firmware reports each channel
+at most once per run, and that assumption is now written at the call site.
+
+#### ⚠️ ANDROID OWES THESE — iOS-first fixes not yet on Android
+
+**The canonical list.** Recorded at fschroer's instruction (2026-08-29). Each is an
+explicit, authorised exception to "Android is the reference implementation", taken because
+the defect was reached from the phone during flight-test prep. Every claim below was
+re-verified against the Android source on 2026-08-29 at the line cited.
+
+| # | Defect | Android evidence | iOS fix |
+|---|---|---|---|
+| 1 | **A changed password permanently bricks the connection.** Once connected, a locator whose password is changed on the device can never be re-authenticated: its frames stop authenticating so nothing is admitted, `connectedLocatorId` goes on naming it because nothing releases a connection on an auth failure, and the passive challenge refuses to prompt while anything is connected. The only things on screen are a conflict banner calling the connected locator "another locator" and a panel reading "No Locator" over the last good RSSI. **No recovery inside the app** short of dropping the BLE link | `RocketViewModel.kt:1232` — `_connectedLocatorId.value == null` gates the passive challenge | `ChallengePolicy.Trigger.credentialsChanged`: an unauthorized frame **from the holder itself** releases the connection (a stale belief, not something to protect) and prompts, asking even though something was connected and even if that locator was declined before. A *stranger* still cannot knock out a standing connection |
+| 2 | **Connect / pick buttons stay live while a change is in flight, and the channel is staged before the send is accepted.** The second tap is refused by the in-flight guard and does nothing at all; meanwhile the Receiver channel field shows a channel the app never visited, with an enabled Update button offering to apply it | `CommunicationScreen.kt:1043` — hit-row `Button` with no `enabled`; `:307-309` and `:352-354` — `stagedReceiverChannel` written *before* the guarded `pointReceiverAtChannel` | `pointReceiverAtChannel` returns whether the change went out; callers stage only on success. Search Connect and survey pick are disabled while the change they would make is in flight |
+| 3 | **The released locator's configuration is left on screen.** After a receiver-only channel change the Locator channel field goes on showing the *previous* locator's channel, and corrects only when a `PreLaunchData` from the new one is admitted — so a locator that is never admitted leaves it wrong indefinitely. Reported 2026-08-29: receiver reading 48, locator field reading 34, two real locators on two real channels | `RocketViewModel.kt:1245-1263` — `beginChannelChangeRecognition` clears ten fields and **not** `_remoteLocatorConfig` | `remoteLocatorConfig = LocatorConfig()` on release, matching what `clearLiveReadouts` already does when the link drops |
+| 4 | **The candidate list's middle is order-unstable between runs.** `knownChannels` comes from a protobuf map whose iteration order is unspecified, so which remembered channels survive the 16-channel cap — and in what order — can differ between two runs with identical stored state. With more than 14 remembered locators it changes which channels are actually searched | `RocketViewModel.kt:903` — `.values.mapNotNull { … }` over `knownLocatorsMap` | `searchCandidates` sorts the other locators' channels by id, so the list is reproducible |
+
+#### Known on BOTH platforms, fixed on neither
+
+**`ChannelOccupancy.occupantOf` renders `00000000` down the search path** where the survey
+path deliberately reports nothing — full description in the ADR-0029 audit above.
+**Mirrored rather than fixed on iOS**, per "Android is the reference implementation", so
+the two apps still say the same thing. Fix on Android first, then port.
+
+#### iOS-only, nothing owed to Android
+
+Platform mechanics with no Android counterpart, listed so they are not mistaken for
+divergences Android should adopt:
+
+- **One `.sheet` for the whole app** (`RootSheet`). An ancestor cannot present while a
+  descendant is presenting; Compose's dialogs and `NavHost` have no such constraint.
+- **`interactiveDismissDisabled()` on the password prompt.** Compose's `AlertDialog`
+  dismisses on an outside tap; on iOS a swipe is far easier to trigger by accident, and
+  the consequence here is a channel revert. In the divergence table above.
+- **`SectionHelp`'s 16.4 availability branch.** Restores Android's shape where the API
+  exists; Android has nothing to change.
+
+#### An iOS gap this port did not close at first — **closed 2026-08-29**
+
+Android arms a **channel-change recognition cycle** before a receiver-only channel move
+(`beginChannelChangeRecognition`, ADR-0011): the next `PreLaunchData` on the new channel
+is recognised, challenged for a password, or the channel is reverted. That is what makes
+applying a pick immediately safe rather than reckless, and it also feeds
+`searchCandidates`'s `attemptedChannel` with `channelChangePreviousChannel`.
+
+**iOS had never had it**, and fschroer hit it from the phone the same day: after a
+whole-band search, tapping Connect on a *different* locator's hit left every row reading
+"Connect", the Receiver channel field following the new channel while the Locator channel
+did not, and the main screen showing no locator at all — "as if the receiver was set to
+another channel entirely".
+
+The receiver was on the right channel throughout. **The app was refusing to display what
+was on it.** `pointReceiverAtChannel` moved the receiver without releasing the connection,
+so the old holder stayed in the slot while off-channel and silent, and the locator on the
+new channel was refused — as `conflict` for the 15 s `connectionHold` if it was
+authorized, and **permanently** if it was not, because `ChallengePolicy`'s passive trigger
+only prompts while nothing is connected. Every reported symptom follows from that: no row
+can satisfy `connectedOn`'s two halves when `currentChannel` has moved and
+`connectedLocatorId` has not, and `remoteLocatorConfig` is only rebuilt from admitted
+broadcasts, so the Locator channel field kept showing the locator that had been left
+behind.
+
+**Ported 2026-08-29** from Android's `beginChannelChangeRecognition`, which is why Android
+never showed this:
+
+- `pointReceiverAtChannel` arms the cycle **before** the change goes out, releasing the
+  connection and dropping the old channel's link measurements — they are wrong
+  immediately, not gradually;
+- an unauthorized locator on the new channel is challenged with the `.channelChange`
+  trigger, which asks even while something is connected and even for a locator declined
+  before, and does **not** also raise the conflict banner — the user chose this channel;
+- cancelling that challenge **reverts** the receiver, since it is the only way back;
+  `PasswordChallengeView` labels it "Cancel" rather than "Not now" in that case, mirroring
+  Android's `cancel`/`dismiss` split;
+- `searchCandidates` feeds the channel we came from as the attempted channel while the
+  move is unresolved, as Android does.
+
+One more divergence closed on the way, in `submitPassword`: iOS remembered the key and
+left the connection to the next broadcast, which works only when the slot is free — with a
+previous holder inside `connectionHold`, a *correct* password bought 15 s of blank screen.
+Android connects immediately on accept; iOS now does too.
+
+`ChannelChangeRecognitionTests` pins each symptom in the report. Writing them surfaced a
+latent fragility worth naming: `KnownLocatorStore` persists to `UserDefaults.standard`,
+which on the simulator outlives the whole suite, so any test needing an *unauthorized*
+locator silently stops testing that once some earlier run has stored a password for the
+same id — and it fails open, because the polluted path is the one where everything appears
+to work. `LinkViewModel.init` now takes an injectable `defaults` and these tests use a
+per-case suite.
+
+#### Three more from the phone, 2026-08-29 — connecting to an unauthenticated locator
+
+**1. The Connect buttons stayed live while a change was under way.** Tapping a second
+one did nothing at all: `pointReceiverAtChannel` refuses while
+`receiverConfigMessageState` is not idle, so the send was dropped — the "a control that
+silently did nothing" failure this screen exists to avoid. Worse, the *view* staged the
+channel **before** asking, so the Receiver channel field showed a channel the app had
+never visited, with an enabled Update button offering to apply it.
+
+`pointReceiverAtChannel` now returns whether the change actually went out and the callers
+stage only on success; the search's Connect and the survey's pick are disabled while the
+change they would make is in flight. **Android has the same defect** — its
+`LocatorSearchSection` hit row is a bare `Button` with no `enabled`, and its `onPick`
+stages `stagedReceiverChannel` before calling a `pointReceiverAtChannel` with the same
+guard. Worth fixing there.
+
+**2. The Locator channel section disappeared when the prompt appeared.** Expected, and
+**identical on Android**: `beginChannelChangeRecognition` releases the connection, and
+both platforms gate that section on `connectedLocatorId != null`. It is mechanically
+right — the locator channel is a locator-directed command (ADR-0020), so with nothing
+connected there is no locator to address and the control would be inert. Left as Android
+has it; if the vanish is to be softened, that is a change to make on Android first.
+
+**3. The password prompt could not be answered from this screen.** The deep one.
+
+`SheetRouting.swift` enforced "one sheet per screen" and that was not enough. `MapScreen`
+presented the menu and its destinations; `RootView`, which *contains* `MapScreen`,
+presented the challenge and diagnostics — one each, and still two presentations in one
+chain, because an ancestor cannot present while a descendant already is.
+
+Measured on the simulator with the Communication screen open and a challenge raised:
+
+```
+challenge set        ← nothing appears
+prompt appeared      ← only after the Communication sheet was dismissed
+prompt disappeared      …then churns, all inside one tick
+prompt appeared
+```
+
+**The same fault manifests differently by iOS version, which is worth knowing before
+anyone tries to reproduce it.** On the iOS 26.5 simulator the prompt is suppressed
+outright until the covering sheet closes. The report came from an **iPhone on 18.6.2**,
+where it appeared and then vanished after a few seconds — the churn above resolving the
+other way. Neither is a timing problem to be waited out: the prompt was raised exactly
+where it could not be answered, since connecting to a locator a search just found *is* a
+menu destination.
+
+fschroer flies two phones — **16.7.16** (the deployment floor, and the one the SF Symbol
+availability notes are written against) and **18.6.2** (where this was seen). A
+presentation fault that shows up as "suppressed" on one, "appears then vanishes" on
+another, and is invisible on a third is exactly the class this file exists to record, and
+"it looked fine on my device" is not evidence about the others.
+
+**There is now exactly one `.sheet` in the app.** `RootSheet` gained `.map(MapSheet)`,
+`MapScreen` takes its sheet as a `@Binding` and no longer presents, and `RootView` decides
+between challenge, map sheet and diagnostics in one place. The challenge outranks
+everything and answering it **returns to the screen underneath**, so the search results
+that raised the prompt are still there afterwards. Verified on the simulator: the prompt
+now appears immediately over the Communication screen, and answering returns to it.
+
+Two smaller changes went with it, both because a revert is destructive:
+
+- the prompt is `interactiveDismissDisabled()`. Its two buttons mean different things —
+  one connects, the other puts the receiver back — and a swipe cannot express either. A
+  **deliberate divergence**: Compose's `AlertDialog` dismisses on an outside tap, but on
+  iOS a swipe is far easier to trigger by accident and the consequence here is an
+  unexplained channel revert;
+- the sheet binding's `set(nil)` no longer calls `declineChallenge()`. A dismissal the app
+  did not initiate must never revert a channel behind the user's back — which is what the
+  churn above would have done.
+
+#### Flight-map parity closed 2026-08-29, at fschroer's request
+
+**The distance row is coloured by the locator's GPS health**, as Android colours it —
+`gpsStatus == Ok ? default : error`. The colour tracks the **sensor, not the value**,
+which is why it applies to "Unknown" exactly as to a number: "Unknown" in the normal
+colour is the app declining to quote a figure from a healthy receiver, and "Unknown" in
+red is the GPS itself being unwell. Nil reads as healthy, matching Android's
+`RocketState.gpsStatus` default of `Ok` before any broadcast.
+
+**The coordinate row's map link is gated the way Android gates it.** It was previously
+always drawn in the secondary colour with a tap that silently no-opped at 0,0. Now it is
+rendered only for a valid coordinate (`validCoordinate`, Android's `validLatLng`:
+finite, in range, not the 0,0 a locator reports before it has a fix), it is tappable only
+when the position is one the app stands behind — ADR-0022/0023, `vector != nil`, Android's
+`locatorDistancePlausible` — and the underline that says so is **absent when the tap is
+not offered**, so it never invites a press that does nothing. Handing an implausible
+position to a navigation app would walk straight past the judgement that refused to quote
+a distance for it, literally. The row is drawn in the panel's normal colour either way,
+as Android leaves it, signalling with the underline alone.
+
+One deliberate simplification: Android probes `PackageManager` for a `geo:` handler and
+toasts when there is none. On iOS `https://maps.apple.com/…` resolves to Apple Maps when
+installed and still opens somewhere useful when it has been deleted, so there is no
+equivalent dead end to guard against.
+
+**The screen is held awake on the main screen**, as Android does with
+`FLAG_KEEP_SCREEN_ON`: watching the map and listening to callouts is exactly the
+input-idle the system timeout is built to catch, and it was blanking the display
+mid-flight.
+
+The **scoping** is the part that does not port literally, and it matters — Android is
+explicit that holding it app-wide would also cover settings, flight profiles and map
+download, where the phone is in use or grinding through a long download and the display
+is the largest single draw on the device. On Android a destination *replaces* the map, so
+the flag disposes with it. Here every destination is a sheet presented **over** a map that
+stays alive, so scoping to `MapScreen` would hold the screen lit through exactly the cases
+Android excluded. The condition is therefore "no sheet is up", which selects the same set
+of screens by the route this app's navigation actually takes.
+
+#### Not reachable from a test, on either platform
+
+The 2026-08-28 UI changes — help popups, the button layout, the centred Connected label,
+the dropdown — are unverified beyond fschroer's own passes on Android, where three layout
+regressions were caught by eye rather than by any test. The iOS screen was driven on the
+simulator against a seeded run (a locator reported on two channels, one flagged, plus a
+second rocket) and the wrapping search row, the aligned Connect column, the RSSI/SNR
+colour scales, the false-hit marker and the help alert all render correctly. **No frame
+has been exchanged with hardware**, and per `steam-pigeon-ios` practice the simulator
+cannot speak for iOS 16 or for Bluetooth.
 
 Everything not on this list should mirror Android.
 

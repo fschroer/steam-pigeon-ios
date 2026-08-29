@@ -20,6 +20,22 @@ struct AppSettingsView: View {
     var body: some View {
         Form {
             Section {
+                // At the top, where the locator's and receiver's firmware versions sit on
+                // their own screens, so the three are read the same way and compare
+                // directly. A stamp ending in a time (…-dirty.HHMMSS) is a development
+                // build made from an uncommitted tree; a clean one names a commit.
+                //
+                // Read from a bundle resource rather than a compiled-in constant
+                // deliberately — see the note on `AppVersion`. Android shipped this as a
+                // `BuildConfig` String first, which the compiler inlined into the screen
+                // and froze at a three-hour-old stamp while every build produced the
+                // correct one.
+                Text("App version: \(AppVersion.stamp)")
+                    .font(SPFont.bodyMedium)
+                    .foregroundStyle(SPColor.onSurfaceVariant)
+            }
+
+            Section {
                 Toggle("Enable Speech", isOn: $settings.voiceEnabled)
 
                 // A pushed list, NOT a `Picker`.

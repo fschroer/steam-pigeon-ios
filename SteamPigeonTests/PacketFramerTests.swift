@@ -75,7 +75,11 @@ final class PacketFramerTests: XCTestCase {
         XCTAssertEqual(.known(147), PacketFramer.expectedPacketLength(prelaunch()))
         XCTAssertEqual(.known(83),  PacketFramer.expectedPacketLength(telemetry()))
         XCTAssertEqual(.known(30),  PacketFramer.expectedPacketLength(frame(.receiverInfo, totalSize: 30)))
-        XCTAssertEqual(.known(84),  PacketFramer.expectedPacketLength(frame(.channelSurvey, totalSize: 84)))
+        // 104, was 84: `confirmed_locator_id[5]` was appended on 2026-08-27 (ADR-0029).
+        // The framer decides this length BEFORE the CRC is checked, so a stale number
+        // here does not fail a check — it desynchronises the stream.
+        XCTAssertEqual(.known(104), PacketFramer.expectedPacketLength(frame(.channelSurvey, totalSize: 104)))
+        XCTAssertEqual(.known(39),  PacketFramer.expectedPacketLength(frame(.locatorSearchResult, totalSize: 39)))
         XCTAssertEqual(.known(66),  PacketFramer.expectedPacketLength(frame(.flightEvents, totalSize: 66)))
         XCTAssertEqual(.known(96),  PacketFramer.expectedPacketLength(frame(.flightMetadata, totalSize: 96)))
         XCTAssertEqual(.known(134), PacketFramer.expectedPacketLength(frame(.versionInfo, totalSize: 134)))

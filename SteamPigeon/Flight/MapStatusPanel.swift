@@ -36,6 +36,13 @@ struct MapStatusPanel: View {
     var armPending: Bool = false
     var onRescan: (() -> Void)?
     var onToggleArmed: (() -> Void)?
+    /// Whether a locator holds the connection. Gates "Find my locator", below.
+    var locatorConnected: Bool = false
+    /// Whether the receiver link is up. The search runs ON the receiver, so with no
+    /// receiver there is nothing to run it.
+    var linkReady: Bool = false
+    /// Opens the Communication screen. Nil leaves the action off entirely.
+    var onFindLocator: (() -> Void)?
 
     /// ADR-0021 pad alert, as the locator reports it. Drives the snooze control.
     var padAlert: PadAlertState = .quiet
@@ -134,6 +141,23 @@ struct MapStatusPanel: View {
             actionButton("Rescan", container: SPColor.primary, content: SPColor.onPrimary) {
                 actionsExpanded = false
                 onRescan?()
+            }
+
+            // Offered exactly where the problem is noticed. Someone staring at "No
+            // Locator" does not think "Receiver Settings", and with one receiver and
+            // several rockets the commonest cause is not range or interference but
+            // listening on the wrong channel — which the channel readings cannot show,
+            // because they are measuring a channel nobody is talking on.
+            //
+            // Only while the receiver is up and no locator is being heard: with a locator
+            // on screen there is nothing to find, and with no receiver the search has
+            // nothing to run on.
+            if !locatorConnected, linkReady, let onFindLocator {
+                actionButton("Find my locator",
+                             container: SPColor.primary, content: SPColor.onPrimary) {
+                    actionsExpanded = false
+                    onFindLocator()
+                }
             }
 
             // Snooze appears ONLY while the alert is actually sounding, so it cannot be

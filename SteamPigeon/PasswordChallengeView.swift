@@ -65,7 +65,13 @@ struct PasswordChallengeView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Not now", action: onCancel)
+                    // **"Cancel", not "Not now", after a deliberate channel change**, as
+                    // Android switches between `cancel` and `dismiss` for the same
+                    // reason: here the button reverts the receiver to the channel it
+                    // came from, and "Not now" would understate an action that undoes
+                    // something. Dismissing a passive prompt really does mean "not now".
+                    Button(challenge.previousChannel != nil ? "Cancel" : "Not now",
+                           action: onCancel)
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Connect") { onSubmit(password) }

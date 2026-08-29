@@ -11,7 +11,7 @@ final class IconAssetTests: XCTestCase {
 
     /// Every drawable the Android app references by name.
     private let expected = [
-        "bomb", "compass", "ic_view_2d", "ic_view_3d", "navigation",
+        "bomb", "broadcast", "compass", "ic_view_2d", "ic_view_3d", "navigation",
         "radio", "rocket", "rocket_md", "settings_applications", "u_turn_right",
     ]
 
@@ -37,7 +37,7 @@ final class IconAssetTests: XCTestCase {
     /// and always draw grey.
     func testSingleColourGlyphsAreTemplates() throws {
         for name in ["radio", "rocket_md", "navigation", "bomb", "u_turn_right",
-                     "settings_applications"] {
+                     "settings_applications", "broadcast"] {
             let image = try XCTUnwrap(UIImage(named: name), name)
             XCTAssertEqual(.alwaysTemplate, image.renderingMode,
                            "\(name) must be a template image to accept a tint")

@@ -25,6 +25,15 @@ struct LocatorStatsPanel: View {
     let gyro: Vec3f?
     let latitude: Double
     let longitude: Double
+    /// The locator's GPS health. Android colours the distance row on this and nothing
+    /// else — `if (gpsStatus == Ok) Color.Unspecified else error` — so a distance the
+    /// app is quoting from a sick receiver is marked as such, and so is the word
+    /// "Unknown" that replaces it. Nil is treated as healthy, matching Android's
+    /// `RocketState.gpsStatus` default of `Ok` before any broadcast has arrived.
+    var gpsStatus: SensorHealth?
+    /// Whether the app stands behind the reported position — ADR-0022/0023. Android
+    /// calls this `locatorDistancePlausible` and uses it to gate the map link.
+    var positionTrusted: Bool = false
     let deployChannelText: [String]
     /// Continuity per channel. A channel without it is drawn in the error colour.
     let deployChannelContinuity: [Bool]
@@ -64,7 +73,7 @@ struct LocatorStatsPanel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 1) {
-            row(Self.distanceRow(distanceM))
+            row(Self.distanceRow(distanceM), colour: Self.distanceColour(gpsStatus))
             row(String(format: "AGL : %15.1f m", altitudeAglM))
             // In flight: speed and attitude. On the pad: what the IMU is reading.
             // Android switches between the two rather than showing both.
@@ -135,6 +144,26 @@ struct LocatorStatsPanel: View {
         return String(format: "Dist: %15d m", distanceM)
     }
 
+    /// Android: `if (rocketState.gpsStatus == SensorHealth.Ok) Color.Unspecified else error`.
+    ///
+    /// The colour tracks the **sensor**, not the value, which is why it applies to
+    /// "Unknown" as readily as to a number: the two failures are different and the row
+    /// has to distinguish them. "Unknown" in the normal colour is the app declining to
+    /// quote a figure it cannot justify from a healthy receiver; "Unknown" in red is the
+    /// GPS itself being unwell, which is a thing to go and look at.
+    ///
+    /// Nil is healthy — Android's `RocketState` defaults `gpsStatus` to `Ok`, so a panel
+    /// with no broadcast yet is not painted as a fault.
+    static func distanceColour(_ gpsStatus: SensorHealth?) -> Color {
+        (gpsStatus ?? .ok) == .ok ? SPColor.onBackground : SPColor.error
+    }
+
+    /// Android's `validLatLng`: finite, in range, and not the 0,0 a locator reports
+    /// before it has a fix.
+    static func validCoordinate(_ lat: Double, _ lon: Double) -> Bool {
+        lat.isFinite && lon.isFinite && abs(lat) <= 90 && abs(lon) <= 180 && (lat != 0 || lon != 0)
+    }
+
     private func row(_ text: String, colour: Color = SPColor.onBackground) -> some View {
         Text(text)
             .font(SPFont.telemetry)
@@ -142,22 +171,51 @@ struct LocatorStatsPanel: View {
             .lineLimit(1)
     }
 
-    /// Tapping the coordinates opens them in Maps, as Android does.
-    private var coordinates: some View {
-        let lat = String(format: "%.5f", latitude)
-        let lon = String(format: "%.5f", longitude)
-        return Text("\(lat),\(lon)")
-            .font(SPFont.telemetry)
-            .foregroundStyle(SPColor.secondary)
-            .lineLimit(1)
-            .onTapGesture {
-                guard latitude != 0 || longitude != 0 else { return }
-                let label = deviceName.isEmpty ? "Rocket" : deviceName
-                let encoded = label.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "Rocket"
-                if let url = URL(string: "http://maps.apple.com/?ll=\(lat),\(lon)&q=\(encoded)") {
+    /// Tapping the coordinates hands them to the system's map app, as Android does.
+    ///
+    /// The user's own choice of app wins, which matters here more than usual: recovery
+    /// happens where there is no cell signal (ADR-0014), and only an app with offline
+    /// data downloaded will show anything useful when it opens.
+    ///
+    /// **Offered only for a position the app is willing to stand behind.** ADR-0022
+    /// already refuses to quote a distance it cannot justify, and handing that same
+    /// position to a navigation app would walk straight past that judgment — literally.
+    /// So the tap is gated on the coordinate being valid AND on the distance being
+    /// plausible, exactly as Android gates it.
+    ///
+    /// The underline is the only affordance a row this size can carry, and it is
+    /// **absent when the tap is not offered**, so it never invites a press that does
+    /// nothing. The row is drawn in the panel's normal colour either way — Android
+    /// leaves it `Color.Unspecified` and signals with the underline alone.
+    @ViewBuilder private var coordinates: some View {
+        if Self.validCoordinate(latitude, longitude) {
+            // Fixed to 5 places with an explicit POSIX locale. A device set to de-DE
+            // would otherwise write a comma decimal separator, which corrupts the URL
+            // as well as the display — the same trap Android avoids with `Locale.US`.
+            let lat = String(format: "%.5f", locale: Locale(identifier: "en_US_POSIX"), latitude)
+            let lon = String(format: "%.5f", locale: Locale(identifier: "en_US_POSIX"), longitude)
+            let navigable = positionTrusted
+
+            Text("\(lat),\(lon)")
+                .font(SPFont.telemetry)
+                .foregroundStyle(SPColor.onBackground)
+                .underline(navigable)
+                .lineLimit(1)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    guard navigable else { return }
+                    let label = deviceName.isEmpty ? "Rocket" : deviceName
+                    let encoded = label.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)
+                        ?? "Rocket"
+                    // `maps.apple.com` over https rather than the `maps:` scheme: it
+                    // resolves to Apple Maps when installed and still opens somewhere
+                    // useful when it has been deleted, so there is no equivalent of
+                    // Android's "no maps app" dead end to guard against.
+                    guard let url = URL(string:
+                        "https://maps.apple.com/?ll=\(lat),\(lon)&q=\(encoded)") else { return }
                     UIApplication.shared.open(url)
                 }
-            }
+        }
     }
 }
 

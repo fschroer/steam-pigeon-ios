@@ -85,6 +85,7 @@
 				5P7000000000000000000001 /* Sources */,
 				5P3000000000000000000001 /* Frameworks */,
 				5P8000000000000000000001 /* Resources */,
+				5S1000000000000000000001 /* Stamp app version */,
 			);
 			buildRules = (
 			);
@@ -180,6 +181,28 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		5S1000000000000000000001 /* Stamp app version */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Stamp app version";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "\"$SRCROOT/Scripts/GenVersion.sh\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		5P7000000000000000000001 /* Sources */ = {

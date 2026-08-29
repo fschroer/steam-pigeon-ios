@@ -9,9 +9,10 @@ struct MapScreen: View {
     @ObservedObject var model: LinkViewModel
     @ObservedObject var settings: AppSettings
 
-    init(model: LinkViewModel, settings: AppSettings) {
+    init(model: LinkViewModel, settings: AppSettings, sheet: Binding<MapSheet?>) {
         self.model = model
         self.settings = settings
+        _sheet = sheet
         _voice = StateObject(wrappedValue: SpeechCoordinator(settings: settings))
     }
 
@@ -30,10 +31,11 @@ struct MapScreen: View {
     @State private var autoCentre = true
     @State private var autoZoom = true
     @State private var headingUp = true
-    /// The menu and the screen it opens are ONE presentation — see `MapSheet`. They
-    /// were two `.sheet` modifiers, and selecting a menu item dismissed the first
-    /// while presenting the second in the same tick, which iOS 16 refuses.
-    @State private var sheet: MapSheet?
+    /// What this screen wants shown. **Owned by `RootView`, which presents it** — see
+    /// the note on `RootSheet`. This screen names its sheet; it does not present one,
+    /// because an ancestor that also presents (the password challenge) cannot while a
+    /// descendant is presenting, and the prompt lost that race.
+    @Binding var sheet: MapSheet?
 
     /// The voice and the haptic. Owned here because the map screen is where the pad
     /// alert is displayed, and the three channels should start and stop together.
@@ -188,61 +190,6 @@ struct MapScreen: View {
         // Android speaks the arm state on every change, from the status panel.
         .onChange(of: model.armed) { voice.speech.say($0 ? "Armed" : "Disarmed") }
         .onDisappear { voice.padAlert.stop() }
-        // THE screen's only sheet. Adding a second one here reintroduces the crash.
-        .sheet(item: $sheet) { current in
-            switch current {
-            case .menu:
-                MenuView(
-                    destinations: MenuGating.destinations(
-                        linkReady: model.state == .ready,
-                        locatorActive: model.connectedLocatorId != nil,
-                        armed: model.armed),
-                    // Swaps this sheet's content rather than dismissing it and
-                    // presenting another. `MapSheet.id` is constant, so SwiftUI has
-                    // nothing to tear down between the two.
-                    onSelect: { sheet = .destination($0) },
-                    onDismiss: { sheet = nil })
-            case .destination(let destination):
-                destinationView(destination)
-            }
-        }
-    }
-
-    /// A screen reached from the menu. `Done` closes the sheet outright rather than
-    /// returning to the menu: the menu is a way in, not a place, and one tap back to
-    /// the map is what Android's drawer does too.
-    private func destinationView(_ destination: MenuDestination) -> some View {
-        NavigationView {
-            Group {
-                switch destination {
-                case .appSettings:      AppSettingsView(settings: settings)
-                case .receiverSettings: ReceiverSettingsView(model: model)
-                case .locatorSettings:  LocatorSettingsView(model: model)
-                case .flightProfiles:   FlightProfilesView(model: model) { sheet = nil }
-                case .downloadMap:      DownloadMapView(phone: model.phone)
-                case .deploymentTest:   DeploymentTestView(model: model) { sheet = nil }
-                }
-            }
-                .navigationTitle(destination.title)
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .navigationBarLeading) {
-                        // Flight Profiles is two screens behind one flag, so Done steps
-                        // the chart back to the record list first — what Android's
-                        // up-arrow does there (`AppNavigation.kt`). Anywhere else, and
-                        // from the list itself, it closes the sheet.
-                        Button("Done") {
-                            if destination == .flightProfiles,
-                               model.flightProfileDataDisplayState {
-                                model.returnToFlightProfileList()
-                            } else {
-                                sheet = nil
-                            }
-                        }
-                    }
-                }
-        }
-        .navigationViewStyle(.stack)
     }
 
     /// Changes whenever a camera control does, and is otherwise stable.
@@ -291,6 +238,12 @@ struct MapScreen: View {
                     gyro: p?.gyro,
                     latitude: model.rocketCoordinate?.latitude ?? 0,
                     longitude: model.rocketCoordinate?.longitude ?? 0,
+                    // Android colours the distance row on the locator's GPS health.
+                    gpsStatus: model.gpsStatus,
+                    // `vector` is nil exactly when ADR-0022/0023 declined to stand
+                    // behind the position, which is Android's `locatorDistancePlausible`
+                    // — and the same judgement that put "Unknown" in the row above.
+                    positionTrusted: model.vector != nil,
                     deployChannelText: p.map { cfg in
                         cfg.deployChannelModes.enumerated().map { i, mode in
                             DeployChannelText.line(channel: i + 1, mode: mode, config: cfg)
@@ -342,6 +295,9 @@ struct MapScreen: View {
                     armPending: model.armCommandPending,
                     onRescan: { model.rescan() },
                     onToggleArmed: { model.toggleArmed() },
+                    locatorConnected: model.connectedLocatorId != nil,
+                    linkReady: model.state == .ready,
+                    onFindLocator: { sheet = .destination(.communication) },
                     padAlert: model.padAlert,
                     padAlertSnoozeMinutes: model.padAlertSnoozeMinutes,
                     onSnoozePadAlert: { model.snoozePadAlert() },
