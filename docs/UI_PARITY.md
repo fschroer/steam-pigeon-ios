@@ -15,9 +15,10 @@ Android and what was found — read the one for the screen you are about to touc
 writing anything, rather than re-deriving it. The **deliberate divergences** are listed
 with what would close each one; every other difference found in this port was a defect.
 
-**The seven deliberate divergences** — **seven now.** One was added and one closed on 2026-08-29: Two closed on the Android side on
-2026-08-21 and are left in the table as the record of what closed them; two were added on
-2026-08-28 with the Communication screen:
+**The eight deliberate divergences.** Three of the rows below are struck through: two
+closed on the Android side on 2026-08-21 and one on iOS on 2026-08-29, and all three are
+left in the table as the record of what closed them. Two were added on 2026-08-28 with the
+Communication screen, one on 2026-08-29, and one on 2026-08-30:
 
 | Divergence | Why | Closes when |
 |---|---|---|
@@ -30,6 +31,7 @@ with what would close each one; every other difference found in this port was a 
 | ~~Section help opens as an **alert**, where Android uses a `Popup` card anchored under the **i**~~ **CLOSED 2026-08-29 on iOS 16.4+**, which is where it matters: `SectionHelp` now branches at runtime and gives 16.4-and-up Android's anchored card (`.popover` + `presentationCompactAdaptation(.popover)` + `presentationBackground`), keeping the alert only for 16.0–16.3, where the API does not exist. Split by **capability, not device**, because flight testing spans several iOS versions | — | — |
 | The password prompt refuses interactive (swipe) dismissal, where Compose's `AlertDialog` dismisses on an outside tap | Its two buttons mean different things — one connects, the other reverts the receiver to the channel it came from — and a swipe expresses neither. On iOS a swipe is far easier to trigger by accident than a scrim tap, and the consequence here is a channel revert the user did not ask for | never — the asymmetry is in the gesture, not the design |
 | The search's **Looking for** picker is a SwiftUI `Menu` styled as a field, where Android uses `ExposedDropdownMenuBox` | ADR-0016's sanctioned list covers pickers outright, and Download maps already uses `Menu` for the same reason. The part that was **not** treated as sanctioned is the *appearance*: Android deliberately moved this control from a bare `TextButton` to a field showing its current value, because the value is what a user must check before starting a search that behaves differently depending on it — so the iOS label is a value plus a chevron in a 200 pt filled field, not a text button | never — but the field shape is the requirement, not the menu mechanism |
+| **A dropped BLE link clears the receiver readout on iOS; Android keeps it.** `clearLiveReadouts` sets `receiverInfo = nil` with the rest; Android's link-loss release ([ADR-0011](../../steam-pigeon-locator/docs/adr/0011-locator-lora-channel-from-app.md), 2026-08-30) deliberately leaves `_remoteReceiverConfig` standing | The **locator** half matches — both platforms release the connection and blank the locator's configuration, because a section left reading channel 0 is a plausible-looking value where the truth is "nothing is connected". The receiver half cannot: Android seeds `_remoteReceiverConfig` from user preferences and saves it back, so clearing it would blank the Receiver channel field on every drop and raise that same hazard on the other field. iOS's `receiverInfo` is not persisted and has no such role | never — the difference is in where the value is stored, not in what either app wants to show |
 | ~~iOS remembers the name of **every** locator it accepts a broadcast from; Android remembers one only for locators whose password it holds~~ **CLOSED 2026-08-21** by Android `b209671`, which stores the name from every accepted broadcast exactly as described below. The one asymmetry left — Android noted the name **before** its `mayConnect` check and iOS only on `.accepted` — was closed here 2026-08-23: `noteName` now runs on the conflict path too, so a second authorized locator heard while ours holds the link is remembered | — | — |
 
 Everything else on these screens matches Android, including field order, widget shapes,
@@ -1467,16 +1469,167 @@ re-verified against the Android source on 2026-08-29 at the line cited.
 | # | Defect | Android evidence | iOS fix |
 |---|---|---|---|
 | 1 | **A changed password permanently bricks the connection.** Once connected, a locator whose password is changed on the device can never be re-authenticated: its frames stop authenticating so nothing is admitted, `connectedLocatorId` goes on naming it because nothing releases a connection on an auth failure, and the passive challenge refuses to prompt while anything is connected. The only things on screen are a conflict banner calling the connected locator "another locator" and a panel reading "No Locator" over the last good RSSI. **No recovery inside the app** short of dropping the BLE link | `RocketViewModel.kt:1232` — `_connectedLocatorId.value == null` gates the passive challenge | `ChallengePolicy.Trigger.credentialsChanged`: an unauthorized frame **from the holder itself** releases the connection (a stale belief, not something to protect) and prompts, asking even though something was connected and even if that locator was declined before. A *stranger* still cannot knock out a standing connection |
-| 2 | **Connect / pick buttons stay live while a change is in flight, and the channel is staged before the send is accepted.** The second tap is refused by the in-flight guard and does nothing at all; meanwhile the Receiver channel field shows a channel the app never visited, with an enabled Update button offering to apply it | `CommunicationScreen.kt:1043` — hit-row `Button` with no `enabled`; `:307-309` and `:352-354` — `stagedReceiverChannel` written *before* the guarded `pointReceiverAtChannel` | `pointReceiverAtChannel` returns whether the change went out; callers stage only on success. Search Connect and survey pick are disabled while the change they would make is in flight |
+| 2 | **Connect / pick buttons stay live while a change is in flight, and the channel is staged before the send is accepted.** The second tap is refused by the in-flight guard and does nothing at all; meanwhile the Receiver channel field shows a channel the app never visited, with an enabled Update button offering to apply it | `CommunicationScreen.kt:1043` — hit-row `Button` with no `enabled`; `:307-309` and `:352-354` — `stagedReceiverChannel` written *before* the guarded `pointReceiverAtChannel` | `pointReceiverAtChannel` returns whether the change was **accepted for sending** — i.e. whether the in-flight guard passed, not whether the write reached the receiver (see the iOS gap below); callers stage only on success. Search Connect and survey pick are disabled while the change they would make is in flight |
 | 3 | **The released locator's configuration is left on screen.** After a receiver-only channel change the Locator channel field goes on showing the *previous* locator's channel, and corrects only when a `PreLaunchData` from the new one is admitted — so a locator that is never admitted leaves it wrong indefinitely. Reported 2026-08-29: receiver reading 48, locator field reading 34, two real locators on two real channels | `RocketViewModel.kt:1245-1263` — `beginChannelChangeRecognition` clears ten fields and **not** `_remoteLocatorConfig` | `remoteLocatorConfig = LocatorConfig()` on release, matching what `clearLiveReadouts` already does when the link drops |
 | 4 | **The candidate list's middle is order-unstable between runs.** `knownChannels` comes from a protobuf map whose iteration order is unspecified, so which remembered channels survive the 16-channel cap — and in what order — can differ between two runs with identical stored state. With more than 14 remembered locators it changes which channels are actually searched | `RocketViewModel.kt:903` — `.values.mapNotNull { … }` over `knownLocatorsMap` | `searchCandidates` sorts the other locators' channels by id, so the list is reproducible |
 
-#### Known on BOTH platforms, fixed on neither
+#### Known on both platforms — **fixed on Android 2026-08-29, iOS owes the port**
 
 **`ChannelOccupancy.occupantOf` renders `00000000` down the search path** where the survey
-path deliberately reports nothing — full description in the ADR-0029 audit above.
-**Mirrored rather than fixed on iOS**, per "Android is the reference implementation", so
-the two apps still say the same thing. Fix on Android first, then port.
+path deliberately reports nothing — full description in the ADR-0029 audit above. It was
+mirrored rather than fixed here, per "Android is the reference implementation"; Android has
+now moved, so **iOS owes two changes** to `ChannelOccupancy.swift` and
+`ChannelOccupancyTests.swift`:
+
+1. **An anonymous search hit is named, not hexed, and does not swallow the survey.** The
+   two scans part company deliberately. The **survey** still reports nothing: its
+   `locator_id` slots are also zero against pre-ADR-0029 firmware (an 84-byte response
+   carried no ids), so "id 0" there cannot be told from "this receiver does not report
+   ids". The **search** cannot be ambiguous — `LocatorSearchResult` is new and has always
+   carried the field — so a zero means precisely "the frame that was heard carried no id",
+   and the answer is `An unrecognized locator` (`R.string.channels_occupant_unrecognized`,
+   matching what the hit row itself already says). Reachability is much better than this
+   file first claimed: receiver `Communication.cpp` captures a hit for **any** frame that
+   clears `ParseLoraFrame` and fills `sender_id` only from `PreLaunchData` and
+   `TelemetryData`, so a dwell landing on a flight-data transfer, a deployment test or an
+   arm command scores a hit with no id — routine at a launch. The naive fix is wrong: both
+   ports `return` from inside the search branch, so making it yield nothing **skips the
+   survey fallback**, and answering "nobody knows" over an answer the app already holds is
+   worse than the `00000000` it replaced. Fall through instead, and use the label only when
+   the survey has nothing either.
+2. **A hit the run itself calls suspect is not an occupant.** Neither platform consulted
+   `Run.suspectChannels` here, so a near-field phantom — the 57-reported-on-17 artifact the
+   `snr` field exists for — was named as the occupant of a channel that is free, in **red**,
+   under the words "moving here would put two locators on one channel" — while the hit row
+   three inches above flagged that same row `· likely false hit`. The screen contradicted
+   itself and talked the user out of a good channel. The firmware reports at most one hit
+   per channel per run, so dropping the suspect one leaves the channel to the survey rather
+   than to a second hit.
+
+Android side: `ChannelOccupancy.kt`, `CommunicationScreen.kt` (both call sites pass
+`unrecognizedLabel`), `strings.xml`, and three new cases in `ChannelOccupancyTest.kt`.
+
+#### ⚠️ iOS OWES THIS — the armed refusal is only reachable by pressing
+
+Android greys both scan buttons while the locator is armed or flying and shows the reason
+above them (2026-08-30); iOS still offers the buttons and surfaces the refusal only after a
+press. Mirror the **receiver's** condition — armed, or a flight state that is neither
+`waitingLaunch` nor `landed` — not the flight panel's "in flight", which counts `landed` as
+flying and would grey out a scan the receiver would have run. The receiver's gate stays the
+real one; this is an affordance.
+
+#### ⚠️ iOS OWES THIS — a scan's silence reads as a missing locator
+
+**`MapStatusPanel.locatorText` returns "No Locator" while a scan is running**, the same way
+Android did until 2026-08-30. Its three documented cases have no fourth for "the receiver is
+parked on another channel because the user asked it to be", and a whole-band search is up to
+~90 s of that.
+
+It contradicts the arm control, which stays live throughout — correctly, since ADR-0029
+decision 7 has a queued command end the sweep so an operator's Arm is never silently
+delayed. The panel therefore invites pressing Arm in the belief that nothing can happen, and
+then it happens. That is the inverse of the hazard decision 7 fixed, and worse at a pad.
+
+Android's fix: the locator row reports the scan — `Searching…` for a locator search,
+`Scanning…` for a survey — before it considers reporting an absence. `locatorText` is
+already static "so the rule can be tested without a view"; the scan state belongs in it as a
+fourth case, ahead of the freshness test, with a case in the panel's tests.
+
+**Do not "fix" the arm gate instead.** Gating arm/disarm on freshness rather than on the
+connection would put back an Arm that appears to do nothing during a sweep.
+
+#### ⚠️ iOS OWES THIS — the survey section hides its own scan
+
+**`CommunicationView.swift:129` gates the survey section on `hearingLocator` alone**, the
+same way Android did until 2026-08-30. A sweep leaves the receiver deaf for ~7.8 s, which
+is longer than the 5 s silence window that gate is judged on, so the section hides itself
+about five seconds into its own scan — taking the *"Scanning…"* indicator with it — and
+reappears with the results once broadcasts resume. Reported from the Android bench as the
+indicator vanishing and results arriving three or four seconds later; nothing was slow, the
+screen had stopped saying what it was doing.
+
+Android now reads `hearingLocator || surveyInProgress || channelSurvey != null`. The third
+term is load-bearing, not cautious: without it the section hides again at the instant the
+results land — the sweep has ended, so in-progress is false, while the locator's next
+broadcast is still up to a second away — and flickers back a moment later. Results do not
+outlive the visit on either platform; the entry-time clear drops them, with the same
+*except one still running* exception.
+
+The rule the gate encodes (ADR-0029: the sweep is offered only while a locator is heard) is
+unchanged. It is about **offering** a scan, and was being applied to one already under way
+— the same mistake, in the same file, that clearing the scans unconditionally on entry made
+in the other direction.
+
+#### ⚠️ iOS OWES THIS — the channel being left reclaims the connection mid-move
+
+**`admit`'s `.accepted` branch clears `awaitingChannelRecognition` and takes the
+connection with no test on which channel the frame was relayed from.** Reported on
+Android 2026-08-29 and fixed there; iOS has the identical hole and owes the port.
+
+`beginChannelChangeRecognition` releases the connection *before* the change goes out, so
+between the BLE write and the receiver's retune the slot is empty and **the locator being
+left is still broadcasting on the old channel at 1 Hz**. Those frames are authorized,
+`gate.evaluate` accepts them into the empty slot, and `.accepted` switches off the very
+recognition cycle the move armed. The frame that then arrives from the new channel finds
+nothing armed and gets the passive treatment — a conflict banner, and **no password
+prompt**, for a locator whose password the app does not hold.
+
+Reported sequence: four locators on four channels, connected to Twist 0 on 34, Connect
+tapped on Twist Lock 5's search hit on 60. Receiver channel reads 60, Locator channel
+still reads 34 (repopulated from the old locator's own broadcast), conflict banner up,
+no prompt — and the banner's own Connect action raises the prompt and works, which is
+what makes it look like one route works and the other is broken. **Intermittent**, because
+it is a race against a 1 Hz broadcast landing in a window of a few hundred milliseconds.
+
+Android's fix is `LocatorConnection.isFromChannelBeingLeft(frameChannel:previousChannel:
+awaitingRecognition:moveInFlight:)` — pure, five cases in `LocatorConnectionTest`, called
+from the authorized branch after the name and last-heard channel are recorded (those are
+true facts about a locator we are authorized for, and the search runs on them) and before
+`mayConnect`. Three details the port must keep:
+
+- **The discriminator is the receiver's channel stamp** (ADR-0011 invariant 3), which iOS
+  already threads into `admit` as `receiverChannel`. A frame stamped with the channel
+  being left says nothing about the one being moved to.
+- **A frame with no stamp waits too.** `TelemetryData` cannot be placed during the window,
+  and guessing is the bug. An armed locator on the new channel is admitted a few seconds
+  later when the move resolves, and could not have raised a challenge meanwhile anyway.
+- **The window is bounded by the config exchange, not by the recognition flag.** The flag
+  may never resolve — a move onto an empty channel — and suppressing on it alone would
+  leave the app deaf to the locator it still has. Android uses
+  `receiverConfigMessageState != Idle`, which always returns to idle whether the move is
+  acknowledged or times out; `ChannelChangeRecognitionTests` is where the iOS equivalent
+  belongs.
+
+Full account in ADR-0011, "The channel being left keeps broadcasting into the slot the
+move just opened".
+
+#### ⚠️ iOS OWES THIS — a gap found while auditing the "Android owes" list
+
+**Every `transport.send` result is discarded, so a failed write is reported as `Sent`.**
+`BluetoothTransport.send` returns `Bool` — false when the peripheral, the write
+characteristic or the `.ready` state is missing — and is marked `@discardableResult`, so
+the compiler never complains. All 17 call sites in `LinkViewModel.swift` ignore it, and
+`changeReceiverConfig` sets `receiverConfigMessageState = .sent` unconditionally on the
+line after the call.
+
+**Android does check.** `RocketViewModel.pointReceiverAtChannel` reads
+`if (service?.changeReceiverConfig(target) == true) Sent else SendFailure`, so a write that
+never left surfaces immediately. On iOS the same failure is invisible for five seconds and
+then arrives as a generic read-back timeout, which names the wrong cause: "the receiver did
+not acknowledge" rather than "nothing was sent".
+
+This is **pre-existing, not introduced by the Communication screen** — it predates the
+ADR-0029 port and touches every outbound message, not only the channel change. It is
+recorded here because it is what makes the "Android owes #2" row above an overstatement:
+iOS's `pointReceiverAtChannel` reports that the in-flight guard passed, which is a weaker
+claim than "the change went out". The user-visible half of that fix — staging only after
+the guard — is real and Android genuinely owed it.
+
+*Closes when* `send`'s result is checked at the sites that have a failure state to set
+(`changeReceiverConfig`, `changeLocatorConfig`, the arm/disarm and deployment-test paths),
+with `@discardableResult` kept only for the fire-and-forget sends that have nowhere to
+report to. `transport` is a `private let` concrete `BluetoothTransport`, so covering this
+with a test needs it injected behind a protocol first.
 
 #### iOS-only, nothing owed to Android
 
@@ -1553,8 +1706,8 @@ silently did nothing" failure this screen exists to avoid. Worse, the *view* sta
 channel **before** asking, so the Receiver channel field showed a channel the app had
 never visited, with an enabled Update button offering to apply it.
 
-`pointReceiverAtChannel` now returns whether the change actually went out and the callers
-stage only on success; the search's Connect and the survey's pick are disabled while the
+`pointReceiverAtChannel` now returns whether the change was accepted for sending — the
+in-flight guard passed — and the callers stage only on success; the search's Connect and the survey's pick are disabled while the
 change they would make is in flight. **Android has the same defect** — its
 `LocatorSearchSection` hit row is a bare `Button` with no `enabled`, and its `onPick`
 stages `stagedReceiverChannel` before calling a `pointReceiverAtChannel` with the same

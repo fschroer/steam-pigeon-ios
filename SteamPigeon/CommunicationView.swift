@@ -462,10 +462,11 @@ struct LocatorSearchSection: View {
                     "Listens on the channels your locators were last seen on. Use this "
                     + "when a locator is powered up but nothing is coming through.",
                     "Search all 64 channels appears once a shorter search has finished. It "
-                    + "sweeps the whole band — about 80 seconds, during which the receiver "
-                    + "hears nothing — and is worth it when the locator is not on any "
-                    + "channel the app knows to try, or when you are looking for one it "
-                    + "has never met.",
+                    + "sweeps the whole band — up to about 90 seconds, during which the "
+                    + "receiver hears nothing, and less when it finds locators along the "
+                    + "way, since it moves on as soon as a channel answers — and is "
+                    + "worth it when the locator is not on any channel the app knows to "
+                    + "try, or when you are looking for one it has never met.",
                     "Connecting points the receiver at that channel, and takes effect "
                     + "straight away. Your locator stays where it is, and you will be "
                     + "asked for its password if the app does not know it yet.",
@@ -546,7 +547,7 @@ struct LocatorSearchSection: View {
 
             ChannelNote(run?.wholeBand == true
                         ? "Listening on channel \(max(run?.searched ?? 1, 1)) of "
-                          + "\(run?.total ?? 0) — a full sweep takes about 80 seconds."
+                          + "\(run?.total ?? 0) — a full sweep takes up to about 90 seconds."
                         : "Listening on channel \(max(run?.searched ?? 1, 1)) of "
                           + "\(run?.total ?? 0)…",
                         SPColor.onSurfaceVariant)
@@ -661,11 +662,12 @@ struct LocatorSearchSection: View {
             switch run.status {
             case .refusedArmed:
                 ChannelNote("The locator is armed or in flight. Searching would leave the "
-                            + "receiver deaf for up to a minute, so it is refused until it "
-                            + "lands and disarms.", SPColor.error)
+                            + "receiver deaf for up to a minute and a half, so it is "
+                            + "refused until it lands and disarms.", SPColor.error)
             case .refusedBusy:
-                ChannelNote("The receiver is busy — a scan or a flight data transfer is "
-                            + "already running. Try again when it finishes.", SPColor.error)
+                ChannelNote("The receiver is busy — a scan, a flight data transfer, or a "
+                            + "command still on its way to the locator. Try again in a "
+                            + "moment.", SPColor.error)
             case .cancelled:
                 ChannelNote("Search stopped. If you did not stop it, a command you sent to "
                             + "the locator did — the receiver has to be back on your "

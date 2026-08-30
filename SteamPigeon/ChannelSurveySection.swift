@@ -75,10 +75,11 @@ struct ChannelSurveySection: View {
                         + "second, and the channel cannot be changed while armed. Disarm "
                         + "first.", SPColor.error)
         case .refusedBusy:
-            ChannelNote("A flight data transfer is in progress. Try again when it "
-                        + "finishes.", SPColor.error)
+            ChannelNote("The receiver is busy — a flight data transfer, or a command "
+                        + "still on its way to the locator. Try again in a moment.",
+                        SPColor.error)
         // Not an error: the scan gave way to something the user asked for. Its own message,
-        // never `refusedBusy`'s — that one claims a flight data transfer is in progress,
+        // never `refusedBusy`'s — that one is about the receiver being unable to start,
         // which would be a plain lie about what just happened.
         case .cancelled:
             ChannelNote("Scan stopped so your command could reach the locator. Scan again "
