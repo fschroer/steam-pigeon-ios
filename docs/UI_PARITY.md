@@ -1564,52 +1564,118 @@ in the other direction.
 
 **`LinkViewModel.recoverLocatorChannel` fires on the absence of a confirmation, and that
 condition does not distinguish two opposite failures.** Landed on Android and in the
-firmware on 2026-08-30; iOS carries the defect identically and owes the port. The full
-reasoning is in **ADR-0011, amendment "revert on evidence, not on silence"** — read that
-first, because the fix is a behaviour change and not a transliteration.
+receiver firmware 2026-08-30 and then **bench-validated across four passes, which changed
+the design four times** — read [ADR-0011](../../Locator/docs/adr/0011-locator-lora-channel-from-app.md)'s
+amendment *"revert on evidence, not on silence"* before writing anything. This is a
+behaviour change, not a transliteration, and every correction below came from hardware
+rather than from review.
 
-The short form. There is no acknowledgement message: a move is confirmed by inference from
-the next `PreLaunchData` relayed on the new channel. So what goes missing on a "failed"
-move is a *broadcast*, and two states produce the same silence — the locator missed the
-command and stayed behind while the receiver followed (a real split), or everything moved
-and the confirmation was late. Reverting is correct for the first and **manufactures** the
-split for the second, in the direction that strands the rocket, because the locator's move
-is flash-persistent.
+**Updated 2026-08-30 after issue #20 closed.** An earlier version of this entry described
+the first cut. Do not port that; port what is here.
 
-What iOS needs, mirroring Android:
+The short form. There is no acknowledgement message — a move is confirmed by inference from
+the next `PreLaunchData` relayed on the new channel. So what goes missing on a "failed" move
+is a *broadcast*, and two states produce the same silence: the locator missed the command
+and stayed behind while the receiver followed (a real split), or everything moved and the
+confirmation was late. Reverting is correct for the first and **manufactures** the split for
+the second, in the direction that strands the rocket, because the locator's move is
+flash-persistent.
 
-1. **A transmit receipt re-bases the confirm window.** The receiver now emits a
-   `ReceiverInfo` when it follows a locator change on its own initiative (it always
-   answered a `ReceiverCfgChgRequest` with one; the follow was silent). Reaching that code
-   proves the forward *transmitted*. Start the confirm window from that message rather
-   than from the BLE write — on a lossy channel the old fixed window was spent waiting for
-   a forwarding window before the command was even on air. Match on the channel: a receipt
-   carrying the *old* channel is the recovery revert answering, and must not re-base
-   anything. **Use it only to re-base, never to short-circuit** — its absence is ambiguous
-   against a receiver predating the change.
-2. **Probe before reverting.** On timeout, run one `LocatorSearchRequest` over exactly two
-   channels — new first, then old — as a **census** (`target_locator_id = 0`) so both
-   dwells always run. Port `ChannelMove.verdict` as a pure function with its tests: it
-   keeps only hits carrying the connected locator's id and compares the two channels by
-   `rssi + snr`. A single hit is not enough — a locator a few feet from the receiver
-   decodes on channels it is nowhere near and the artifact reads as *strong* — and a tie
-   is `NoEvidence`, never a revert.
-3. **Act on the verdict.** `Confirmed` → report success, revert nothing. `LocatorStayed` →
-   the existing revert-and-retry, now evidenced. `NoEvidence` → report not acknowledged and
-   leave the receiver on the new channel, which is where the search's own home-restore puts
-   it.
-4. **Relink on evidence.** The wait after the revert must require a frame admitted *after*
-   the revert was asked for. Testing the two channel readings alone passes on the first
-   poll having verified nothing, because both are updated only by a relayed
-   `PreLaunchData` — the very thing whose absence started all this.
-5. **Dismissing the failure banner must not discard the staged channel.** It is what puts
-   the unconfirmed move into the search candidates, so clearing the error threw away the
-   one channel worth searching for the locator that error was about.
+##### What to port, in dependency order
 
-Android reference: `ChannelMove.kt` + `ChannelMoveTest.kt` (11 tests), and
-`RocketViewModel.resolveChannelMove` / `probeChannelMove` / `recoverLocatorChannel`.
-**None of it is bench-measured on either platform** — the measurement is the first added
-criterion on locator issue #20.
+1. **A transmit receipt re-bases the confirm window — and is LATCHED.** The receiver now
+   emits a `ReceiverInfo` when it follows a locator change on its own initiative (it always
+   answered a `ReceiverCfgChgRequest`; the follow was silent). Reaching that code proves the
+   forward *transmitted*. Start the confirm window from it rather than from the BLE write.
+   Match on the channel — a receipt carrying the *old* channel is the recovery revert
+   answering and must not re-base.
+
+   **Latch it: only the FIRST match may re-base, and cap the wait absolutely.** iOS has the
+   same 2 s `ReceiverInfo` poll while the locator is silent, which is exactly the state an
+   unconfirmed move is in. Re-basing on every reply pushed the deadline out 5 s each time,
+   and 2 s < 5 s meant **the window never closed** — banner stuck on "Moving to channel N…",
+   probe never ran, receiver left on the new channel with the locator on the old one. A lost
+   locator, reintroduced by the fix for lost locators. Port `ChannelMove.confirmDeadline`
+   and its tests; the cap is the second guard because the latch should not have to be right
+   alone.
+
+   **Use the receipt only to re-base, never to short-circuit.** Its absence is ambiguous
+   against a receiver predating it.
+
+2. **Probe before reverting, as a census.** On timeout, one `LocatorSearchRequest` over
+   exactly two channels — new first, then old — with `target_locator_id = 0` so **both**
+   1.4 s dwells always run. Never a targeted run that stops on the first hit: a locator a
+   few feet from the receiver decodes on channels it is nowhere near and the artifact reads
+   as *strong* (ADR-0029, bench 2026-08-28), so the decision must compare two dwells by
+   `rssi + snr`. A tie is `NoEvidence`, never a revert. This probe runs while the user is
+   holding the locator, which is exactly the range that produces the artifact.
+
+3. **A refused probe is not an empty one.** The receiver refuses a `LocatorSearchRequest`
+   while an operator command is queued, and `IsOperatorCommand` counts a
+   `LocatorCfgChgRequest` as one. With the locator silent the forward can never leave, so
+   **the undelivered command blocks the very probe that would explain why it was
+   undeliverable**, until `kPendingTxStaleMs` (10 s) drops it — and the first probe lands
+   ~5 s in. Return a distinct **`NotChecked`** verdict and re-ask once after ~6 s, sized to
+   outlast that drop. Treating the refusal as "heard nothing" is the app mistaking its own
+   blindness for the locator's absence.
+
+4. **Ask silence twice.** A `NoEvidence` verdict re-probes once before it is accepted —
+   ADR-0029's *zero frames proves nothing* applies directly, since one 1.4 s dwell can miss
+   a 1 Hz burst, and `NoEvidence` is the branch that ends with the receiver on a channel
+   nothing has been heard on.
+
+5. **Act on the verdict.** `Confirmed` → success, revert nothing. `LocatorStayed` → revert
+   and retry once. `NoEvidence` / `NotChecked` → report and move nothing.
+
+6. **The retry is not exempt from the rule.** The retried `LocatorCfgChgRequest` is itself a
+   single unacknowledged frame on the channel being left, and the receiver follows it
+   regardless — so losing it reproduces the split one layer down. Measured at **~1 run in 8**
+   before it was fixed. After the retry's timeout, probe **once more**; on `LocatorStayed`
+   put the receiver back so the run ends together rather than split. The invariant: *a failed
+   move never ends with the receiver on a channel the probe did not confirm.* Bounded — no
+   recursion, no second retry.
+
+7. **Relink on evidence.** The wait after a revert must require a frame admitted *after* the
+   revert was asked for. Both channel readings are updated only by a relayed `PreLaunchData`,
+   so testing them alone passes on the first poll having verified nothing.
+
+##### The messages, which is where three of the six defects were
+
+Port `ChannelMove.message` and its tests rather than branching inline. **No sentence may
+claim the receiver is somewhere the app has not read.**
+
+- *"left on its previous channel"* — true after an evidenced revert, false on the path that
+  leaves the receiver on the new channel.
+- *"the receiver is on channel N"* — must name the channel actually **reported**, not the one
+  aimed at. When the forward never transmitted the receiver never left, and the message named
+  the wrong one.
+- **"Nothing moved" deserves its own sentence, in ordinary text and not error colour**:
+  *"The locator did not respond, so nothing was moved. The receiver is still on channel N —
+  power the locator up and the link should resume."* That is a much smaller problem than a
+  stranded locator and the user should not have to work out which they have.
+- **The banner must outlive the state that produced it.** The terminal state resets to Idle
+  on a 2 s timer, so the outcome of a cycle that can run ~23 s was legible for two. Hold it
+  until dismissed or superseded.
+- **Dismissing the banner must not discard the staged channel.** It is what puts the
+  unconfirmed move into the ADR-0029 search candidates, so clearing the error threw away the
+  one channel worth searching. Keep the banner's channel and the search-candidate channel as
+  two separate things — conflating them also made a *successful* move clear its own "Now on
+  channel N" in the same instant.
+
+##### Reference and status
+
+Android: `ChannelMove.kt` (`verdict` / `action` / `confirmDeadline` / `relinked` / `message`
+/ `probeChannels`, all pure), `ChannelMoveTest` (11) + `ChannelMoveOrchestrationTest` (16),
+and `RocketViewModel.resolveChannelMove` / `probeChannelMove` / `runProbe` /
+`recoverLocatorChannel`.
+
+**Port the pure object and both test files first** — every one of the six defects was found
+by hand on a bench because the logic sat inside a coroutine nothing could reach, and the
+tests are the part that stops iOS repeating the sequence. The orchestration around them is
+still uncovered on both platforms.
+
+Issue #20 is closed: criteria 1, 2, 3, 5 pass on hardware; 4 was retired as unreachable.
+**None of this is bench-validated on iOS.**
 
 #### ⚠️ iOS OWES THIS — the channel being left reclaims the connection mid-move
 
