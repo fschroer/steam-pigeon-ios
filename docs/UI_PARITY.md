@@ -1664,15 +1664,24 @@ claim the receiver is somewhere the app has not read.**
 
 ##### Reference and status
 
-Android: `ChannelMove.kt` (`verdict` / `action` / `confirmDeadline` / `relinked` / `message`
-/ `probeChannels`, all pure), `ChannelMoveTest` (11) + `ChannelMoveOrchestrationTest` (16),
-and `RocketViewModel.resolveChannelMove` / `probeChannelMove` / `runProbe` /
-`recoverLocatorChannel`.
+Android, in the order to port them:
 
-**Port the pure object and both test files first** — every one of the six defects was found
-by hand on a bench because the logic sat inside a coroutine nothing could reach, and the
-tests are the part that stops iOS repeating the sequence. The orchestration around them is
-still uncovered on both platforms.
+- **`ChannelMove.kt`** — the individual decisions, all pure: `verdict` / `action` /
+  `confirmDeadline` / `relinked` / `message` / `probeChannels`. Pinned by
+  `ChannelMoveTest` (11) and `ChannelMoveOrchestrationTest` (16).
+- **`ChannelMoveRunner.kt`** — the **sequence**: how many times to look, what may move,
+  in what order. Holds no state, no timing, no flows and no platform types; every side
+  effect goes through its `Ops` interface. Pinned by `ChannelMoveRunnerTest` (17), which
+  drives it against a scripted fake and asserts the exact call order.
+- **`RocketViewModel.channelMoveOps`** — the live side: the search, the two BLE writes,
+  the two waits, the clock. This is the only part with a service in scope, and the only
+  part still uncovered.
+
+**Port the two data files and all three test suites first.** Every one of the six defects
+was found by hand on a bench because the sequence sat inside a coroutine holding a service
+and nothing could reach it. On iOS the same logic is inside `LinkViewModel`; splitting it
+the same way is most of the work, and the tests are what stop iOS rediscovering the
+sequence one bench run at a time.
 
 Issue #20 is closed: criteria 1, 2, 3, 5 pass on hardware; 4 was retired as unreachable.
 **None of this is bench-validated on iOS.**
