@@ -102,9 +102,19 @@ enum TrackRecording {
 
     /// True when this fix merely repeats the last one.
     ///
-    /// EXACT equality, and nothing looser. In flight the locator transmits at ~5 Hz
-    /// while its position payload refreshes at ~1 Hz, so about five consecutive frames
-    /// carry one fix; the job is to drop exactly those and nothing else.
+    /// EXACT equality, and nothing looser.
+    ///
+    /// This carried Android's original rationale — ~5 Hz transmits against a ~1 Hz
+    /// payload refresh, so four frames in five repeat a fix — and that was wrong on
+    /// both platforms. **The locator transmits once per second**: a 20 Hz superloop
+    /// whose `case 2` is the only branch reaching the radio. There is no 5x stream.
+    ///
+    /// The duplication this guards against is the same payload being handled more
+    /// than once (on Android, a leaked packet collector; the shape is platform-
+    /// specific, the guard is not). It also catches the genuine 1 Hz case where the
+    /// GPS fix has not advanced between two transmits — the rarer one, since the test
+    /// includes baro altitude and two independent frames rarely agree on it exactly.
+    /// The job is to drop exactly those and nothing else.
     static func repeatsFix(_ last: TrackPoint?,
                            latitude: Double, longitude: Double, altitudeM: Float) -> Bool {
         guard let last else { return false }

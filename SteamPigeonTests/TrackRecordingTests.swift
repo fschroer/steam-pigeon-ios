@@ -10,8 +10,8 @@ final class TrackRecordingTests: XCTestCase {
 
     // MARK: - Dedup
 
-    /// In flight the locator transmits at ~5 Hz while its position payload refreshes at
-    /// ~1 Hz, so about five consecutive frames repeat one fix. Drop exactly those.
+    /// The locator transmits at 1 Hz, so this is not dropping four frames in five —
+    /// see `TrackRecording.repeatsFix`. It drops the same payload handled twice.
     func testAnIdenticalFixIsARepeatAndTheFirstIsNot() {
         let p = TrackPoint(latitude: 47.6146, longitude: -122.5526, altitudeM: 100,
                            timestampMs: 1_700_000_000_000)
