@@ -386,9 +386,9 @@ final class LinkViewModel: ObservableObject {
 
     /// Android's `SEARCH_SILENCE_TIMEOUT_MS`.
     ///
-    /// A **silence** timeout, not a run-length one. A whole-band run is ~77 s — far
+    /// A **silence** timeout, not a run-length one. A whole-band run is up to ~90 s — far
     /// longer than any fixed timeout that would still catch a receiver going quiet — but
-    /// it reports every ~1.2 s, so silence between messages is the thing worth watching.
+    /// it reports every ~1.4 s, so silence between messages is the thing worth watching.
     private static let searchSilenceTimeout: TimeInterval = 8
 
     private var searchTimeoutTask: Task<Void, Never>?
@@ -495,7 +495,7 @@ final class LinkViewModel: ObservableObject {
     ///
     /// Clearing unconditionally was worse. `onLocatorSearchResult` drops every message
     /// that arrives while the run is nil, so wiping a run in flight orphaned it: the
-    /// receiver went on sweeping — deaf, for up to 77 s — while the app ignored the
+    /// receiver went on sweeping — deaf, for up to ~90 s — while the app ignored the
     /// stream and the terminator alike, and the search simply appeared to die on leaving
     /// the screen. Anything still running is therefore left exactly as it is.
     func clearScansForNewVisit() {

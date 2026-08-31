@@ -50,8 +50,8 @@ final class ChannelSurveyTests: XCTestCase {
 
     // MARK: - Only confirmed channels may be suggested
 
-    /// The coarse pass dwells ~12 ms while a locator is on air ~138 ms per second, so it
-    /// reads an occupied channel as quiet about three times in four. Suggesting an
+    /// The coarse pass dwells ~12 ms while a disarmed locator is on air ~200 ms per
+    /// second, so it reads an occupied channel as quiet about four times in five. Suggesting an
     /// unconfirmed channel is how a sweep recommends the channel already in use.
     func testAnUnconfirmedChannelIsNeverSuggestedHoweverQuietItLooks() {
         var levels = [Int](repeating: -100, count: WireProtocol.surveyChannelCount)

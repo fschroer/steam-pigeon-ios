@@ -101,8 +101,8 @@ enum ChannelSurvey {
         let homeChannel: Int
         /// Channels the receiver dwelled on for a full broadcast period. **Only these
         /// are evidence that a channel is free**: the coarse pass dwells ~12 ms while a
-        /// locator is on air ~138 ms per second, so it reads an occupied channel as
-        /// quiet about three times in four.
+        /// disarmed locator is on air ~200 ms per second, so it reads an occupied
+        /// channel as quiet about four times in five.
         let confirmed: [Ranked]
 
         /// Channels to offer, quietest first.

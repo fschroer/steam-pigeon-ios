@@ -1560,6 +1560,57 @@ unchanged. It is about **offering** a scan, and was being applied to one already
 — the same mistake, in the same file, that clearing the scans unconditionally on entry made
 in the other direction.
 
+#### ⚠️ iOS OWES THIS — a channel move reverts the receiver on silence, not on evidence
+
+**`LinkViewModel.recoverLocatorChannel` fires on the absence of a confirmation, and that
+condition does not distinguish two opposite failures.** Landed on Android and in the
+firmware on 2026-08-30; iOS carries the defect identically and owes the port. The full
+reasoning is in **ADR-0011, amendment "revert on evidence, not on silence"** — read that
+first, because the fix is a behaviour change and not a transliteration.
+
+The short form. There is no acknowledgement message: a move is confirmed by inference from
+the next `PreLaunchData` relayed on the new channel. So what goes missing on a "failed"
+move is a *broadcast*, and two states produce the same silence — the locator missed the
+command and stayed behind while the receiver followed (a real split), or everything moved
+and the confirmation was late. Reverting is correct for the first and **manufactures** the
+split for the second, in the direction that strands the rocket, because the locator's move
+is flash-persistent.
+
+What iOS needs, mirroring Android:
+
+1. **A transmit receipt re-bases the confirm window.** The receiver now emits a
+   `ReceiverInfo` when it follows a locator change on its own initiative (it always
+   answered a `ReceiverCfgChgRequest` with one; the follow was silent). Reaching that code
+   proves the forward *transmitted*. Start the confirm window from that message rather
+   than from the BLE write — on a lossy channel the old fixed window was spent waiting for
+   a forwarding window before the command was even on air. Match on the channel: a receipt
+   carrying the *old* channel is the recovery revert answering, and must not re-base
+   anything. **Use it only to re-base, never to short-circuit** — its absence is ambiguous
+   against a receiver predating the change.
+2. **Probe before reverting.** On timeout, run one `LocatorSearchRequest` over exactly two
+   channels — new first, then old — as a **census** (`target_locator_id = 0`) so both
+   dwells always run. Port `ChannelMove.verdict` as a pure function with its tests: it
+   keeps only hits carrying the connected locator's id and compares the two channels by
+   `rssi + snr`. A single hit is not enough — a locator a few feet from the receiver
+   decodes on channels it is nowhere near and the artifact reads as *strong* — and a tie
+   is `NoEvidence`, never a revert.
+3. **Act on the verdict.** `Confirmed` → report success, revert nothing. `LocatorStayed` →
+   the existing revert-and-retry, now evidenced. `NoEvidence` → report not acknowledged and
+   leave the receiver on the new channel, which is where the search's own home-restore puts
+   it.
+4. **Relink on evidence.** The wait after the revert must require a frame admitted *after*
+   the revert was asked for. Testing the two channel readings alone passes on the first
+   poll having verified nothing, because both are updated only by a relayed
+   `PreLaunchData` — the very thing whose absence started all this.
+5. **Dismissing the failure banner must not discard the staged channel.** It is what puts
+   the unconfirmed move into the search candidates, so clearing the error threw away the
+   one channel worth searching for the locator that error was about.
+
+Android reference: `ChannelMove.kt` + `ChannelMoveTest.kt` (11 tests), and
+`RocketViewModel.resolveChannelMove` / `probeChannelMove` / `recoverLocatorChannel`.
+**None of it is bench-measured on either platform** — the measurement is the first added
+criterion on locator issue #20.
+
 #### ⚠️ iOS OWES THIS — the channel being left reclaims the connection mid-move
 
 **`admit`'s `.accepted` branch clears `awaitingChannelRecognition` and takes the

@@ -47,7 +47,7 @@ final class LocatorSearchTests: XCTestCase {
     }
 
     /// The sources overlap constantly: a locator's last channel is usually the one the
-    /// receiver is still on. A duplicate would spend 1.2 s proving the same thing twice.
+    /// receiver is still on. A duplicate would spend 1.4 s proving the same thing twice.
     func testDuplicatesCollapse() {
         let c = LocatorSearch.candidates(currentChannel: 12, targetChannel: 12,
                                          knownChannels: [12, 12], attemptedChannel: 12)
@@ -377,7 +377,7 @@ final class LocatorSearchLifecycleTests: XCTestCase {
     }
 
     /// **A visit must never orphan a running search.** Clearing unconditionally left the
-    /// receiver sweeping — deaf, for up to 77 s — while the app ignored the stream and
+    /// receiver sweeping — deaf, for up to ~90 s — while the app ignored the stream and
     /// the terminator alike, because every result arriving against a nil run is dropped.
     func testAVisitLeavesARunningSearchAloneAndClearsAFinishedOne() {
         let m = LinkViewModel()

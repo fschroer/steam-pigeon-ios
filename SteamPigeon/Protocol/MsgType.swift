@@ -93,7 +93,7 @@ enum MsgType: UInt8, CaseIterable {
     case locatorSearchRequest = 23
     /// Receiver→app: one result per channel searched, plus a terminator.
     ///
-    /// **Streamed**, unlike the survey's single response: a whole-band run is ~77 s,
+    /// **Streamed**, unlike the survey's single response: a whole-band run is up to ~90 s,
     /// and one answer at the end would leave the app with a dead progress bar and no
     /// way to show a hit the moment it happens.
     case locatorSearchResult = 24
