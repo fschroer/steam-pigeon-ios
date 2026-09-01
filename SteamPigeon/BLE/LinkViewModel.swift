@@ -15,6 +15,10 @@ final class LinkViewModel: ObservableObject {
     @Published private(set) var recent: [String] = []
     @Published private(set) var rejects: [String] = []
     @Published private(set) var probesSent = 0
+    /// ADR-0033. Outbound chunks that were not cleanly delivered. Zero is the normal
+    /// reading; anything else means the link stopped taking writes, and this is the
+    /// only place it can be seen — CoreBluetooth discards such a write in silence.
+    @Published private(set) var droppedWrites = 0
 
     /// Latest decoded broadcast from the locator, whichever kind arrived.
     @Published private(set) var prelaunch: PreLaunchData?
@@ -1558,6 +1562,9 @@ final class LinkViewModel: ObservableObject {
         }
         transport.onBadFrameCount = { [weak self] n in
             Task { @MainActor in self?.badFrames = n }
+        }
+        transport.onDroppedWrites = { [weak self] n in
+            Task { @MainActor in self?.droppedWrites = n }
         }
         transport.onReject = { [weak self] r in
             Task { @MainActor in

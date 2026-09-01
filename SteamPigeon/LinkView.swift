@@ -210,6 +210,10 @@ struct LinkView: View {
                 HStack(spacing: 16) {
                     stat("frames", "\(model.frameCount)")
                     stat("bad CRC", "\(model.badFrames)")
+                    // ADR-0033. Inbound has "bad CRC"; this is its outbound
+                    // counterpart, and it exists for the same reason — a write the
+                    // framework discards is otherwise invisible on this platform.
+                    stat("writes lost", "\(model.droppedWrites)")
                     stat("probes", "\(model.probesSent)")
                 }
 

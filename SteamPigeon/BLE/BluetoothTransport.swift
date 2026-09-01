@@ -68,6 +68,22 @@ final class BluetoothTransport: NSObject {
     /// verify; identifying which of several possible causes it was needs the bytes.
     var onReject: ((PacketFramer.Reject) -> Void)?
 
+    /// Outbound chunks that were **not cleanly delivered** (ADR-0033).
+    ///
+    /// This app has no log to write to, and a write CoreBluetooth discards leaves no
+    /// error, no callback and no trace on the receiver — which is the whole reason
+    /// this defect was invisible here while Android at least got a wrong answer out
+    /// of it. So it is counted, and the diagnostics screen shows the number.
+    ///
+    /// Counted: a message refused because the queue is full, chunks discarded with a
+    /// link, and a write forced past a stalled `peripheralIsReady`. The last belongs
+    /// here because `canSendWriteWithoutResponse` had said the framework could not
+    /// take it, so it is a write we know may not have landed.
+    var onDroppedWrites: ((Int) -> Void)?
+    private(set) var droppedWriteChunks = 0 {
+        didSet { onDroppedWrites?(droppedWriteChunks) }
+    }
+
     // MARK: - State
 
     private(set) var state: TransportState = .idle {
@@ -81,6 +97,13 @@ final class BluetoothTransport: NSObject {
     private var health = ConnectionHealthMonitor()
     private var healthTimer: Timer?
     private var scanWindowTimer: Timer?
+
+    // ADR-0033. Outbound writes are queued and paced by
+    // `canSendWriteWithoutResponse`, because a `.withoutResponse` write issued when
+    // that is false is silently discarded by CoreBluetooth — the same defect Android
+    // had, minus every symptom that made it findable there.
+    private var writeQueue = OutboundWriteQueue()
+    private var stallGuard: Timer?
 
     // Transport identity is `peripheral.identifier` — iOS never exposes a MAC, so
     // Android's `macPrefix = "D8:67"` filter has no counterpart. It is **per-install**:
@@ -131,6 +154,12 @@ final class BluetoothTransport: NSObject {
     /// the second would appear under the user's thumb a moment later. Three seconds is
     /// long enough for both to be heard and short enough not to feel like a hang.
     static let scanWindow: TimeInterval = 3
+
+    /// How long a non-empty queue may wait on `peripheralIsReady` before its head is
+    /// written anyway. Android's `WRITE_TIMEOUT_MS` is 2 s against a write it can
+    /// prove was acknowledged; there is no acknowledgment here, so this guards only
+    /// against the callback never arriving and can be much shorter.
+    static let writeStallTimeout: TimeInterval = 0.25
 
     /// Scan for the receiver by **service UUID**, never by name.
     ///
@@ -273,6 +302,12 @@ final class BluetoothTransport: NSObject {
         if let existing = peripheral, existing.identifier != p.identifier {
             central.cancelPeripheralConnection(existing)
         }
+        // Anything still queued was addressed to the receiver being left, and the
+        // guard in `didDisconnectPeripheral` will not clear it: that handler returns
+        // early once `peripheral` has been reassigned below (ADR-0033).
+        stallGuard?.invalidate()
+        stallGuard = nil
+        droppedWriteChunks += writeQueue.clear()
         peripheral = p
         p.delegate = self
         state = .connecting
@@ -302,18 +337,72 @@ final class BluetoothTransport: NSObject {
     /// `.withoutResponse` is the value that reflects `MTU - 3`. `.withResponse`
     /// reports 512 because CoreBluetooth performs ATT long writes transparently;
     /// it is a long-write capacity, not the MTU.
+    ///
+    /// Returns whether the message was **accepted for transmission**, not whether it
+    /// has been transmitted. `false` means only: the link is not ready, or the queue
+    /// is full because it has stopped draining. Delivery is proved by reading
+    /// something back — ADR-0011's recognition cycle, the search's own terminator —
+    /// never by this result. The same contract as Android's `sendData` (ADR-0033).
     @discardableResult
     func send(_ bytes: [UInt8]) -> Bool {
-        guard let p = peripheral, let ch = writeChar, state == .ready else { return false }
+        guard let p = peripheral, writeChar != nil, state == .ready else { return false }
 
         let chunkSize = max(1, p.maximumWriteValueLength(for: .withoutResponse))
-        var offset = 0
-        while offset < bytes.count {
-            let end = min(offset + chunkSize, bytes.count)
-            p.writeValue(Data(bytes[offset..<end]), for: ch, type: .withoutResponse)
-            offset = end
+        guard writeQueue.enqueue(bytes, chunkSize: chunkSize) else {
+            droppedWriteChunks += OutboundWriteQueue.fragment(bytes, chunkSize: chunkSize).count
+            return false
         }
+        pumpWrites()
         return true
+    }
+
+    /// Drain the queue for as long as CoreBluetooth says it can take a write.
+    ///
+    /// **`canSendWriteWithoutResponse` is the whole fix.** A `.withoutResponse` write
+    /// issued while it is `false` is silently discarded by the framework, so the loop
+    /// this replaced lost messages with nothing to see anywhere: no error, no
+    /// callback, no return value, and no trace on the receiver either, because
+    /// nothing was sent. The flag comes back with
+    /// `peripheralIsReady(toSendWriteWithoutResponse:)`, which resumes the drain.
+    private func pumpWrites() {
+        guard let p = peripheral, let ch = writeChar, state == .ready else {
+            let dropped = writeQueue.clear()
+            droppedWriteChunks += dropped
+            stallGuard?.invalidate()
+            stallGuard = nil
+            return
+        }
+        while p.canSendWriteWithoutResponse, let chunk = writeQueue.dequeue() {
+            p.writeValue(Data(chunk), for: ch, type: .withoutResponse)
+        }
+        armStallGuard()
+    }
+
+    /// Forward progress even if `peripheralIsReady` never arrives.
+    ///
+    /// This is the counterpart of Android's per-write watchdog, owed for the same
+    /// reason: a queue that can stop forever on one missing callback is worse than the
+    /// unpaced writes it replaces. The hazard is concrete rather than theoretical —
+    /// `canSendWriteWithoutResponse` has been reported `false` on a freshly connected
+    /// peripheral until something has been written to it, which is a deadlock by
+    /// construction: nothing is written because the flag is false, and the flag never
+    /// clears because nothing is written.
+    ///
+    /// A stalled queue therefore writes its head anyway, once, best-effort. That write
+    /// may be discarded by the framework — but so is a write that is never made, and
+    /// this one counts itself in `droppedWriteChunks` and gets the drain moving again.
+    private func armStallGuard() {
+        stallGuard?.invalidate()
+        stallGuard = nil
+        guard !writeQueue.isEmpty else { return }
+        stallGuard = Timer.scheduledTimer(withTimeInterval: Self.writeStallTimeout,
+                                          repeats: false) { [weak self] _ in
+            guard let self, let p = self.peripheral, let ch = self.writeChar,
+                  self.state == .ready, let chunk = self.writeQueue.dequeue() else { return }
+            self.droppedWriteChunks += 1
+            p.writeValue(Data(chunk), for: ch, type: .withoutResponse)
+            self.pumpWrites()
+        }
     }
 
     // MARK: - Health watchdog (ADR-0012)
@@ -439,6 +528,13 @@ extension BluetoothTransport: CBCentralManagerDelegate {
         stopHealthWatchdog()
         writeChar = nil
         framer.reset()
+        // A queued write belongs to the connection it was made on (ADR-0033).
+        // Carrying it into the next one is ADR-0011's late-delivery hazard: a request
+        // firing later, out of the flow that queued it, against whatever the receiver
+        // has since been pointed at.
+        stallGuard?.invalidate()
+        stallGuard = nil
+        droppedWriteChunks += writeQueue.clear()
         // A scan window already open means this disconnect is one we asked for on the
         // way to looking again (`rescan()`), and "Disconnected" would replace an
         // accurate "scanning" with a stale verdict for the rest of the window.
@@ -486,6 +582,16 @@ extension BluetoothTransport: CBPeripheralDelegate {
     func peripheralDidUpdateName(_ p: CBPeripheral) {
         guard p.identifier == peripheral?.identifier else { return }
         onNameChange?(connectedName)
+    }
+
+    /// CoreBluetooth can take writes again — resume the drain (ADR-0033).
+    ///
+    /// This callback is the only thing that reliably clears a queue paused by
+    /// `canSendWriteWithoutResponse`, which is why the transport must implement it
+    /// rather than writing in a bare loop and hoping.
+    func peripheralIsReady(toSendWriteWithoutResponse peripheral: CBPeripheral) {
+        guard peripheral.identifier == self.peripheral?.identifier else { return }
+        pumpWrites()
     }
 
     func peripheral(_ p: CBPeripheral, didUpdateValueFor ch: CBCharacteristic, error: Error?) {
