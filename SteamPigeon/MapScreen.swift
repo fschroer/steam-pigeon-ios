@@ -223,7 +223,10 @@ struct MapScreen: View {
                     // Same source as the status panel's locator row, and for the same
                     // reason — Android passes `locatorConfig` to `LocatorStats` too.
                     deviceName: model.remoteLocatorConfig.deviceName,
-                    flightState: t?.flightState ?? .waitingLaunch,
+                    // The model's, not the retained frame's: `t` is the last
+                    // telemetry ever received, which reads `Landed` forever once the
+                    // locator has flown. See `LinkViewModel.flightState`.
+                    flightState: model.flightState,
                     armed: model.armed,
                     inFlight: model.isInFlight,
                     distanceM: model.vector?.distanceM,

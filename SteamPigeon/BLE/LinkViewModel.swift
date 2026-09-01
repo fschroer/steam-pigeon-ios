@@ -1001,10 +1001,22 @@ final class LinkViewModel: ObservableObject {
 
     /// Android's `isInFlight`: armed, OR a flight state other than WaitingLaunch.
     ///
-    /// The second half matters after landing — the locator disarms and returns to
-    /// PreLaunchData, but the flight state stays `Landed`, so speed and attitude keep
-    /// showing. That is exactly when someone is walking out to the rocket.
-    var isInFlight: Bool { armed || (telemetry?.flightState ?? .waitingLaunch) != .waitingLaunch }
+    /// Reads `flightState` — the newest broadcast's — and NOT `telemetry?.flightState`.
+    /// The retained telemetry frame is the last one ever received, so once a locator
+    /// had flown, that reading was `Landed` for the life of the process and the panel
+    /// kept the flight layout over a rocket sitting in its box. This is the same trap
+    /// `armed` fell into below, and it has the same answer.
+    var isInFlight: Bool { armed || flightState != .waitingLaunch }
+
+    /// Flight state from the NEWEST broadcast, for exactly the reason `armed` is.
+    ///
+    /// A `PreLaunchData` means the locator is disarmed AND at `WaitingLaunch` — the
+    /// locator sends it under no other condition (ADR-0021 amendment 2026-09-01,
+    /// which is also what made a disarm resume it at all) — so its arrival is the
+    /// locator saying it is back on the pad. It is the only thing that ever says so:
+    /// flight state rides in `TelemetryData` alone, and the handler below already
+    /// trusts this same invariant when it passes `.waitingLaunch` to `updateVector`.
+    @Published private(set) var flightState: FlightStates = .waitingLaunch
 
     /// Armed state from the NEWEST broadcast.
     ///
@@ -1060,8 +1072,7 @@ final class LinkViewModel: ObservableObject {
         // waiting for launch or has landed. Blocking it here — and SAYING WHY —
         // beats sending a request the locator silently ignores, which reads as the
         // app having done nothing.
-        let state = telemetry?.flightState ?? .waitingLaunch
-        if armed, state != .waitingLaunch, state != .landed {
+        if armed, flightState != .waitingLaunch, flightState != .landed {
             transientMessage = "Can't disarm while the rocket is in flight. Wait until it has landed."
             return
         }
@@ -1448,6 +1459,7 @@ final class LinkViewModel: ObservableObject {
         telemetry = nil
         vector = nil
         armed = false
+        flightState = .waitingLaunch
         connectedLocatorId = nil
         conflictingLocatorIds.removeAll()
         unauthorizedLocatorIds.removeAll()
@@ -1657,6 +1669,7 @@ final class LinkViewModel: ObservableObject {
                     padAlertSnoozeMinutes = m.padAlertSnoozeMinutes
                     remoteLocatorConfig = LocatorConfig.from(m)
                     armed = m.armed                     // newest broadcast wins
+                    flightState = .waitingLaunch        // ...and so does flight state
                     updateVector(lat: m.latitude, lon: m.longitude,
                                  satellites: m.satellites, gpsStatus: m.gpsStatus,
                                  state: .waitingLaunch, altitudeAglM: m.altitudeAgl)
@@ -1687,6 +1700,7 @@ final class LinkViewModel: ObservableObject {
                     padAlert = .quiet
                     padAlertSnoozeMinutes = 0
                     armed = m.armed                     // newest broadcast wins
+                    flightState = m.flightState         // ...and so does flight state
                     updateVector(lat: m.latitude, lon: m.longitude,
                                  satellites: m.satellites, gpsStatus: m.gpsStatus,
                                  state: m.flightState, altitudeAglM: m.altitudeAgl,
@@ -2013,6 +2027,10 @@ final class LinkViewModel: ObservableObject {
         conflictingLocatorIds.remove(locatorId)
         prelaunch = nil
         telemetry = nil
+        // Held separately from the frames above, so it has to be cleared with them —
+        // otherwise the newly connected locator wears the previous one's flight state
+        // until its first broadcast lands.
+        flightState = .waitingLaunch
     }
 
     var stateLabel: String {
