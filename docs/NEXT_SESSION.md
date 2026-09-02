@@ -1,7 +1,33 @@
 # Resume here — iOS port
 
-Updated 2026-08-29. **606 tests passing**, clean build with no warnings from our own
+Updated 2026-08-31. **606 tests passing**, clean build with no warnings from our own
 sources.
+
+## 2026-08-31 — Android gained a screen: App Flight Logs (NOT ported)
+
+The first new Android screen since 2026-08-21, so the standing "every Android screen is
+ported" line now carries an exception. A per-flight CSV of what the *phone* received and
+announced — RSSI/SNR/noise floor per frame plus the app's own verdicts and spoken
+callouts, none of which the locator's archive can hold, because they are measured or
+decided on this side of the radio. See
+[ADR-0030](../../steam-pigeon-locator/docs/adr/0030-app-flight-log.md) and `UI_PARITY.md`
+→ the divergence table.
+
+**Deliberately not ported yet**: it is days old and has never flown. Wait for the Android
+side to record a real flight and for that CSV to be read on a PC — porting a recording
+feature before its first hardware run means debugging two implementations against one
+unknown.
+
+**When it is time**, port `FlightLogRecorder` + `FlightLog` + `FlightLogRecorderTest` as a
+unit. The recorder holds no clock, no Android types and no flows — same shape as
+`ChannelMoveRunner` — and its `Sink` is a protocol Swift has verbatim. Do **not**
+re-derive the close-signal set: landing does not close a log, and neither does a BLE
+dropout, and both are exactly the rules a reimplementation "simplifies" away.
+
+**Related, and cheaper if done together**: Android now routes all nineteen `speak()` sites
+through an `Announcer` facade so callouts reach the log. The flight callouts are still
+unported here; bringing the facade across in the same pass avoids touching those sites
+twice.
 
 ## 2026-08-29 (latest) — changed-password recovery, and two flight-map parity items
 

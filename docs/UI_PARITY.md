@@ -1,12 +1,17 @@
 # Android ⇄ iOS UI parity — inventory, audits and deliberate gaps
 
-**Status, 2026-08-21. Every Android screen is ported.** The flight map, Application
-Settings, Receiver Settings, Locator Settings, Flight Profiles, Download maps and
-Deployment Test. Everything up to Locator Settings has been exercised on hardware; the
+**Status, 2026-08-31. Every Android screen is ported EXCEPT one.** The flight map,
+Application Settings, Receiver Settings, Locator Settings, Flight Profiles, Download maps
+and Deployment Test. Everything up to Locator Settings has been exercised on hardware; the
 three newest screens have been driven on the simulator only — though Download maps has
 downloaded a real region there, which is the half of it that could not be faked.
 
-What remains is **features inside screens**, not screens: the flight TTS callouts, the
+**Android gained an eighth screen on 2026-08-31: App Flight Logs**
+([ADR-0030](../../steam-pigeon-locator/docs/adr/0030-app-flight-log.md)). It is not
+ported, and it is the first time since 2026-08-21 that this line has had an exception —
+which is precisely why it is at the top rather than in a table further down.
+
+What otherwise remains is **features inside screens**: the flight TTS callouts, the
 camera passthrough behind the heads-up gauges, the archived-path map control (unblocked
 by the flight-data transfer layer), and path export. `NEXT_SESSION.md` has the list.
 
@@ -15,10 +20,15 @@ Android and what was found — read the one for the screen you are about to touc
 writing anything, rather than re-deriving it. The **deliberate divergences** are listed
 with what would close each one; every other difference found in this port was a defect.
 
-**The eight deliberate divergences.** Three of the rows below are struck through: two
+**The nine deliberate divergences.** Three of the rows below are struck through: two
 closed on the Android side on 2026-08-21 and one on iOS on 2026-08-29, and all three are
 left in the table as the record of what closed them. Two were added on 2026-08-28 with the
-Communication screen, one on 2026-08-29, and one on 2026-08-30:
+Communication screen, one on 2026-08-29, one on 2026-08-30, and one on 2026-08-31.
+
+The newest is of a different kind from the rest. Every other row is a **rendering** choice
+where iOS idiom wins; this one is an entire Android screen with **no iOS counterpart at
+all**, and it is listed here rather than left to the inventory because this table is what
+gets read before someone concludes a missing screen is a defect:
 
 | Divergence | Why | Closes when |
 |---|---|---|
@@ -32,6 +42,7 @@ Communication screen, one on 2026-08-29, and one on 2026-08-30:
 | The password prompt refuses interactive (swipe) dismissal, where Compose's `AlertDialog` dismisses on an outside tap | Its two buttons mean different things — one connects, the other reverts the receiver to the channel it came from — and a swipe expresses neither. On iOS a swipe is far easier to trigger by accident than a scrim tap, and the consequence here is a channel revert the user did not ask for | never — the asymmetry is in the gesture, not the design |
 | The search's **Looking for** picker is a SwiftUI `Menu` styled as a field, where Android uses `ExposedDropdownMenuBox` | ADR-0016's sanctioned list covers pickers outright, and Download maps already uses `Menu` for the same reason. The part that was **not** treated as sanctioned is the *appearance*: Android deliberately moved this control from a bare `TextButton` to a field showing its current value, because the value is what a user must check before starting a search that behaves differently depending on it — so the iOS label is a value plus a chevron in a 200 pt filled field, not a text button | never — but the field shape is the requirement, not the menu mechanism |
 | **A dropped BLE link clears the receiver readout on iOS; Android keeps it.** `clearLiveReadouts` sets `receiverInfo = nil` with the rest; Android's link-loss release ([ADR-0011](../../steam-pigeon-locator/docs/adr/0011-locator-lora-channel-from-app.md), 2026-08-30) deliberately leaves `_remoteReceiverConfig` standing | The **locator** half matches — both platforms release the connection and blank the locator's configuration, because a section left reading channel 0 is a plausible-looking value where the truth is "nothing is connected". The receiver half cannot: Android seeds `_remoteReceiverConfig` from user preferences and saves it back, so clearing it would blank the Receiver channel field on every drop and raise that same hazard on the other field. iOS's `receiverInfo` is not persisted and has no such role | never — the difference is in where the value is stored, not in what either app wants to show |
+| **App Flight Logs is Android-only.** A per-flight CSV of what the *phone* received and announced — the frame plus the receiver's RSSI/SNR/noise floor plus the app's own verdicts and spoken callouts, none of which exist in the locator's archive because they are measured or decided on this side of the radio | Not a divergence of taste — the feature is four days old and has never flown. Porting a recording feature before its first hardware run would mean debugging two implementations against one unknown. The **portable half is already shaped for the port**: `FlightLogRecorder` holds no clock, no Android types and no flows, exactly as `ChannelMoveRunner` does, and its 23 tests drive it through a `Sink` protocol that Swift has verbatim | when the Android side has flown at least once and the CSV has been read on a PC. Then port `FlightLogRecorder` + `FlightLog` + `FlightLogRecorderTest` **as a unit** rather than re-deriving the close-signal set — landing deliberately does NOT close a log, and a BLE dropout deliberately does not either, and both are the kind of rule that gets "simplified" back out by a reimplementation. Storage and export are genuinely platform-specific: `UIActivityViewController` for the share sheet, and app-private storage plus `LSSupportsOpeningDocumentsInPlace` / `UIFileSharingEnabled` is the Files-app question Android answers with a `FileProvider` |
 | ~~iOS remembers the name of **every** locator it accepts a broadcast from; Android remembers one only for locators whose password it holds~~ **CLOSED 2026-08-21** by Android `b209671`, which stores the name from every accepted broadcast exactly as described below. The one asymmetry left — Android noted the name **before** its `mayConnect` check and iOS only on `.accepted` — was closed here 2026-08-23: `noteName` now runs on the conflict path too, so a second authorized locator heard while ours holds the link is remembered | — | — |
 
 Everything else on these screens matches Android, including field order, widget shapes,
@@ -65,7 +76,7 @@ roughly the whole presentation layer is outstanding.
 
 ## Inventory
 
-Android UI is ~11,700 lines across `ui/`. By screen:
+Android UI is ~14,900 lines across `ui/`. By screen:
 
 | Android screen | Lines | iOS today |
 |---|---:|---|
@@ -76,6 +87,7 @@ Android UI is ~11,700 lines across `ui/`. By screen:
 | `ReceiverSettingsScreen` | 463 | absent |
 | `AppSettingsScreen` | 202 | absent |
 | `DeploymentTest` | 160 | **present** (`DeploymentTestView`), 2026-08-21 |
+| `AppFlightLogsScreen` | 288 | absent — new 2026-08-31, see the divergence table. The logic behind it is **not** in `ui/`: `data/FlightLog.kt` (303) + `FlightLogRecorder.kt` (148) are the portable part, `FlightLogStore.kt` (223) is the Android-specific half |
 | `ExportFlightPathScreen` | — | absent |
 | `LocatorPasswordDialog` | 139 | **present** (`PasswordChallengeView`) |
 | `DevicePickerDialog` | 103 | absent — iOS auto-connects to the first FFE0 peripheral |
@@ -296,6 +308,17 @@ muted phone in a pocket on a loud flight line.
 ascent, descent, apogee, landing prediction and link-loss announcements, with the
 ADR-0022 rule that a withheld distance means SILENCE rather than a stale number read
 aloud. The engine now exists for it; the announcer does not.
+
+⚠️ **The port target changed on 2026-08-31.** Android no longer calls the speech engine
+from those nineteen sites — every one goes through an `Announcer` facade
+([ADR-0030](../../steam-pigeon-locator/docs/adr/0030-app-flight-log.md)) so the App
+Flight Log can record what was said and when. No callout text changed and both queue
+modes map one-to-one, so the wording audit above still stands. **Bring the facade across
+with the callouts, in the same pass**: retrofitting it afterwards means touching the same
+nineteen sites twice, and until it exists an iOS flight log would be silent about the
+half of the timeline that matters most. Note the facade's rule — it speaks *and* logs, or
+does neither, so with speech off nothing is recorded. A log entry always means the
+operator actually heard it.
 
 ### Sixth round, 2026-08-20 — the half-restored receiver, and the voice list
 
