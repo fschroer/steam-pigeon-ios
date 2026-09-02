@@ -257,7 +257,8 @@ struct PacketFramer {
         case .startup, .locatorCfgChgRequest, .receiverCfgChgRequest, .armRequest,
              .disarmRequest, .flightMetadataRequest, .flightDataRequest, .flightDataAck,
              .deploymentTestRequest, .receiverInfoRequest, .versionRequest,
-             .channelSurveyRequest, .padAlertSnoozeRequest, .locatorSearchRequest:
+             .channelSurveyRequest, .channelSurveyCancelRequest, .padAlertSnoozeRequest,
+             .locatorSearchRequest:
             return .unframeable
         }
     }
