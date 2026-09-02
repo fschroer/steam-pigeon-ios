@@ -1658,6 +1658,20 @@ outlive the visit on either platform; the entry-time clear drops them, with the 
 > leaves the screen. Verified on iOS: `surveyInProgress` is cleared only by the response,
 > the cancel, or the 15 s timeout, each of which outlasts the ~7.8 s sweep, so the button
 > is reachable throughout.
+>
+> **✅ Confirmed on hardware 2026-09-02 (fschroer).** The iOS Stop button and the survey
+> cancel behind it have now been exercised on a phone against a real receiver, which is the
+> half this file could not speak for: the unit suite pins the *rule*, and only a device
+> exercises the sweep, the `MsgType` 25 round trip, the receiver's return to the home
+> channel, and the button's presence across the stretch where `hearingLocator` is false.
+> Both platforms are now hardware-confirmed on this feature — Android on the Pixel with
+> `3bc940f`, iOS here.
+>
+> Scope, because this file is read for what it does *not* say: this covers the survey Stop
+> and its gate. It says nothing about the other iOS work still marked unverified below —
+> the ADR-0011 channel move, the firmware-version rows, App Flight Logs writing from real
+> telemetry, and the 3D path — each of which needs its own device run and keeps its own
+> note.
 
 The rule the gate encodes (ADR-0029: the sweep is offered only while a locator is heard) is
 unchanged. It is about **offering** a scan, and was being applied to one already under way
