@@ -1641,12 +1641,23 @@ outlive the visit on either platform; the entry-time clear drops them, with the 
 > **Do not narrow this gate again — since 2026-09-02 it holds a control, not just an
 > indicator.** Both apps gained a **Stop** button on the sweep that day (ADR-0019 tier 3
 > item 5, `MsgType` 25), and on both it lives inside this section. Had this fix landed a
-> day later, the button would have vanished about five seconds into an ~8 s sweep, taking
-> itself away for exactly the stretch someone reaching for it is in. The feature is
+> day later, the button would have vanished about five seconds into an ~8 s sweep — which
+> is the same fact stated more usefully from the other end: **absent for the last ~3 s of
+> every sweep**, and present only while there was least reason to press it. The feature is
 > matched on both platforms — same message, same wording, same `cancelledByUser`
 > substitution — and it is matched partly *because* this closed first. The cost of
 > reintroducing the narrow gate is no longer a missing "Scanning…" label; it is a scan
 > that cannot be called off.
+>
+> **Enforced rather than asked for, 2026-09-02.** "Do not narrow this gate again" is a
+> comment, and comments do not fail builds. The gate is now
+> `ChannelSurveySection.isOffered(hearingLocator:surveyInProgress:hasResult:)` — static, in
+> the pattern `MapStatusPanel.locatorText` set, because it is the rule rather than the
+> rendering that has been wrong here — and `SurveySectionGateTests` pins it, including a
+> walk across a whole sweep at 0.0 / 5.1 / 7.8 / 8.5 s that asserts the section never
+> leaves the screen. Verified on iOS: `surveyInProgress` is cleared only by the response,
+> the cancel, or the 15 s timeout, each of which outlasts the ~7.8 s sweep, so the button
+> is reachable throughout.
 
 The rule the gate encodes (ADR-0029: the sweep is offered only while a locator is heard) is
 unchanged. It is about **offering** a scan, and was being applied to one already under way

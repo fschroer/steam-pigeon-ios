@@ -20,6 +20,36 @@ import SwiftUI
 /// The wording below is Android's, verbatim, because most of it is explaining a
 /// measurement rather than labelling a control — and an explanation that differs between
 /// the two apps is one the manual has to write twice.
+extension ChannelSurveySection {
+    /// Whether the survey section is on screen at all.
+    ///
+    /// Static so the rule can be tested without a view — it is the rule, not the
+    /// rendering, that has been wrong here twice.
+    ///
+    /// The first term is ADR-0019 as narrowed by ADR-0029: the sweep is **offered** only
+    /// while a locator is being heard, because "find a clean channel" is for a link that
+    /// works badly, and with nothing coming through the question is where the rocket is.
+    ///
+    /// The other two are what keep that rule from being applied to a sweep already under
+    /// way. A sweep leaves the receiver deaf for ~7.8 s, which is longer than the 5 s
+    /// silence window `hearingLocator` is judged on — so on the first term alone the
+    /// section removed itself about five seconds into its own scan and came back with the
+    /// results, i.e. it was **gone for the last ~3 s of every sweep**. Since 2026-09-02
+    /// that stretch contains the **Stop** button, so the cost is no longer a missing
+    /// "Scanning…" label: it is a scan that cannot be called off in precisely the window
+    /// someone reaching for Stop is in.
+    ///
+    /// `hasResult` is load-bearing rather than cautious: without it the section hides
+    /// again at the instant the results land — the sweep has ended, so `surveyInProgress`
+    /// is false, while the locator's next broadcast is still up to a second away — and
+    /// flickers back a moment later.
+    static func isOffered(hearingLocator: Bool,
+                          surveyInProgress: Bool,
+                          hasResult: Bool) -> Bool {
+        hearingLocator || surveyInProgress || hasResult
+    }
+}
+
 struct ChannelSurveySection: View {
     let survey: ChannelSurvey.Result?
     let inProgress: Bool

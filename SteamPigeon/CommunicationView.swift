@@ -156,7 +156,9 @@ struct CommunicationView: View {
                 //
                 // Same lesson as that entry-time clear: a rule about when to START
                 // something must not be applied to something already under way.
-                if hearingLocator || model.surveyInProgress || model.channelSurvey != nil {
+                if ChannelSurveySection.isOffered(hearingLocator: hearingLocator,
+                                                  surveyInProgress: model.surveyInProgress,
+                                                  hasResult: model.channelSurvey != nil) {
                     Divider().padding(.vertical, 12)
 
                     ChannelSurveySection(
