@@ -48,7 +48,7 @@ gets read before someone concludes a missing screen is a defect:
 |---|---|---|
 | ~~No launch-detect altitude / deploy-signal duration controls in Locator Settings~~ **CLOSED 2026-08-21** — Android removed both controls too (`b6c67ad`), and ADR-0028 makes both fields reserved wire slots the locator owns. Neither platform offers them; it reopens only when the firmware carries them in a broadcast | — | — |
 | Icon substitutions in the map control column | Android's are Compose `Icons.Default.*`, a library with nothing to convert | never — the mapping is recorded below |
-| No archived-path map control | Android offers it only once a record is downloaded | **now unblocked** — flight-data download landed 2026-08-21; the control itself is still to build |
+| ~~No archived-path map control~~ **CLOSED 2026-09-01** — ported once the 3D path landed, since it draws through the same layers. Left in as the record. The control appears only once a record is downloaded, on both platforms | — | — |
 | Flight-profile chart constants converted at a 3.0 display density | Android draws the chart in raw **pixels** (`CHART_MARGIN_X = 64f`, `textSize = 32f`), so its apparent size changes with the phone; SwiftUI's Canvas works in points | never exactly — see the chart audit below. A side-by-side screenshot would settle whether 3.0 is the right divisor |
 | Download maps uses SwiftUI's `Menu` and `Slider` where Android uses `DropdownMenu` and a Material `Slider`, and an SF Symbol for the delete icon | ADR-0016's sanctioned list covers pickers and sliders outright; the delete glyph is a Compose `Icons.Filled.Delete`, a library with nothing to convert, so `trash` stands in as the map-column icons do | never — `trash` is pinned in `SFSymbolAvailabilityTests` like the rest |
 | Chart legend checkboxes are SF Symbols, not a Material `Checkbox` | ADR-0016 sanctioned departure: a Material checkbox clone next to iOS type reads as broken, and `checkmark.square.fill` / `square` carry the same two states in the same two colours | never |
@@ -105,7 +105,7 @@ Android UI is ~14,900 lines across `ui/`. By screen:
 | `ExportFlightPathScreen` | — | absent |
 | `LocatorPasswordDialog` | 139 | **present** (`PasswordChallengeView`) |
 | `DevicePickerDialog` | 103 | absent — iOS auto-connects to the first FFE0 peripheral |
-| `MapLibreCompat` | 1,042 | partial (`FlightMapView`) |
+| `MapLibreCompat` | 1,042 | partial (`FlightMapView`) — the **flight path is complete** as of 2026-09-01: ground track, altitude curtain and one-second markers, with `PathGeometry.swift` carrying the pure builders. The marker, accuracy ring and camera work were already there |
 
 ### Main screen elements not yet on iOS
 
@@ -2145,6 +2145,166 @@ simulator against **injected** logs, which is what proves the reading half. Noth
 written a log from real telemetry: that needs a receiver, a locator and a launch, and the
 recorder's own decisions — the 2 s pre-roll, landing-does-not-close, disarm-closes — are
 pinned only by tests until then.
+
+### ⚠️ The 3D path's memory cost, and one divergence it forced (2026-09-02)
+
+Reported as a jetsam kill: *"Debug session ended with code 9: Terminated due to memory
+issue."* Two things came out of measuring it, and they are not the same thing.
+
+**A defect introduced with the 3D path, now fixed.** `FlightPathGeometry.build` was called
+from `draw`, which runs from `updateUIView` — so the whole curtain was rebuilt on every
+SwiftUI update: every telemetry fix at 1 Hz, every marker-state change, every camera
+control, for a track that had not changed. Android hit exactly this and its fix was already
+written down in `MapLibreCompat` — sources keyed on the **path alone** and built off the
+main thread — and the iOS port did not carry it across. It now does: `rebuildPathIfNeeded`
+compares the track, hops to a queue, and re-reads the style after the hop because it may
+have been torn down or reloaded meanwhile. A reloaded style clears the cached track, since
+its layers are gone.
+
+**Honest limit on that claim:** the growth pattern was NOT reproduced. With no locator
+connected nothing drives repeated updates, so a pre-fix build measured just as flat as the
+fixed one. The fix is correct and matches Android; whether it is what killed the process is
+unproven.
+
+**What the numbers actually say.** Release build, simulator, same camera throughout, with a
+no-track control run last to confirm the deltas are attributable:
+
+| | resident |
+|---|---:|
+| no track | 222 MB |
+| 60-point live track | 268 MB (+46) |
+| 2000-point archived record, ~17 000 quads | 452 MB (+230) |
+| no track again (control) | 223 MB |
+
+That is ~11 KB per quad for 80 bytes of coordinates. The cost is not the geometry, it is
+per-**feature** overhead: `MLNPolygonFeature`, its attribute dictionary, and MapLibre's own
+bookkeeping, none of which scales with what is inside the feature.
+
+#### Divergence — iOS groups curtain quads by height; Android emits one feature per quad
+
+`upsertExtrusions` now builds one `MLNMultiPolygonFeature` per distinct height rather than
+one feature per quad, which took the archived case from +230 MB to **+149 MB** (452 → 371).
+
+It is free of visual consequence, and that is checkable rather than hopeful:
+`fill-extrusion-height` is constant per feature, so the wall's top edge is **already** a
+staircase quantised to the riser — quads sharing a rounded height were always going to draw
+at the same height. Rounding to `curtainTargetRiserM` is the conservative choice, never
+coarser than the step the curtain already took. Confirmed by eye against the ungrouped
+build: identical.
+
+*Closes when* Android adopts the same grouping, if it wants it — its per-feature costs are
+its own and may not justify the change.
+
+**Confirmed trigger, unconfirmed cause (fschroer, 2026-09-02).** The kill happened on a
+**device** with an **archived record loaded** — which is the combination these numbers point
+at, and the one the simulator understates, since a device's jetsam ceiling is far below what
+a Mac will let the simulator have. It has **not reproduced since**, so no further change is
+being made until it does: the two fixes above are worth having on their own merits, and
+anything beyond them would be tuning against a number nobody has measured on the hardware
+that actually killed the process.
+
+**What would settle it.** A jetsam report is written automatically on the device — Settings
+▸ Privacy & Security ▸ Analytics & Improvements ▸ Analytics Data, `JetsamEvent-….ips` —
+and names both the app's footprint at kill time and the limit it crossed. That single file
+turns this from an inference into a measurement, and it needs no change to the app.
+
+**Still open.** 371 MB for a large archived record, on a 222 MB baseline, is not comfortable
+for an app whose deployment target is iOS 16 and which is flown on older hardware. The
+remaining lever is the quad count itself — `curtainTargetRiserM` at 0.25 m produces ~17 000
+quads for a 450 m flight — and moving it changes how the wall looks, which is a fidelity
+decision for fschroer rather than an optimisation to take unilaterally.
+
+### The archived flight path on the map — ported 2026-09-01
+
+Reported as a question: does the record loaded through the charting screen get drawn on the
+map, as Android's does? It did not — the download and the chart worked, and nothing carried
+the record to the map. `grep` for `archivedPath|showArchived|toggleArchived` across the app
+and suite returned nothing.
+
+Four pieces came across: `FlightPathGeometry.archivedPathPoints`, `LinkViewModel`'s
+`archivedTrack` / `showArchivedPath` / `toggleArchivedPath`, the `mapTrack` selector, and a
+control-column button that appears only once a record exists — cyan when engaged, matching
+Android's `COLOR_ARCHIVED_ACTIVE`, which is the same cyan the one-second markers use because
+both mean "this came off the archive". The archived track **substitutes** for the live one
+rather than overlaying it: they are the same quantity measured two ways (EKF vs raw GPS), so
+drawing both in one colour would read as a single noisy path rather than two estimates.
+
+**The conversion is the part that fails silently.** The archive stores position in radians
+and the live path is in degrees; treating one as the other puts a Seattle-area flight at
+0.83°N 2.14°W — in the Atlantic, ~5000 km off — with nothing raising an error. Samples with
+no fix are dropped rather than plotted, because a zero coordinate is "no fix" rather than a
+position on the Gulf of Guinea, and a record starts before GPS necessarily has a lock.
+Android's `ArchivedPathTest` is ported whole (8 cases) and covers both.
+
+**The lifetime is the part that fails silently in a different way**, and it is why this is
+not simply a button. Android's snapshot is deliberately not derived from the transfer
+buffer, and `clearFlightProfileData` deliberately does not clear it — that method runs when
+you navigate back from the chart, which is precisely the moment you would be heading to the
+map to look at the track. iOS follows both rules, with seven cases pinning them.
+
+**One hazard Android's comments do not name, found while writing those tests.**
+`publishFlightSamples` runs on *every absorbed packet*, so publishing unconditionally would
+let a single late packet arriving after `clearFlightProfileData` blank the snapshot with an
+empty buffer — reintroducing the trap one layer down. Android is safe by way of its
+`samples.isNotEmpty()` guard at the call site; iOS now guards inside `publishArchivedPath`,
+which is the more robust place given it has one caller and Android has two.
+
+**Verification.** 15 unit cases, plus the simulator: with no record the control is absent;
+with one seeded, it appears dimmed, turns cyan on tap, and the drawn track visibly switches
+to the archived geometry. The seeding hook was temporary and is not in the tree. Not on
+hardware — that needs a real transfer from a locator.
+
+### The 3D flight path — ported 2026-09-01, against `MapLibreCompat.kt`
+
+Reported from the phone: *"iOS only draws a flat green line instead of orange stacked
+columns, and there are no 1s lines."* All three observations were one gap — iOS drew the
+ground track and nothing else — plus a colour that was wrong on its own.
+
+**What was actually there.** `upsertLine(… colour: RocketMarkerState.live.color, width: 2)`.
+That is the *marker's* green, so the track was drawn in the colour that means "the fix is
+live" — Android's path is `COLOR_PATH`, orange `#FF6600`, at width 8 with round caps and
+joins. Neither the altitude curtain nor the one-second markers existed at all.
+
+**Why it could not simply be styled.** `MapScreen` passed `model.trackCoordinates`, which
+is `track.map(\.coordinate)` — altitude and capture time were discarded before the map saw
+them, and those are exactly what the curtain and the markers are built from. The view now
+takes `[TrackPoint]`. Worth noting that `TrackPoint` has carried both fields since it was
+written, with a comment saying they were persisted so the curtain and markers would not
+need a file-format change when they landed; that turned out to be right.
+
+**What came across**, in `Flight/PathGeometry.swift`, pure and off the map:
+
+- `PathSpline` — cubic Hermite with **different tangent rules for altitude and position**,
+  which is the load-bearing detail. Altitude uses Fritsch–Carlson monotone tangents because
+  a plain Catmull-Rom overshoots at a sharp extremum, and the sharpest feature in a flight
+  profile is apogee: it would draw the rocket higher than it ever flew, and a reader
+  measuring apogee off the curtain would get a number no sensor produced. Position uses
+  ordinary Catmull-Rom, where overshoot is sub-metre and monotone limiting would flatten
+  genuine curvature in a turn.
+- `altitudeCurtain` — one extruded quad per sub-segment, split by **altitude change** rather
+  than a fixed count, with Android's 0.25 m target riser and its deliberately-high 20 000
+  quad backstop. That ceiling is high on purpose: the term driving it is summed |altitude
+  change|, which cannot tell signal from sensor noise, and a low ceiling coarsened the wall
+  precisely on the densest data.
+- `secondMarkers` — posts at real elapsed seconds, interpolated between the samples that
+  bracket each boundary, so they hold through a dropped packet or a variable radio interval.
+
+**A latent bug this surfaced and fixed.** Second markers must not be stood on placeholder
+times, so `TrackPoint` gained Android's `timeSynthetic`. `TrackStore` already *generated*
+synthetic timestamps for legacy three-column rows — but `save` wrote four columns
+unconditionally, promoting those placeholders to look like real capture times on the next
+load. The note on `legacyPlaceholderIntervalMs` claimed the opposite. Harmless while nothing
+read the time axis; the markers read it, so `save` now round-trips a synthetic point as the
+three-column row it came from.
+
+**Verification.** Android's three geometry suites ported case for case — `PathSplineTests`
+(10), `AltitudeCurtainTests` (15), `SecondMarkersTests` (15) — including the two that hold
+the important lines: the curve never rises above recorded apogee, and the wall is
+perpendicular to its segment in metres rather than degrees. Then exercised on the simulator
+against an injected 450 m flight: the orange curtain, the orange ground line and the cyan
+posts all render, tilted. **Not yet seen on hardware, and not yet compared side by side with
+Android** — which per the note at the foot of this file is the only real check on
+appearance.
 
 ## Sequence
 
