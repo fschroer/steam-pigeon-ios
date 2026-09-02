@@ -1,10 +1,21 @@
 # Android ⇄ iOS UI parity — inventory, audits and deliberate gaps
 
-**Status, 2026-09-01. Every Android screen is ported.** The flight map,
-Application Settings, Receiver Settings, Locator Settings, Flight Profiles, Download maps
-and Deployment Test. Everything up to Locator Settings has been exercised on hardware; the
-three newest screens have been driven on the simulator only — though Download maps has
-downloaded a real region there, which is the half of it that could not be faked.
+**Status, 2026-09-02. Every Android screen is ported, and the port has been on a phone.**
+The flight map, Application Settings, Receiver Settings, Locator Settings, Flight Profiles,
+Download maps, Deployment Test and App Flight Logs.
+
+**Hardware coverage caught up on 2026-09-02** (fschroer), which is the line this file has
+had to hedge since 2026-08-21. Confirmed on a device that day: the survey **Stop** button
+and its gate, the ADR-0011 channel move, the firmware-version rows on both settings screens,
+App Flight Logs writing from real telemetry, and the 3D flight path. Each audit below says
+what its own run did and did not reach.
+
+Two things are still not hardware-verified and are called out where they belong rather than
+here: `FlightProfilesScreen`, the **archived record drawn on the map** (which needs a real
+transfer from a locator), and — separately from "it draws correctly on iOS" — a
+**side-by-side against Android**, which the note at the foot of this file calls the only
+real check on appearance. Download maps remains simulator-only, though it downloaded a real
+region there, which is the half of it that could not be faked.
 
 **App Flight Logs, Android's eighth screen
 ([ADR-0030](../../steam-pigeon-locator/docs/adr/0030-app-flight-log.md)), was ported
@@ -101,7 +112,7 @@ Android UI is ~14,900 lines across `ui/`. By screen:
 | `ReceiverSettingsScreen` | 463 | absent |
 | `AppSettingsScreen` | 202 | absent |
 | `DeploymentTest` | 160 | **present** (`DeploymentTestView`), 2026-08-21 |
-| `AppFlightLogsScreen` | 288 | **present** (`AppFlightLogsView`), 2026-09-01 — with `Protocol/FlightLog.swift` + `FlightLogRecorder.swift` (the portable half) and `Flight/FlightLogStore.swift` (the iOS-specific half). Exercised on the simulator with injected logs; never on hardware |
+| `AppFlightLogsScreen` | 288 | **present** (`AppFlightLogsView`), 2026-09-01 — with `Protocol/FlightLog.swift` + `FlightLogRecorder.swift` (the portable half) and `Flight/FlightLogStore.swift` (the iOS-specific half). exercised on the simulator with injected logs, and confirmed writing from real telemetry on hardware 2026-09-02 |
 | `ExportFlightPathScreen` | — | absent |
 | `LocatorPasswordDialog` | 139 | **present** (`PasswordChallengeView`) |
 | `DevicePickerDialog` | 103 | absent — iOS auto-connects to the first FFE0 peripheral |
@@ -796,6 +807,12 @@ What landed, ported from Android's `versionJob` / `connectionJob` and
 Pinned by `FirmwareVersionTests` (7). The one seam worth naming is
 `setLastLocatorMessageForTesting`: the silence window and the request back-off are both
 5 s, so a test of either has to hold the other still.
+
+**✅ Confirmed on hardware 2026-09-02 (fschroer)** — both rows populate against a real
+locator and receiver. That is the half the suite could not reach: the tests drive a fake
+transport, so they prove the request goes out addressed and the answer is parsed, and only a
+device proves the receiver actually forwards it and appends its own version on the way
+back — which is what makes one request fill both rows.
 
 **One divergence found and closed in passing.** Both rows were `bodyMedium` in
 `onSurfaceVariant` — muted, and a size down from Android, which draws a plain `Text` and
@@ -1817,8 +1834,19 @@ Android uses epoch milliseconds, so "no receipt" is `nil` rather than `0`; and i
 for the probe's terminator on a 100 ms loop where Android suspends on
 `locatorSearch.first { … }`, because there is no flow to await.
 
-**Still not bench-validated on iOS** — nor on the simulator in any meaningful sense, since
-none of this path exists without a receiver. It is pinned by 44 tests and by nothing else.
+**✅ Bench-validated on iOS 2026-09-02 (fschroer)**, having been pinned by 44 tests and
+nothing else until then — none of this path exists without a receiver, so the simulator
+could say nothing about it either way.
+
+**Which branches, because on this feature that is the whole question.** A move that
+succeeds exercises the confirm path: the BLE write, the receipt re-basing the window, the
+latch that stops it re-basing forever, and the relayed `PreLaunchData` that ends it. The
+branches this amendment was *written for* are the failing ones — `LocatorStayed` and its
+revert-and-retry, `NoEvidence` and its second look, `NotChecked` and its refusal retry —
+and each is reached only by provoking a failure, which is how all six of Android's defects
+were found. If those were driven here too, say so and this note should name them; if the
+run was a series of successful moves, the confirm path is confirmed and the recovery
+sequence still rests on `ChannelMoveRunnerTests`.
 
 #### ✅ CLOSED 2026-09-01 — the channel being left reclaimed the connection mid-move
 
@@ -2173,13 +2201,19 @@ Verified on the iOS simulator against the same two logs that exposed it. **The A
 is written but not compiled or run** — there is no JDK on this machine, so `gradlew` cannot
 start.
 
-#### Not yet verified
+#### ✅ Verified on hardware 2026-09-02
 
 The screen, the empty state, the row, the CSV viewer and the list were exercised on the
-simulator against **injected** logs, which is what proves the reading half. Nothing has
-written a log from real telemetry: that needs a receiver, a locator and a launch, and the
-recorder's own decisions — the 2 s pre-roll, landing-does-not-close, disarm-closes — are
-pinned only by tests until then.
+simulator against **injected** logs, which proved the reading half. The writing half — a log
+produced from real telemetry, which needs a receiver, a locator and a launch — was confirmed
+on a device by fschroer, so the recorder's own decisions are no longer pinned by tests
+alone.
+
+Two things worth reading off that first real file rather than assuming, since neither can be
+seen on the simulator: whether `elapsed_s` crosses zero at the launch with the pre-roll
+negative ahead of it, and whether the row count matches the flight's duration at 1 Hz. Both
+are visible in the CSV at a glance, and both would show a pre-roll or a close-signal rule
+misbehaving in a way a green suite would not.
 
 ### ⚠️ The 3D path's memory cost, and one divergence it forced (2026-09-02)
 
@@ -2337,9 +2371,13 @@ three-column row it came from.
 the important lines: the curve never rises above recorded apogee, and the wall is
 perpendicular to its segment in metres rather than degrees. Then exercised on the simulator
 against an injected 450 m flight: the orange curtain, the orange ground line and the cyan
-posts all render, tilted. **Not yet seen on hardware, and not yet compared side by side with
-Android** — which per the note at the foot of this file is the only real check on
-appearance.
+posts all render, tilted. **✅ Confirmed on hardware 2026-09-02 (fschroer)** — the path
+draws on a device from a real track.
+
+Still open, and deliberately kept separate from that: a **side-by-side against Android**.
+Per the note at the foot of this file, screenshots of both apps together are the only real
+check on appearance, and drawing correctly on iOS is not the same claim as drawing the same
+as Android. The chart-density divisor in the divergence table is in the same position.
 
 ## Sequence
 
