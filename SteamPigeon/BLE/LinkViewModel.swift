@@ -8,7 +8,17 @@ import CoreLocation
 @MainActor
 final class LinkViewModel: ObservableObject {
 
-    @Published private(set) var state: TransportState = .idle
+    @Published private(set) var state: TransportState = .idle {
+        didSet {
+            // The BLE link, which no longer ends a log but still explains a gap in one.
+            // Edge-triggered on ready-ness rather than on every state, as Android's
+            // collector is.
+            let ready = state == .ready
+            if ready != (oldValue == .ready) {
+                logFlightEvent(.connectionChanged, detail: String(describing: state))
+            }
+        }
+    }
     @Published private(set) var frameCount = 0
     @Published private(set) var badFrames = 0
     @Published private(set) var countsByType: [MsgType: Int] = [:]
@@ -27,7 +37,27 @@ final class LinkViewModel: ObservableObject {
     /// When the connected locator last spoke. Drives the marker's trust colour.
     @Published private(set) var lastLocatorMessage: Date?
     /// The locator whose data is on screen. Nothing else reaches the display.
-    @Published private(set) var connectedLocatorId: UInt32?
+    @Published private(set) var connectedLocatorId: UInt32? {
+        didSet {
+            // Tracks the last locator actually CONNECTED, not the last value of the
+            // property.
+            //
+            // It goes nil on a dropped BLE link as well as on a deliberate switch, and
+            // those must not be treated alike: a dropout mid-recovery is the case this log
+            // exists to capture, and ending the file on one would discard the evidence of
+            // the thing being investigated. A release is therefore ignored, a reconnect to
+            // the same locator resumes the same file, and only a DIFFERENT locator ends it
+            // — the only transition after which the rows would describe another airframe.
+            guard let id = connectedLocatorId else { return }
+            if let last = lastLoggedLocatorId, id != last {
+                logFlightEvent(.locatorChanged, detail: "\(last) -> \(id)")
+                closeFlightLog(reason: .locatorChanged)
+                // Whatever is buffered belongs to the locator being let go of.
+                flightLogRecorder.discardPreRoll()
+            }
+            lastLoggedLocatorId = id
+        }
+    }
     /// Authorized locators heard while ours holds the connection — shared channel.
     @Published private(set) var conflictingLocatorIds: Set<UInt32> = []
     /// Locators we hold no password for. Cannot be displayed or commanded.
@@ -186,7 +216,16 @@ final class LinkViewModel: ObservableObject {
     /// answers a direct question, and every `PreLaunchData` echoes the receiver's own
     /// channel and name in passing. The second is what makes the settings screen
     /// correct without asking, and what confirms a channel change.
-    @Published private(set) var remoteReceiverConfig = ReceiverConfig()
+    @Published private(set) var remoteReceiverConfig = ReceiverConfig() {
+        didSet {
+            guard remoteReceiverConfig.channel != oldValue.channel else { return }
+            logFlightEvent(.receiverChannelChanged,
+                           detail: "\(oldValue.channel) -> \(remoteReceiverConfig.channel)")
+            // Past this point the rows describe a different piece of sky.
+            closeFlightLog(reason: .receiverChannelChanged)
+            flightLogRecorder.discardPreRoll()
+        }
+    }
     @Published private(set) var receiverConfigMessageState: ConfigMessageState = .idle
 
     /// The BLE device name of the receiver we are connected to, if any. Refreshed on
@@ -219,7 +258,55 @@ final class LinkViewModel: ObservableObject {
     /// The channel a move is aiming at, while one is in flight or has just finished.
     @Published private(set) var pendingChannelMove: Int?
 
+    /// The channel the BANNER is describing. Deliberately a separate value from
+    /// `pendingChannelMove`, and the separation is load-bearing: the pending channel is
+    /// what the ADR-0029 search looks on after a failed move, so dismissing the message
+    /// used to throw away the one channel worth searching. Conflating the two also made a
+    /// *successful* move clear its own "Now on channel N" in the same instant.
+    @Published private(set) var channelMoveBannerChannel: Int?
+
+    /// The terminal state, held so the banner outlives the 2 s `.idle` reset. The outcome
+    /// of a cycle that can run ~23 s was legible for two.
+    @Published private(set) var channelMoveResult: ConfigMessageState?
+
+    /// What the probe established, which is what picks the sentence. Three endings share
+    /// `.notAcknowledged` and leave the hardware in different places.
+    @Published private(set) var channelMoveOutcome: ChannelMove.Verdict?
+
+    /// The receiver's transmit receipt for the pending move — a `ReceiverInfo` carrying
+    /// the new channel, which proves the forward actually transmitted.
+    ///
+    /// **Latched: only the FIRST match may re-base the confirm window.** The channel watch
+    /// polls `ReceiverInfo` every 2 s while the locator is silent, which is exactly the
+    /// state an unconfirmed move is in — so every reply matched, each pushed the deadline
+    /// out 5 s, and 2 s < 5 s meant the window never closed. Banner stuck on "Moving to
+    /// channel N…", probe never ran, receiver left on the new channel with the locator on
+    /// the old one. A lost locator, reintroduced by the fix for lost locators.
+    ///
+    /// Used ONLY to re-base, never to short-circuit: its absence is ambiguous against a
+    /// receiver predating it.
+    private var channelMoveReceipt: Date?
+
+    /// The locator the pending move was addressed to, captured when it was sent. The
+    /// probe attributes its hits with this: an unattributed hit cannot be evidence, and a
+    /// *different* locator's hit on the new channel must never read as confirmation.
+    private var channelMoveLocatorId: UInt32?
+
     func clearPendingChannelMove() { pendingChannelMove = nil }
+
+    /// Dismiss hides the MESSAGE, not the staged channel — see `channelMoveBannerChannel`.
+    func dismissChannelMoveBanner() {
+        channelMoveBannerChannel = nil
+        channelMoveResult = nil
+    }
+
+    /// Android's `CONFIG_CONFIRM_WINDOW_MS`.
+    private static let configConfirmWindow: TimeInterval = 5
+    /// How long to wait for a probe run's terminator (`CHANNEL_PROBE_TIMEOUT_MS`).
+    private static let channelProbeTimeout: TimeInterval = 20
+    /// Sized to outlast the receiver's `kPendingTxStaleMs` (10 s) dropping the queued
+    /// command that refuses our probe (`CHANNEL_PROBE_REFUSED_RETRY_MS`).
+    private static let channelProbeRefusedRetry: TimeInterval = 6
 
     /// Put the survey away once a channel has been chosen from it.
     ///
@@ -245,6 +332,11 @@ final class LinkViewModel: ObservableObject {
     /// bystander's pyro configuration.
     func moveLocatorToChannel(_ channel: Int) {
         pendingChannelMove = channel
+        channelMoveBannerChannel = channel
+        channelMoveResult = nil
+        channelMoveOutcome = nil
+        channelMoveReceipt = nil
+        channelMoveLocatorId = connectedLocatorId
         var target = remoteLocatorConfig
         target.loraChannel = channel
         changeLocatorConfig(target)
@@ -273,8 +365,14 @@ final class LinkViewModel: ObservableObject {
             locatorConfigMessageState = .sendFailure
             return
         }
-        transport.send(msg)
-        locatorConfigMessageState = .sent
+        // The RESULT is the state, not the fact that a call was made. `send` returns
+        // false when the peripheral, the write characteristic or the `.ready` state is
+        // missing — nothing left the phone. Reporting that as `.sent` made the failure
+        // invisible for five seconds and then surfaced it as a read-back timeout, which
+        // names the wrong cause: "the receiver did not acknowledge" rather than "nothing
+        // was sent". Android has always read the result here
+        // (`RocketViewModel.moveLocatorToChannel`).
+        locatorConfigMessageState = transport.send(msg) ? .sent : .sendFailure
 
         Task { @MainActor in
             if await waitForLocatorConfig(target) {
@@ -284,11 +382,22 @@ final class LinkViewModel: ObservableObject {
                 // nothing to recover. Leave the failure standing.
             } else if channel != oldChannel {
                 locatorConfigMessageState =
-                    await recoverLocatorChannel(target: target, oldChannel: oldChannel)
+                    await resolveChannelMove(target: target, oldChannel: oldChannel)
                     ? .ackUpdated : .notAcknowledged
             } else if locatorConfigMessageState.isInFlight {
                 locatorConfigMessageState = .notAcknowledged
             }
+
+            if locatorConfigMessageState == .ackUpdated, channel != oldChannel {
+                // Confirmed, so it is no longer a move "staged but never confirmed" and
+                // has no business in the ADR-0029 search candidates. An unconfirmed one is
+                // deliberately kept — that is the channel the locator may have taken
+                // alone, and it is the whole reason a search after a failed move looks in
+                // the right place.
+                pendingChannelMove = nil
+            }
+            // Held for the banner, which must outlive the `.idle` reset below.
+            if channel != oldChannel { channelMoveResult = locatorConfigMessageState }
             try? await Task.sleep(for: .seconds(2))
             locatorConfigMessageState = .idle
         }
@@ -301,51 +410,144 @@ final class LinkViewModel: ObservableObject {
     /// against is rebuilt from the next broadcast using the same placeholders, and a
     /// different value would never compare equal, so every change would report as
     /// unacknowledged.
+    /// The window is RE-BASED by the receiver's transmit receipt rather than merely
+    /// started at the BLE write. The receiver cannot forward a command until it sees a
+    /// `PreLaunchData` and is 50–700 ms past it, so on a channel dropping broadcasts — the
+    /// channel that motivates a move in the first place — the old fixed window was spent
+    /// waiting for the command to be transmitted at all, and expired before the locator
+    /// had a chance to answer. The noise that justifies the move was starving its
+    /// confirmation. See ADR-0011.
     private func waitForLocatorConfig(_ target: LocatorConfig) async -> Bool {
-        for _ in 0..<50 {
+        let started = Date()
+        // Absolute ceiling, independent of any re-base. Belt and braces after the
+        // repeated-receipt hang: a wait that can be extended must also be one that cannot
+        // be extended forever, whatever future code starts feeding it.
+        let hardDeadline = started.addingTimeInterval(2 * Self.configConfirmWindow)
+        var deadline = started.addingTimeInterval(Self.configConfirmWindow)
+        while Date() < deadline {
             try? await Task.sleep(for: .milliseconds(100))
             if remoteLocatorConfig == target { return true }
             if locatorConfigMessageState == .sendFailure { return false }
+            deadline = ChannelMove.confirmDeadline(started: started,
+                                                   deadline: deadline,
+                                                   receipt: channelMoveReceipt,
+                                                   window: Self.configConfirmWindow,
+                                                   hardDeadline: hardDeadline)
         }
         return false
     }
 
-    /// ADR-0011 invariant 4, and the reason a failed move is not simply reported.
+    /// Work out what actually happened to an unconfirmed channel move, and act only on
+    /// what the receiver can hear (ADR-0011, "revert on evidence, not on silence").
+    /// Returns true if the locator ended up on the staged channel.
     ///
-    /// If the locator never appears on the new channel it most likely missed the LoRa
-    /// command and is still on the old one — while the receiver, which forwarded that
-    /// command, has already followed onto the new channel. **The link is split, and the
-    /// user cannot fix it from here**: the locator is out of reach by definition.
+    /// **This replaced a revert-on-silence cut, and the difference is the whole point.**
+    /// There is no acknowledgement message, so what goes missing on a "failed" move is a
+    /// *broadcast* — and two opposite states produce the same silence: the locator missed
+    /// the command and stayed behind while the receiver followed (a real split), or
+    /// everything moved and the confirmation was late. Reverting is correct for the first
+    /// and **manufactures** the split for the second, in the direction that strands the
+    /// rocket, because the locator's move is flash-persistent.
     ///
-    /// So pull the RECEIVER back over BLE, which is always reachable, wait for
-    /// broadcasts to resume on the old channel, and retry the locator change once.
-    private func recoverLocatorChannel(target: LocatorConfig, oldChannel: Int) async -> Bool {
-        guard let id = connectedLocatorId,
-              let back = OutboundMessage.receiverDirected(
-                .receiverCfgChgRequest,
-                payload: ReceiverConfig(channel: oldChannel,
-                                        deviceName: remoteReceiverConfig.deviceName).payload)
-        else { return false }
-        transport.send(back)
+    /// The **sequence** lives in `ChannelMoveRunner` and is pinned by
+    /// `ChannelMoveRunnerTests`; this supplies the side effects. It was moved out because
+    /// every defect in that sequence — the lost retry, the refusal read as silence, the
+    /// single look at silence — was found by hand on an Android bench, for want of any way
+    /// to reach it from a test while it sat in here with a transport in scope.
+    ///
+    /// **None of this is bench-validated on iOS.**
+    private func resolveChannelMove(target: LocatorConfig, oldChannel: Int) async -> Bool {
+        await ChannelMoveRunner(ops: ChannelMoveLiveOps(model: self, target: target),
+                                refusedRetry: Self.channelProbeRefusedRetry)
+            .resolve(newChannel: target.loraChannel, oldChannel: oldChannel)
+    }
 
-        var relinked = false
-        for _ in 0..<50 {
+    // MARK: The live side of a channel-move resolution
+    //
+    // Searches, BLE writes and the two waits. Everything here touches published state,
+    // the transport or the clock, which is exactly what the runner is kept free of.
+
+    fileprivate func probeIsRunning() -> Bool { locatorSearch?.running == true }
+
+    /// A **census** over both channels, never a targeted run that stops on the first hit:
+    /// a locator a few feet from the receiver decodes on channels it is nowhere near and
+    /// the artifact reads as strong (ADR-0029), so the decision has to compare two dwells
+    /// rather than trust one. This probe runs while the user is configuring a locator,
+    /// which is exactly the range that produces it.
+    ///
+    /// Reuses the ordinary search flow, so the run is visible in the search section and
+    /// cancellable by the same button, and inherits the receiver's own refusals.
+    fileprivate func runChannelProbe(newChannel: Int, oldChannel: Int) async
+        -> ChannelMoveRunner.ProbeRun? {
+        startLocatorSearch(channels: ChannelMove.probeChannels(newChannel: newChannel,
+                                                               oldChannel: oldChannel))
+        let deadline = Date().addingTimeInterval(Self.channelProbeTimeout)
+        while Date() < deadline {
             try? await Task.sleep(for: .milliseconds(100))
-            if remoteReceiverConfig.channel == oldChannel,
-               remoteLocatorConfig.loraChannel == oldChannel {
-                relinked = true
-                break
+            if let run = locatorSearch, !run.running {
+                return ChannelMoveRunner.ProbeRun(
+                    completed: run.status == .done,
+                    verdict: ChannelMove.verdict(hits: run.hits,
+                                                 locatorId: channelMoveLocatorId,
+                                                 newChannel: newChannel,
+                                                 oldChannel: oldChannel))
             }
         }
-        guard relinked else { return false }
+        return nil
+    }
 
-        guard let retry = OutboundMessage.locatorDirected(.locatorCfgChgRequest,
+    fileprivate func pointReceiverAtForMove(_ channel: Int) {
+        guard let back = OutboundMessage.receiverDirected(
+            .receiverCfgChgRequest,
+            payload: ReceiverConfig(channel: channel,
+                                    deviceName: remoteReceiverConfig.deviceName).payload)
+        else { return }
+        transport.send(back)
+    }
+
+    /// Wait for the link to come back on the old channel — on EVIDENCE that a frame was
+    /// admitted after we asked, not merely on two readings that say `oldChannel`. Both of
+    /// those readings are updated only by a relayed `PreLaunchData`, so after a move whose
+    /// confirmation never arrived they were BOTH still reading the old channel: a test on
+    /// the two alone passed on its first 100 ms poll having verified nothing, and the
+    /// retry then went out to a channel with nothing on it.
+    fileprivate func awaitRelinkForMove(oldChannel: Int, since: Date) async -> Bool {
+        for _ in 0..<50 {
+            try? await Task.sleep(for: .milliseconds(100))
+            if ChannelMove.relinked(receiverChannel: remoteReceiverConfig.channel,
+                                    locatorChannel: remoteLocatorConfig.loraChannel,
+                                    oldChannel: oldChannel,
+                                    lastFrame: lastLocatorMessage,
+                                    askedAt: since) { return true }
+        }
+        return false
+    }
+
+    fileprivate func resendLocatorConfigForMove(_ target: LocatorConfig) -> Bool {
+        guard let id = connectedLocatorId,
+              let retry = OutboundMessage.locatorDirected(.locatorCfgChgRequest,
                                                           targetLocatorId: id,
-                                                          payload: target.payload)
-        else { return false }
-        transport.send(retry)
+                                                          payload: target.payload),
+              transport.send(retry) else { return false }
         locatorConfigMessageState = .sent
-        return await waitForLocatorConfig(target)
+        // The retry is a fresh transmission, so it earns a fresh receipt.
+        channelMoveReceipt = nil
+        return true
+    }
+
+    fileprivate func awaitMoveConfirmation(_ target: LocatorConfig) async -> Bool {
+        await waitForLocatorConfig(target)
+    }
+
+    fileprivate func noteChannelMoveVerdict(_ verdict: ChannelMove.Verdict) {
+        channelMoveOutcome = verdict
+    }
+
+    /// Latch the receiver's transmit receipt — see `channelMoveReceipt`.
+    fileprivate func noteChannelMoveReceipt(channel: Int) {
+        if channelMoveReceipt == nil, channel == pendingChannelMove {
+            channelMoveReceipt = Date()
+        }
     }
 
     /// Ask the receiver to sweep the band (ADR-0019 tier 3).
@@ -677,8 +879,10 @@ final class LinkViewModel: ObservableObject {
             return
         }
         receiverConfigMessageState = .sendRequested
-        transport.send(msg)
-        receiverConfigMessageState = .sent
+        // As in `changeLocatorConfig` above: a write that never left must say so now,
+        // not five seconds later as a read-back timeout. Android's
+        // `pointReceiverAtChannel` reads `changeReceiverConfig(target) == true`.
+        receiverConfigMessageState = transport.send(msg) ? .sent : .sendFailure
 
         Task { @MainActor in
             // The BLE module is reset as part of a name change, so the link drops and
@@ -868,13 +1072,264 @@ final class LinkViewModel: ObservableObject {
         transport.send(msg)
     }
 
+    // MARK: - App flight log (ADR-0030)
+    //
+    // Distinct from the recorded track above and from the locator's downloadable archive.
+    // The track is where the rocket went; the archive is what the locator measured at
+    // 20 Hz. This is what the PHONE saw — the same 1 Hz frames plus the receiver's
+    // RSSI/SNR/noise-floor reading of each one, plus what the app decided and said out loud
+    // about them. None of that survives the flight anywhere else.
+
+    let flightLogStore = FlightLogStore()
+    private lazy var flightLogRecorder = FlightLogRecorder(sink: flightLogStore.makeSink())
+
+    @Published private(set) var flightLogs: [FlightLogFile] = []
+
+    /// The file currently open, or nil. A boolean would have been enough for the banner and
+    /// not enough for the list: a log still being written can be shared, and saying so on
+    /// the wrong row would be worse than not saying it.
+    @Published private(set) var flightLogRecordingName: String?
+
+    // Last values written as events, so each is reported on its edge rather than on every
+    // frame that repeats it. A 1 Hz stream would otherwise carry "link quality: Normal"
+    // once a second and bury the transition that matters.
+    private var loggedFlightState: FlightStates?
+    private var loggedLinkQuality: LinkQuality.Verdict?
+    private var loggedLandingThisFlight = false
+    private var lastLoggedLocatorId: UInt32?
+
+    func refreshFlightLogs() { flightLogs = flightLogStore.list() }
+
+    func deleteFlightLog(_ name: String) {
+        flightLogStore.delete(name)
+        refreshFlightLogs()
+    }
+
+    func readFlightLog(_ name: String) -> FlightLogContents { flightLogStore.read(name) }
+
+    /// Records something the app said aloud. Wired to `FlightSpeech`, which calls this only
+    /// when speech actually reached the synthesizer.
+    ///
+    /// **iOS needed no `Announcer` facade.** Android built one because nineteen call sites
+    /// each reached `TextToSpeech.speak` directly, and a rule remembered at each is a rule
+    /// missed at the next one added. `FlightSpeech.say` was already that single funnel here
+    /// — including the voice-enabled check — so the hook goes there and every present and
+    /// future callout is carried by construction.
+    func logAnnouncement(_ text: String) { logFlightEvent(.announcement, detail: text) }
+
+    private func logFlightEvent(_ event: LogEvent, detail: String = "",
+                                at timestamp: Date = Date()) {
+        flightLogRecorder.offer(.event(.init(timestamp: timestamp, event: event,
+                                             detail: detail)))
+    }
+
+    /// Opens a log for a launch just detected.
+    ///
+    /// Named for the locator that flew, taken from its own broadcast name: the file has to
+    /// identify the airframe months later, and a name held anywhere else can be a locator
+    /// the app is no longer connected to.
+    private func openFlightLog(at timestamp: Date) {
+        let locatorName = remoteLocatorConfig.deviceName
+        let header = "Steam Pigeon app flight log"
+            + "; locator=\(locatorName.isEmpty ? "unknown" : locatorName)"
+            + "; locator_id=\(connectedLocatorId ?? 0)"
+            + "; receiver=\(remoteReceiverConfig.deviceName)"
+            + "; receiver_channel=\(remoteReceiverConfig.channel)"
+            + "; app_version=\(AppVersion.stamp)"
+        loggedLandingThisFlight = false
+        if flightLogRecorder.onLaunch(at: timestamp, locatorName: locatorName,
+                                      header: header) {
+            flightLogRecordingName = FlightLog.fileName(locatorName: locatorName,
+                                                        at: timestamp,
+                                                        zone: flightLogRecorder.timeZone)
+            refreshFlightLogs()
+        }
+    }
+
+    private func closeFlightLog(reason: LogCloseReason, at timestamp: Date = Date()) {
+        guard flightLogRecorder.isRecording else { return }
+        flightLogRecorder.close(at: timestamp, reason: reason)
+        flightLogRecordingName = nil
+        refreshFlightLogs()
+    }
+
+    /// The app is going away — ADR-0030's `appStopped` close.
+    func closeFlightLogForShutdown() { closeFlightLog(reason: .appStopped) }
+
+    /// Logs a pre-launch frame. Called only for the connected locator: a bystander's
+    /// broadcasts are not this rocket's flight, and mixing them in would put two airframes
+    /// in one file with nothing to tell them apart.
+    private func logPrelaunchFrame(_ m: PreLaunchData, at timestamp: Date) {
+        noteLoggedLinkQuality(at: timestamp)
+        flightLogRecorder.offer(.sample(.init(
+            timestamp: timestamp,
+            source: .prelaunch,
+            latitude: m.latitude,
+            longitude: m.longitude,
+            aglM: m.altitudeAgl,
+            accel: m.accel,
+            gyro: m.gyro,
+            satellites: Int(m.satellites),
+            haccM: m.horizontalAccuracy,
+            rssi: Int(m.rssi),
+            snr: Int(m.snr),
+            noiseFloor: Int(m.noiseFloor),
+            badFrames: Int(m.badFrames),
+            linkQuality: linkVerdict,
+            armed: m.armed,
+            deployArmedMask: Int(m.deployStatus),
+            padAlert: m.padAlert,
+            locatorBatteryMv: Int(m.locatorBatteryMv),
+            receiverBatteryMv: Int(m.receiverBatteryMv),
+            receiverChannel: Int(m.channel),
+            locatorId: m.locatorId)))
+    }
+
+    /// Logs a telemetry frame, and the state transitions it carries.
+    private func logTelemetryFrame(_ m: TelemetryData, at timestamp: Date) {
+        noteLoggedLinkQuality(at: timestamp)
+        if loggedFlightState != m.flightState {
+            logFlightEvent(.flightStateChanged,
+                           detail: "\(loggedFlightState?.logName ?? "unknown") -> "
+                                 + "\(m.flightState.logName)",
+                           at: timestamp)
+            loggedFlightState = m.flightState
+        }
+        // Landing is an EVENT, not a close. The walk-in to find the rocket is when link
+        // quality matters most and is precisely the window nobody can watch, so the log
+        // runs on until the locator is disarmed or something else ends it.
+        if !loggedLandingThisFlight, m.flightState == .landed {
+            loggedLandingThisFlight = true
+            logFlightEvent(.landingDetected, detail: "locator reported Landed", at: timestamp)
+        }
+        // Bit 2 is fired, bit 5 is armed, per channel — the same masks Android builds.
+        var firedMask = 0
+        var armedMask = 0
+        for (i, stats) in m.deploymentChannelStats.prefix(4).enumerated() {
+            if stats & 4 == 4 { firedMask |= 1 << i }
+            if stats & 32 == 32 { armedMask |= 1 << i }
+        }
+        flightLogRecorder.offer(.sample(.init(
+            timestamp: timestamp,
+            source: .telemetry,
+            flightState: m.flightState,
+            latitude: m.latitude,
+            longitude: m.longitude,
+            aglM: m.altitudeAgl,
+            velNed: m.velocityNed,
+            attitude: m.attitude,
+            satellites: Int(m.satellites),
+            haccM: m.horizontalAccuracy,
+            rssi: Int(m.rssi),
+            snr: Int(m.snr),
+            noiseFloor: Int(m.noiseFloor),
+            badFrames: Int(m.badFrames),
+            linkQuality: linkVerdict,
+            armed: m.armed,
+            deployArmedMask: armedMask,
+            deployFiredMask: firedMask,
+            drogueDetected: m.physicalDeploymentStats & 1 == 1,
+            mainDetected: m.physicalDeploymentStats & 2 == 2,
+            locatorId: m.locatorId)))
+    }
+
+    /// Logs a `ReceiverInfo` poll.
+    ///
+    /// Worth a row precisely because it arrives when nothing else does: it is the receiver
+    /// measuring the channel with the locator silent (ADR-0019), so it is the only evidence
+    /// of what a dropout looked like from this end. A gap in the telemetry rows with these
+    /// still ticking through it says the channel was quiet; a gap with a raised noise floor
+    /// says something else was on it.
+    private func logReceiverInfoFrame(_ m: ReceiverInfo, at timestamp: Date) {
+        flightLogRecorder.offer(.sample(.init(
+            timestamp: timestamp,
+            source: .receiverInfo,
+            noiseFloor: Int(m.noiseFloor),
+            badFrames: Int(m.badFrames),
+            receiverChannel: Int(m.channel))))
+    }
+
+    private func noteLoggedLinkQuality(at timestamp: Date) {
+        guard loggedLinkQuality != linkVerdict else { return }
+        logFlightEvent(.linkQualityChanged,
+                       detail: "\(loggedLinkQuality?.logName ?? "unknown") -> "
+                             + "\(linkVerdict.logName)",
+                       at: timestamp)
+        loggedLinkQuality = linkVerdict
+    }
+
+    // MARK: - Firmware versions
+
+    /// Whether the cached firmware stamps are still trustworthy.
+    ///
+    /// A peer that drops off the link and comes back may have been reflashed in between,
+    /// so both reconnect paths set this: the LoRa link returning (the locator power-cycled
+    /// or was reflashed) and a Bluetooth disconnect (the receiver did). Cleared when a
+    /// fresh `VersionInfo` lands.
+    ///
+    /// Deliberately separate from `versionInfo` itself — blanking that on every brief LoRa
+    /// dropout would flicker the settings screens, since both hide the row while it is
+    /// empty. The stale stamp stays on screen until a newer one replaces it, which is also
+    /// why `clearLiveReadouts` leaves the versions alone.
+    private var versionInfoStale = true
+
+    /// The previous tick's view of the link, for the rising edge below. Seeded `false`
+    /// because this view model is built once, at launch, with the link down — Android
+    /// seeds from the live link instead because its version job re-runs on every Activity
+    /// recreation, and a `false` seed there would read an already-up link as a rising edge
+    /// on each theme or locale change.
+    private var linkWasUpForVersion = false
+
+    /// When the last request went out, standing in for Android's `delay(5_000L)` after
+    /// each send: this is a tick, so the back-off is a floor between sends rather than a
+    /// suspension inside the loop.
+    private var lastVersionRequest: Date?
+
+    /// Ask the locator — via the receiver — for both firmware version strings.
+    ///
+    /// **This is what populates the Firmware row on both settings screens.** Those rows
+    /// existed and were permanently hidden, because nothing ever sent the request: the
+    /// message type, the parser and the views were all in place and unconnected.
+    ///
+    /// Locator-directed, so it carries the connected locator's id (ADR-0020) and cannot go
+    /// out with nothing connected — the same gate Android's `sendMessage` applies by
+    /// refusing any locator-directed message without a `connectedLocatorId`. The receiver
+    /// forwards it, the locator answers with its version, and the receiver appends its own
+    /// before relaying, which is why one request fills both rows.
+    ///
+    /// Runs for the app's lifetime rather than stopping on first success: a locator
+    /// reflashed mid-session would otherwise keep reporting the version it booted with
+    /// until the app was restarted. A rising edge on the link (silent → sending again) is
+    /// the reflash signal, since flashing takes the locator off the air. It transmits only
+    /// while stale, so the steady state is silent.
+    private func versionTick(now: Date = Date()) {
+        guard state == .ready else { return }
+        let linkUp = lastLocatorMessage.map {
+            now.timeIntervalSince($0) < Self.channelWatchSilence
+        } ?? false
+        if linkUp, !linkWasUpForVersion { versionInfoStale = true }
+        linkWasUpForVersion = linkUp
+
+        guard linkUp, versionInfoStale else { return }
+        if let last = lastVersionRequest,
+           now.timeIntervalSince(last) < Self.versionRetry { return }
+        guard let id = connectedLocatorId, gate.mayCommand(id),
+              let msg = OutboundMessage.locatorDirected(.versionRequest, targetLocatorId: id)
+        else { return }
+        if transport.send(msg) { lastVersionRequest = now }
+    }
+
     /// Android's `LINK_LIVENESS_TICK_MS` and `CHANNEL_WATCH_TICK_MS` / `_SILENCE_MS`.
     private static let livenessTick: TimeInterval = 0.5
     private static let channelWatchTick: TimeInterval = 2
     private static let channelWatchSilence: TimeInterval = 5
+    /// Android's version loop ticks at 1 s and waits 5 s after each request.
+    private static let versionTick: TimeInterval = 1
+    private static let versionRetry: TimeInterval = 5
 
     private var livenessTimer: Timer?
     private var channelWatchTimer: Timer?
+    private var versionTimer: Timer?
 
     private func startLinkTimers() {
         guard livenessTimer == nil else { return }
@@ -885,6 +1340,10 @@ final class LinkViewModel: ObservableObject {
         channelWatchTimer = Timer.scheduledTimer(withTimeInterval: Self.channelWatchTick,
                                                  repeats: true) { [weak self] _ in
             Task { @MainActor in self?.channelWatchTick() }
+        }
+        versionTimer = Timer.scheduledTimer(withTimeInterval: Self.versionTick,
+                                            repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.versionTick() }
         }
     }
 
@@ -929,6 +1388,13 @@ final class LinkViewModel: ObservableObject {
                              state: FlightStates, altitudeAglM: Float, descentRateMs: Float) {
         let outcome = recorder.observe(state: state, aglM: altitudeAglM,
                                        descentRateMs: descentRateMs)
+        if case .newFlight = outcome {
+            // Opened BEFORE this frame is logged, so the frame that proved the launch
+            // lands after the launch marker rather than in the pre-roll ahead of it.
+            // `recordTrack` runs from `updateVector`, which the ingest branches call
+            // before they log the sample.
+            openFlightLog(at: Date())
+        }
         var changed = false
         if case .newFlight = outcome, !track.isEmpty {
             // A new flight left on the old track would draw the last one under the one
@@ -1008,6 +1474,25 @@ final class LinkViewModel: ObservableObject {
     /// `armed` fell into below, and it has the same answer.
     var isInFlight: Bool { armed || flightState != .waitingLaunch }
 
+    /// Both scans are refused by the RECEIVER while the locator is armed or flying
+    /// (ADR-0029 decision 7). Exposed so the Communication screen's buttons can go dead
+    /// with the reason already on screen, rather than inviting a press whose only outcome
+    /// is a refusal — fschroer, 2026-08-30, running bench 4.
+    ///
+    /// Written to match the receiver's condition exactly rather than reusing `isInFlight`
+    /// above, which counts `landed` as flying: the receiver excludes `landed`
+    /// deliberately, so a rocket on the ground is refused for being ARMED and not for
+    /// flying, and disabling on the stricter rule would grey out a scan the receiver
+    /// would have run. The two live next to each other because that is the only way the
+    /// difference is visible.
+    ///
+    /// This is an affordance, **not** enforcement. The receiver's gate is the real one
+    /// and stays — app-side gating is soft (ADR-0006 Decision 5), and the refusal text on
+    /// each section still renders if a request gets through anyway.
+    var locatorArmedOrFlying: Bool {
+        armed || (flightState != .waitingLaunch && flightState != .landed)
+    }
+
     /// Flight state from the NEWEST broadcast, for exactly the reason `armed` is.
     ///
     /// A `PreLaunchData` means the locator is disarmed AND at `WaitingLaunch` — the
@@ -1031,7 +1516,13 @@ final class LinkViewModel: ObservableObject {
             // what it broadcasts, so the icon settles on its final colour the moment it
             // does rather than blinking out the whole 2 s timeout. The timeout only has
             // to cover a command that is never answered.
-            if armed != oldValue { armCommandPending = false }
+            if armed != oldValue {
+                armCommandPending = false
+                logFlightEvent(.armedStateChanged, detail: armed ? "armed" : "disarmed")
+                // Disarming is how a flight is signed off at the pad, and the rows after
+                // it are a locator sitting in a box.
+                if !armed { closeFlightLog(reason: .disarmed) }
+            }
         }
     }
 
@@ -1079,7 +1570,16 @@ final class LinkViewModel: ObservableObject {
 
         let type: MsgType = armed ? .disarmRequest : .armRequest
         guard let msg = OutboundMessage.locatorDirected(type, targetLocatorId: id) else { return }
-        transport.send(msg)
+        // Android's `changeLocatorArmedState` sets SendFailure when the write does not
+        // go out. iOS carries arm state as `armCommandPending` rather than a message
+        // state, so the equivalent is: do not blink for an acknowledgement that cannot
+        // come, and say what happened. An arm press that silently does nothing is the
+        // worst version of this bug — the user is standing at a pad believing a command
+        // is in flight.
+        guard transport.send(msg) else {
+            transientMessage = "The command could not be sent — the receiver link is down."
+            return
+        }
         armCommandPending = true
         // The locator answers by changing what it broadcasts; if it never does, stop
         // blinking rather than blinking forever.
@@ -1169,6 +1669,17 @@ final class LinkViewModel: ObservableObject {
 
     /// What every link loss runs — including the scan that starts a second after launch.
     func clearLiveReadoutsForTesting() { clearLiveReadouts() }
+
+    /// One turn of the firmware-version loop. The real one is a 1 s timer, and what is
+    /// worth testing is the rising edge and the back-off, not the scheduler.
+    func versionTickForTesting(now: Date = Date()) { versionTick(now: now) }
+    var isVersionInfoStaleForTesting: Bool { versionInfoStale }
+
+    /// When the locator was last heard, which is the clock the version loop judges the
+    /// link by. A seam because the two intervals in play are both 5 s — the silence
+    /// window and the request back-off — so any test of one has to hold the other still,
+    /// and `ingest` stamps this with the wall clock.
+    func setLastLocatorMessageForTesting(_ date: Date?) { lastLocatorMessage = date }
 
     /// Fire a channel. Addressed, like every locator-directed command (ADR-0020) — a
     /// broadcast one would fire somebody else's charge.
@@ -1346,8 +1857,10 @@ final class LinkViewModel: ObservableObject {
         guard let id = connectedLocatorId, gate.mayCommand(id),
               let msg = OutboundMessage.locatorDirected(.flightMetadataRequest,
                                                         targetLocatorId: id) else { return false }
-        transport.send(msg)
-        return true
+        // Returns whether the request actually went out. The caller's retry loop reads
+        // this to choose between `.sent` and `.sendFailure`, exactly as Android's
+        // metadata loop reads `service.requestFlightProfileMetadata()`.
+        return transport.send(msg)
     }
 
     /// Open one archived record: show the chart and start the transfer.
@@ -1370,8 +1883,8 @@ final class LinkViewModel: ObservableObject {
             flightProfileDataState = .sendFailure
             return
         }
-        transport.send(msg)
-        flightProfileDataState = .sent
+        // Android's `getFlightProfileData` branches on the send result the same way.
+        flightProfileDataState = transport.send(msg) ? .sent : .sendFailure
     }
 
     /// Leave the chart for the record list.
@@ -1437,7 +1950,13 @@ final class LinkViewModel: ObservableObject {
         prelaunch = nil
         // Receiver-sourced state describes a receiver we are no longer talking to.
         // The versions are the exception: they are a property of the hardware, not of
-        // this link, and re-showing them on reconnect beats a blank field.
+        // this link, and re-showing them on reconnect beats a blank field. They are
+        // marked STALE rather than cleared, so the next link-up re-asks and the row keeps
+        // its last value meanwhile instead of flickering — the receiver can only be
+        // reflashed across a BLE drop, which the LoRa rising edge cannot see.
+        versionInfoStale = true
+        linkWasUpForVersion = false
+        lastVersionRequest = nil
         receiverInfo = nil
         channelSurvey = nil
         surveyInProgress = false
@@ -1520,7 +2039,9 @@ final class LinkViewModel: ObservableObject {
     var snr: Int? { newest(\.snr, \.snr).map(Int.init) }
     var altitudeAglM: Float { newest(\.altitudeAgl, \.altitudeAgl) ?? 0 }
 
-    private let transport = BluetoothTransport()
+    /// Behind `LocatorTransport` rather than the concrete class, so a test can make a
+    /// write fail — which is what `send`'s discarded result went unnoticed for.
+    private let transport: LocatorTransport
     private let started = Date()
 
     /// - Parameter defaults: where remembered locators live. Injectable **for the tests
@@ -1529,7 +2050,8 @@ final class LinkViewModel: ObservableObject {
     ///   an earlier run of the whole suite — happened to store. That is a defect the
     ///   suite can hide rather than report, since the polluted case is the one where the
     ///   locator authenticates and everything looks fine.
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = .standard, transport injected: LocatorTransport? = nil) {
+        transport = injected ?? BluetoothTransport()
         store = KnownLocatorStore(defaults: defaults)
         for (id, key) in store.keysById { gate.remember(locatorId: id, passwordKey: key) }
         // A track survives the app being killed, as Android's does. The recorder's own
@@ -1675,6 +2197,7 @@ final class LinkViewModel: ObservableObject {
                                  state: .waitingLaunch, altitudeAglM: m.altitudeAgl)
                     updateLinkQuality(rssi: Int(m.rssi), snr: Int(m.snr),
                                       noiseFloor: Int(m.noiseFloor))
+                    logPrelaunchFrame(m, at: Date())
                 }
                 // OUTSIDE the recognition gate, deliberately: the receiver's own
                 // channel and name describe the user's receiver, not the locator that
@@ -1710,6 +2233,7 @@ final class LinkViewModel: ObservableObject {
                                  descentRateMs: m.velocityNed.z)
                     updateLinkQuality(rssi: Int(m.rssi), snr: Int(m.snr),
                                       noiseFloor: Int(m.noiseFloor))
+                    logTelemetryFrame(m, at: Date())
                 }
             }
         case .receiverInfo:
@@ -1717,12 +2241,21 @@ final class LinkViewModel: ObservableObject {
             // sends with no locator involved.
             if let m = ReceiverInfo.parse(frame) {
                 receiverInfo = m
+                // The receiver emits one of these when it follows a locator change on its
+                // own initiative; reaching that code proves the forward TRANSMITTED. Match
+                // on the channel — a receipt carrying the OLD channel is the recovery
+                // revert answering, and must not re-base the confirm window.
+                noteChannelMoveReceipt(channel: Int(m.channel))
                 remoteReceiverConfig.channel = Int(m.channel)
                 if !m.deviceName.isEmpty { remoteReceiverConfig.deviceName = m.deviceName }
                 pollChannel(noiseFloor: Int(m.noiseFloor), badFrames: m.badFrames)
+                logReceiverInfoFrame(m, at: Date())
             }
         case .versionInfo:
-            if let m = VersionInfo.parse(frame) { versionInfo = m }
+            if let m = VersionInfo.parse(frame) {
+                versionInfo = m
+                versionInfoStale = false
+            }
         case .channelSurvey:
             if let r = ChannelSurvey.parse(frame) {
                 channelSurvey = r
@@ -1801,6 +2334,31 @@ final class LinkViewModel: ObservableObject {
     ///   case the search is for.
     private func admit(_ frame: [UInt8], _ locatorId: UInt32, _ baseSize: Int,
                        deviceName: String? = nil, receiverChannel: Int? = nil) -> Bool {
+        // An authorized locator does NOT get the connection back just because we opened
+        // the slot on the way somewhere else. A receiver-only move releases the connection
+        // before the change goes out, and the locator we are leaving goes on broadcasting
+        // into that empty slot at 1 Hz until the receiver actually retunes. Admitting one
+        // of those frames re-adopts the old locator AND clears
+        // `awaitingChannelRecognition`, so the challenge armed for the new channel never
+        // fires — the reported "no password prompt from a search result, but the conflict
+        // banner's Connect works". See `LocatorConnection.isFromChannelBeingLeft`.
+        //
+        // Asked BEFORE `gate.evaluate`, which is where iOS's shape differs from Android's:
+        // `evaluate` authorizes and takes the connection in one mutating step, so the only
+        // place to intervene between those two is here. The name and channel are still
+        // recorded — they are true facts about a locator we are authorized for, and the
+        // search runs on them — exactly as Android records them before its own guard.
+        if gate.isAuthorized(frame: frame, locatorId: locatorId, baseSize: baseSize),
+           LocatorConnection.isFromChannelBeingLeft(
+               frameChannel: receiverChannel,
+               previousChannel: channelChangePreviousChannel,
+               awaitingRecognition: awaitingChannelRecognition,
+               moveInFlight: receiverConfigMessageState != .idle) {
+            noteName(locatorId, deviceName)
+            noteChannel(locatorId, receiverChannel)
+            return false
+        }
+
         switch gate.evaluate(frame: frame, locatorId: locatorId, baseSize: baseSize) {
         case .accepted(let id):
             // The channel change resolved itself: something we are entitled to display
@@ -2046,5 +2604,44 @@ final class LinkViewModel: ObservableObject {
         case .ready:          return "Ready"
         case .disconnected:   return "Disconnected"
         }
+    }
+}
+
+/// The runner's side effects, bound to a live `LinkViewModel`.
+///
+/// A separate type rather than a conformance on the view model itself, so the runner's
+/// surface stays exactly the eight operations it needs and nothing on the view model
+/// accidentally satisfies it. Holds the model weakly-by-reference in the ordinary way —
+/// the runner never outlives the resolve call that owns it.
+@MainActor
+private struct ChannelMoveLiveOps: ChannelMoveRunner.Ops {
+    let model: LinkViewModel
+    /// The config the move staged, re-sent verbatim by the one permitted retry.
+    let target: LocatorConfig
+
+    func probeInProgress() async -> Bool { model.probeIsRunning() }
+
+    func runProbe(newChannel: Int, oldChannel: Int) async -> ChannelMoveRunner.ProbeRun? {
+        await model.runChannelProbe(newChannel: newChannel, oldChannel: oldChannel)
+    }
+
+    func pause(_ interval: TimeInterval) async {
+        try? await Task.sleep(for: .seconds(interval))
+    }
+
+    func now() async -> Date { Date() }
+
+    func pointReceiverAt(_ channel: Int) async { model.pointReceiverAtForMove(channel) }
+
+    func awaitRelink(oldChannel: Int, since: Date) async -> Bool {
+        await model.awaitRelinkForMove(oldChannel: oldChannel, since: since)
+    }
+
+    func resendLocatorConfig() async -> Bool { model.resendLocatorConfigForMove(target) }
+
+    func awaitConfirmation() async -> Bool { await model.awaitMoveConfirmation(target) }
+
+    func onVerdict(_ verdict: ChannelMove.Verdict) async {
+        model.noteChannelMoveVerdict(verdict)
     }
 }

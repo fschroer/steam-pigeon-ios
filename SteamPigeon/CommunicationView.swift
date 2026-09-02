@@ -76,6 +76,14 @@ struct CommunicationView: View {
                 conflictBanner
                 channelMoveBanner
 
+                // Said once, above both scans, because one condition disables both and
+                // two identical notes read as two problems.
+                if model.locatorArmedOrFlying {
+                    ChannelNote("The locator is armed or in flight, so neither scan can "
+                                + "run — either would leave the receiver deaf for up to a "
+                                + "minute and a half. Disarm to scan.", SPColor.error)
+                }
+
                 // Search first, scan second. This screen is opened far more often
                 // because something is missing than because something is noisy.
                 LocatorSearchSection(
@@ -84,7 +92,8 @@ struct CommunicationView: View {
                     targetId: $searchTargetId,
                     candidates: model.searchCandidates(targetLocatorId: searchTargetId),
                     enabled: linkReady && model.locatorSearch?.running != true
-                             && !model.surveyInProgress,
+                             && !model.surveyInProgress
+                             && !model.locatorArmedOrFlying,
                     currentChannel: model.remoteReceiverConfig.channel,
                     connectedLocatorId: model.connectedLocatorId,
                     // A change is already on its way to the receiver. Connect stays
@@ -126,14 +135,36 @@ struct CommunicationView: View {
                 // a continuous non-LoRa emitter, which the passive path cannot see. That
                 // diagnostic is unreachable without a locator now, and ADR-0029 records
                 // the trade rather than leaving it to be rediscovered.
-                if hearingLocator {
+                //
+                // **But never hide a scan this section is running, or the answer it
+                // produced.** The rule above is about OFFERING the sweep. A sweep leaves
+                // the receiver deaf for ~7.8 s — longer than the 5 s silence window — so
+                // gating on `hearingLocator` alone made the section hide itself about
+                // five seconds into its own scan, taking the "Scanning…" indicator with
+                // it, and reappear with the results once broadcasts resumed. Reported
+                // from the Android bench 2026-08-30 as the indicator vanishing and
+                // results arriving 3–4 seconds later; the scan was running the whole
+                // time.
+                //
+                // `model.channelSurvey != nil` is load-bearing, not belt-and-braces.
+                // Without it the section hides again at the instant the results land —
+                // the sweep has ended, so `surveyInProgress` is false, while the
+                // locator's next broadcast is still up to a second away — and flickers
+                // back a moment later. Results do not linger across visits: the
+                // entry-time clear drops them, with the same "except one still running"
+                // exception.
+                //
+                // Same lesson as that entry-time clear: a rule about when to START
+                // something must not be applied to something already under way.
+                if hearingLocator || model.surveyInProgress || model.channelSurvey != nil {
                     Divider().padding(.vertical, 12)
 
                     ChannelSurveySection(
                         survey: model.channelSurvey,
                         inProgress: model.surveyInProgress,
                         enabled: linkReady && !model.surveyInProgress
-                                 && model.locatorSearch?.running != true,
+                                 && model.locatorSearch?.running != true
+                                 && !model.locatorArmedOrFlying,
                         locatorConnected: locatorConnected,
                         // Which device the pick commands decides which in-flight change
                         // has to finish first.
@@ -250,13 +281,21 @@ struct CommunicationView: View {
     /// resume on the new channel and may revert and retry once, so this runs for several
     /// seconds with the link legitimately down — silence there reads as a hang.
     @ViewBuilder private var channelMoveBanner: some View {
-        if let channel = model.pendingChannelMove, let progress = moveProgress(channel) {
+        // Dismiss hides the MESSAGE, not the staged channel: that channel is what the
+        // ADR-0029 search looks on after a failed move, and it used to be thrown away by
+        // the act of clearing the error describing it.
+        //
+        // The terminal state is read from `channelMoveResult`, which outlives the 2 s
+        // `.idle` reset — the outcome of a cycle that can run ~23 s used to be on screen
+        // for two.
+        if let channel = model.channelMoveBannerChannel,
+           let progress = moveProgress(channel) {
             HStack(alignment: .top) {
                 Text(progress.text)
                     .font(SPFont.labelSmall)
                     .foregroundStyle(progress.isError ? SPColor.error : SPColor.onSurfaceVariant)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                Button("Dismiss") { model.clearPendingChannelMove() }
+                Button("Dismiss") { model.dismissChannelMoveBanner() }
                     .buttonStyle(.materialText)
             }
             .padding(.bottom, 8)
@@ -264,7 +303,7 @@ struct CommunicationView: View {
     }
 
     private func moveProgress(_ channel: Int) -> (text: String, isError: Bool)? {
-        switch model.locatorConfigMessageState {
+        switch model.channelMoveResult ?? model.locatorConfigMessageState {
         case .sendRequested, .sent:
             return ("Moving to channel \(channel)… the link drops briefly while both "
                     + "devices switch.", false)
@@ -273,8 +312,41 @@ struct CommunicationView: View {
         case .sendFailure:
             return ("Could not send the channel change. Check the receiver connection.", true)
         case .notAcknowledged:
-            return ("The locator did not confirm channel \(channel). It has been left on "
-                    + "its previous channel.", true)
+            // Three different endings share this state and leave the hardware in different
+            // places — see `model.channelMoveOutcome`.
+            //
+            // **No sentence may claim the receiver is somewhere the app has not read.**
+            // These messages used to name the ATTEMPTED channel, which is false whenever
+            // the forward never transmitted: with the locator already silent no forwarding
+            // window ever opens, so the receiver never follows and is still on the old
+            // channel. Reported from the Android bench 2026-08-30 — right verdict, wrong
+            // sentence. The receiver's own channel is known here regardless, because the
+            // channel watch polls `ReceiverInfo` every 2 s while the locator is quiet.
+            //
+            // Which sentence is earned is decided in `ChannelMove.message` and pinned
+            // there; this only maps it to words. Three of this amendment's defects were
+            // messages rather than logic, so the choice does not live inline in a view.
+            let here = model.remoteReceiverConfig.channel
+            switch ChannelMove.message(verdict: model.channelMoveOutcome,
+                                       attemptedChannel: channel,
+                                       receiverChannel: here) {
+            case .notChecked:
+                return ("Could not check where the locator is — the receiver was busy. "
+                        + "The receiver is on channel \(here); use Find a locator.", true)
+            case .nothingMoved:
+                // Ordinary text, not error colour: a much smaller problem than a stranded
+                // locator, and the user should not have to work out which they have.
+                return ("The locator did not respond, so nothing was moved. The receiver "
+                        + "is still on channel \(here) — power the locator up and the "
+                        + "link should resume.", false)
+            case .unresolved:
+                return ("Could not confirm where the locator is. The receiver is on "
+                        + "channel \(here) — if the locator does not come back, use "
+                        + "Find a locator.", true)
+            case .succeeded, .leftOnPrevious:
+                return ("The locator did not confirm channel \(channel). It has been "
+                        + "left on its previous channel.", true)
+            }
         case .idle:
             return nil
         }

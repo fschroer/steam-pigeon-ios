@@ -39,6 +39,48 @@ enum LocatorConnection {
                            age: TimeInterval, hold: TimeInterval = connectionHold) -> Bool {
         connected == nil || connected == sender || age >= hold
     }
+
+    /// Was this frame relayed from the channel a receiver-only move is **leaving**?
+    ///
+    /// A receiver-only change (ADR-0011 invariant 5) releases the connection before the
+    /// change goes out, so the first authorized locator on the *new* channel can claim
+    /// the slot without waiting out `mayConnect`'s hold. That opens a window: the BLE
+    /// write, the receiver's own retune and its next relay all take time, and the locator
+    /// we just let go of is still broadcasting on the old channel at 1 Hz. Its frames
+    /// arrive into an empty slot and are perfectly authorized — so it takes the connection
+    /// straight back and resolves the recognition cycle that was armed for a locator on a
+    /// channel the receiver has not reached yet.
+    ///
+    /// Reported on Android 2026-08-29, and **intermittent for exactly that reason** — it
+    /// depends on whether one of those broadcasts lands inside the window. Four locators
+    /// on four channels, connected to Twist 0 on 34, Connect tapped on Twist Lock 5 on 60:
+    /// the receiver arrived on 60, but the app had already re-adopted Twist 0, so the
+    /// password prompt Twist Lock 5 should have raised never came. What came instead was
+    /// the conflict banner — whose Connect action asks for the password, which is why the
+    /// feature looked reachable by another route and broken by this one.
+    ///
+    /// The discriminator is the receiver's own channel stamp on every relayed frame
+    /// (ADR-0011 invariant 3). A frame stamped with `previousChannel` was relayed before
+    /// the retune and says nothing about where we are going. `TelemetryData` carries no
+    /// stamp at all, so during the window it cannot be placed either and is treated the
+    /// same way; an armed locator on the new channel is admitted a few seconds later, when
+    /// the move resolves, and it could not have raised a challenge in the meantime anyway
+    /// (the prompt needs a device name).
+    ///
+    /// Bounded by `moveInFlight` rather than by the recognition flag alone. The flag stays
+    /// set until something arrives on the new channel, which may be never — a move onto an
+    /// empty channel, say — and suppressing forever would leave the app deaf to the
+    /// locator it still has. The receiver's config message state always returns to idle,
+    /// so the window closes whether the move is acknowledged or times out.
+    ///
+    /// - Parameter frameChannel: the receiver's stamp, or nil for a message carrying none.
+    static func isFromChannelBeingLeft(frameChannel: Int?,
+                                       previousChannel: Int,
+                                       awaitingRecognition: Bool,
+                                       moveInFlight: Bool) -> Bool {
+        awaitingRecognition && moveInFlight
+            && (frameChannel == nil || frameChannel == previousChannel)
+    }
 }
 
 /// The recognition gate: which locator's data reaches the screen, and which commands

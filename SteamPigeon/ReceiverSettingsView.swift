@@ -66,9 +66,14 @@ struct ReceiverSettingsView: View {
                     }
 
                     if let version = model.versionInfo, !version.receiverVersion.isEmpty {
+                        // A plain `Text` on Android, so it takes the default body
+                        // style and the default content colour — the same mapping as
+                        // every other bare caption on this screen. It was bodyMedium in
+                        // onSurfaceVariant here, which is the "drifting a detail at a
+                        // time" divergence: muted and a size down from what Android
+                        // draws, for no reason recorded anywhere.
                         Text("Firmware: \(version.receiverVersion)")
-                            .font(SPFont.bodyMedium)
-                            .foregroundStyle(SPColor.onSurfaceVariant)
+                            .font(SPFont.bodyLarge)
                     }
 
                     ConfigTextRow(title: "Receiver Name",

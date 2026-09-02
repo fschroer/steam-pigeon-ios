@@ -169,6 +169,7 @@ struct RootView: View {
                 case .flightProfiles:   FlightProfilesView(model: model) { mapSheet = nil }
                 case .downloadMap:      DownloadMapView(phone: model.phone)
                 case .deploymentTest:   DeploymentTestView(model: model) { mapSheet = nil }
+                case .appFlightLogs:    AppFlightLogsView(model: model) { mapSheet = nil }
                 }
             }
                 .navigationTitle(destination.title)

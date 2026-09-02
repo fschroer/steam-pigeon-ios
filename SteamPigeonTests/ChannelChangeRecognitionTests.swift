@@ -313,6 +313,88 @@ final class ChannelChangeRecognitionTests: XCTestCase {
         XCTAssertTrue(m.pointReceiverAtChannel(57))
     }
 
+    // MARK: - The channel a move is leaving (reported on Android 2026-08-29)
+
+    // Connected to Twist 0 on 34, Connect tapped on Twist Lock 5's hit on 60. The move
+    // releases the connection first, and Twist 0 goes on broadcasting on 34 until the
+    // receiver retunes. Intermittent because it depends on whether one of those 1 Hz
+    // broadcasts lands inside the window.
+
+    func testTheLocatorWeAreLeavingDoesNotReclaimTheSlotMidMove() {
+        // Twist 0's frame, relayed while the receiver was still on 34.
+        XCTAssertTrue(LocatorConnection.isFromChannelBeingLeft(
+            frameChannel: 34, previousChannel: 34,
+            awaitingRecognition: true, moveInFlight: true))
+    }
+
+    func testTheLocatorOnTheChannelWeAreMovingToIsAdmitted() {
+        // Twist Lock 5's frame, relayed after the retune. This is the frame the
+        // recognition cycle was armed for; suppressing it would break the feature rather
+        // than fix it.
+        XCTAssertFalse(LocatorConnection.isFromChannelBeingLeft(
+            frameChannel: 60, previousChannel: 34,
+            awaitingRecognition: true, moveInFlight: true))
+    }
+
+    func testAnUnstampedFrameCannotBePlacedDuringTheMoveSoItWaits() {
+        // `TelemetryData` carries no receiver channel. During the window it could be
+        // either locator, and guessing wrong is the reported bug.
+        XCTAssertTrue(LocatorConnection.isFromChannelBeingLeft(
+            frameChannel: nil, previousChannel: 34,
+            awaitingRecognition: true, moveInFlight: true))
+    }
+
+    func testTheWindowClosesWhenTheMoveStopsBeingInFlight() {
+        // The recognition flag alone would suppress forever on a move to a channel with
+        // nothing on it, leaving the app deaf to the locator it still has. The receiver's
+        // config message state always returns to idle, acknowledged or not.
+        XCTAssertFalse(LocatorConnection.isFromChannelBeingLeft(
+            frameChannel: 34, previousChannel: 34,
+            awaitingRecognition: true, moveInFlight: false))
+    }
+
+    func testNoChannelMoveInProgressSuppressesNothing() {
+        // A receiver RENAME also drives the config message state, and leaves a stale
+        // previous channel behind it.
+        XCTAssertFalse(LocatorConnection.isFromChannelBeingLeft(
+            frameChannel: 34, previousChannel: 34,
+            awaitingRecognition: false, moveInFlight: true))
+    }
+
+    /// The report, end to end. The old locator broadcasts into the slot the move just
+    /// opened; it must not take the connection back, and — the half that made the
+    /// password prompt vanish — it must not clear the recognition cycle either.
+    func testTheOldLocatorsBroadcastDoesNotDisarmTheRecognitionCycle() throws {
+        let m = connectedModel()
+        m.pointReceiverAtChannel(60)
+        XCTAssertNil(m.connectedLocatorId, "precondition: the slot was released")
+
+        // Twist 0, still on 34, still authorized, arriving before the receiver retunes.
+        m.ingestForTesting(prelaunchFrame(locatorId: ours, key: 0, deviceName: "Twist 0",
+                                          channel: 34))
+        XCTAssertNil(m.connectedLocatorId, "the channel being left may not reclaim the slot")
+        XCTAssertTrue(m.isAwaitingChannelRecognition,
+                      "the cycle was armed for channel 60 and nothing on 60 has been heard")
+
+        // Now the locator the move was aimed at, whose password we do not hold.
+        m.ingestForTesting(prelaunchFrame(locatorId: theirs, key: 0xABCD_1234,
+                                          deviceName: "Twist Lock 5", channel: 60))
+        let challenge = try XCTUnwrap(m.challenge, "this is the prompt that never came")
+        XCTAssertEqual(theirs, challenge.locatorId)
+        XCTAssertNil(m.conflictLocatorId, "and the conflict banner is what came instead")
+    }
+
+    /// The name and last-heard channel are still recorded from a suppressed frame: they
+    /// are true facts about a locator we are authorized for, and the search runs on them.
+    func testASuppressedFrameStillFeedsTheSearchMemory() {
+        let m = connectedModel()
+        m.pointReceiverAtChannel(60)
+        m.ingestForTesting(prelaunchFrame(locatorId: ours, key: 0, deviceName: "Twist 0",
+                                          channel: 34))
+        XCTAssertTrue(m.searchCandidates(targetLocatorId: ours).contains(34),
+                      "the channel it was last heard on is where a search should look")
+    }
+
     // MARK: -
 
     /// A pre-launch frame carrying `deviceName` and the receiver's `channel`,

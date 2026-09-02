@@ -93,6 +93,58 @@ final class ChannelOccupancyTests: XCTestCase {
                                                excludeLocatorId: ours))
     }
 
+    /// The receiver scores a hit for ANY frame that parses and fills `sender_id` only
+    /// from `PreLaunchData` and `TelemetryData`, so a dwell landing on a flight-data
+    /// transfer or a deployment test hits with found = 1 and locatorId = 0. The channel
+    /// really is occupied; "00000000" is not the name of who is on it.
+    func testASearchHitWithNoIdIsNamedNotRenderedAs00000000() {
+        let search = LocatorSearch.Run(
+            running: false,
+            hits: [LocatorSearch.Hit(channel: 12, locatorId: 0, deviceName: "",
+                                     rssi: -70, snr: 6, armed: false)],
+            status: .done)
+        XCTAssertEqual(ChannelOccupancy.unrecognizedLocator,
+                       ChannelOccupancy.occupant(of: 12, survey: nil, search: search,
+                                                 excludeLocatorId: ours))
+    }
+
+    /// The search wins on recency, not unconditionally. Returning "nobody knows" over the
+    /// top of an answer the app already holds is worse than the 00000000 it replaced, so
+    /// an anonymous hit yields to a named survey entry.
+    func testASearchHitWithNoIdFallsThroughToASurveyThatHasAName() {
+        let r = survey([(12, theirs)], home: 34)
+        let search = LocatorSearch.Run(
+            running: false,
+            hits: [LocatorSearch.Hit(channel: 12, locatorId: 0, deviceName: "",
+                                     rssi: -70, snr: 6, armed: false)],
+            status: .done)
+        XCTAssertEqual("Prometheus",
+                       ChannelOccupancy.occupant(of: 12, survey: r, search: search,
+                                                 excludeLocatorId: ours,
+                                                 labelOf: { $0 == self.theirs ? "Prometheus" : nil }))
+    }
+
+    /// Near-field saturation reports one locator on channels it is nowhere near (bench
+    /// 2026-08-27: a locator on 57 also reported on 17). The hit row already flags the
+    /// weaker one `likely false hit`; naming it here as well made the screen contradict
+    /// itself in red and talk the user out of a free channel.
+    func testAHitTheRunCallsSuspectIsNotAnOccupant() {
+        let search = LocatorSearch.Run(
+            running: false,
+            hits: [LocatorSearch.Hit(channel: 57, locatorId: theirs, deviceName: "Prometheus",
+                                     rssi: -40, snr: 9, armed: false),
+                   LocatorSearch.Hit(channel: 17, locatorId: theirs, deviceName: "Prometheus",
+                                     rssi: -55, snr: 2, armed: false)],
+            status: .done)
+        XCTAssertTrue(search.suspectChannels.contains(17))
+        XCTAssertNil(ChannelOccupancy.occupant(of: 17, survey: nil, search: search,
+                                               excludeLocatorId: ours))
+        // The real channel is still reported.
+        XCTAssertEqual("Prometheus",
+                       ChannelOccupancy.occupant(of: 57, survey: nil, search: search,
+                                                 excludeLocatorId: ours))
+    }
+
     func testAnUnscannedChannelIsUnknownNotFree() {
         XCTAssertNil(ChannelOccupancy.occupant(of: 7, survey: nil, search: nil,
                                                excludeLocatorId: ours))

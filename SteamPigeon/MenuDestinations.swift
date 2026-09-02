@@ -9,6 +9,7 @@ enum MenuDestination: String, Identifiable, CaseIterable {
     case flightProfiles
     case deploymentTest
     case downloadMap
+    case appFlightLogs
 
     var id: String { rawValue }
 
@@ -22,6 +23,7 @@ enum MenuDestination: String, Identifiable, CaseIterable {
         case .flightProfiles:   return "Flight Profiles"
         case .deploymentTest:   return "Deployment Test"
         case .downloadMap:      return "Download maps"
+        case .appFlightLogs:    return "App Flight Logs"
         }
     }
 
@@ -37,6 +39,10 @@ enum MenuDestination: String, Identifiable, CaseIterable {
         case .flightProfiles:   return "u_turn_right"
         case .deploymentTest:   return "bomb"
         case .downloadMap:      return "navigation"
+        // A sheet with ruled lines: the record, rather than the map or the link.
+        // Deliberately distinct from `u_turn_right` (Flight Profiles), which is the
+        // locator's own archive of the flight; this is what the phone wrote down.
+        case .appFlightLogs:    return "flight_log"
         }
     }
 }
@@ -72,6 +78,9 @@ enum MenuGating {
 
         items.append(.appSettings)
         items.append(.downloadMap)
+        // Ungated: the logs are files on the phone, so they are readable with the receiver
+        // switched off and out of range — which is where they are read.
+        items.append(.appFlightLogs)
 
         if locatorActive && armed {
             items.append(.deploymentTest)

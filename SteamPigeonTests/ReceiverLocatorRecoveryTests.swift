@@ -43,6 +43,28 @@ final class ReceiverLocatorRecoveryTests: XCTestCase {
         XCTAssertEqual("", MapStatusPanel.locatorText(name: nil, fresh: true, state: .ready))
     }
 
+    /// A scan parks the receiver on other channels for up to ~90 s, so the locator goes
+    /// quiet because the user asked it to. Reporting that as "No Locator" invites an Arm
+    /// press in the belief nothing can happen — and ADR-0029 decision 7 has a queued
+    /// command end the sweep, so it does happen. Reported from the Android bench
+    /// 2026-08-30.
+    func testAScanIsReportedRatherThanAnAbsence() {
+        XCTAssertEqual("Searching…",
+                       MapStatusPanel.locatorText(name: nil, fresh: false, state: .ready,
+                                                  scanInProgress: "Searching…"))
+        XCTAssertEqual("Scanning…",
+                       MapStatusPanel.locatorText(name: "Big Bertha", fresh: false, state: .ready,
+                                                  scanInProgress: "Scanning…"))
+    }
+
+    /// The scan case sits AHEAD of the freshness test but behind it in precedence: a
+    /// locator still being heard is named, because the sweep has not silenced it yet.
+    func testALiveLocatorOutranksTheScanNotice() {
+        XCTAssertEqual("Big Bertha",
+                       MapStatusPanel.locatorText(name: "Big Bertha", fresh: true, state: .ready,
+                                                  scanInProgress: "Searching…"))
+    }
+
     /// With no receiver there is nothing to hear a locator THROUGH. Android gates this
     /// row on `Ready` so it cannot report the same single fault a second time.
     func testNoReceiverMeansTheLocatorRowSaysNothing() {

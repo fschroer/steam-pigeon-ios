@@ -189,6 +189,11 @@ struct MapScreen: View {
         }
         // Android speaks the arm state on every change, from the status panel.
         .onChange(of: model.armed) { voice.speech.say($0 ? "Armed" : "Disarmed") }
+        // Every line that actually reaches the synthesizer is recorded in the App Flight
+        // Log (ADR-0030). Set here rather than in `SpeechCoordinator` because this is the
+        // first place both objects are in scope; `say` is the single funnel, so one hook
+        // covers every callout the app has or gains.
+        .onAppear { voice.speech.onSpoken = { [weak model] in model?.logAnnouncement($0) } }
         .onDisappear { voice.padAlert.stop() }
     }
 
@@ -288,6 +293,10 @@ struct MapScreen: View {
                     // Android reads `locatorConfig.deviceName` here.
                     locatorName: model.remoteLocatorConfig.deviceName,
                     locatorFresh: model.isLocatorFresh,
+                    // Search first: it is the longer of the two and the one whose
+                    // silence a user is most likely to misread.
+                    scanInProgress: model.locatorSearch?.running == true ? "Searching…"
+                                  : model.surveyInProgress ? "Scanning…" : nil,
                     satellites: model.satellites,
                     armed: model.armed,
                     locatorBatteryMv: model.isPreLaunchFresh ? model.prelaunch?.locatorBatteryMv : nil,

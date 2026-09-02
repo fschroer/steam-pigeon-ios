@@ -13,10 +13,11 @@ final class MenuGatingTests: XCTestCase {
         MenuGating.destinations(linkReady: linkReady, locatorActive: locatorActive, armed: armed)
     }
 
-    /// With nothing connected there are still two entries: app settings, and map
-    /// download — which is done at home, precisely when nothing is connected.
-    func testNothingConnectedStillOffersSettingsAndMapDownload() {
-        XCTAssertEqual([.appSettings, .downloadMap],
+    /// With nothing connected there are still three entries: app settings, map download
+    /// — which is done at home, precisely when nothing is connected — and the app flight
+    /// logs, which are files on the phone and are read with the receiver switched off.
+    func testNothingConnectedStillOffersSettingsMapDownloadAndLogs() {
+        XCTAssertEqual([.appSettings, .downloadMap, .appFlightLogs],
                        menu(linkReady: false, locatorActive: false))
     }
 
@@ -80,13 +81,30 @@ final class MenuGatingTests: XCTestCase {
         }
     }
 
-    /// Android's order after ADR-0029: Communication, Flight Profiles, Locator Settings,
-    /// Receiver Settings, Application Settings, Download maps, Deployment Test.
-    /// **Flight Profiles above Locator Settings**, which is the pair that swapped.
+    /// Android's order after ADR-0029 and ADR-0030: Communication, Flight Profiles,
+    /// Locator Settings, Receiver Settings, Application Settings, Download maps, App
+    /// Flight Logs, Deployment Test. **Flight Profiles above Locator Settings**, which is
+    /// the pair that swapped.
     func testFullyConnectedDisarmedOrderMatchesAndroid() {
         XCTAssertEqual([.communication, .flightProfiles, .locatorSettings,
-                        .receiverSettings, .appSettings, .downloadMap],
+                        .receiverSettings, .appSettings, .downloadMap, .appFlightLogs],
                        menu(linkReady: true, locatorActive: true, armed: false))
+    }
+
+    /// App Flight Logs is **ungated**, and that is the point of it: a log is read after
+    /// the flight, at home, with the receiver in a bag. Gating it on the link would hide
+    /// it in exactly the state it is wanted.
+    func testAppFlightLogsIsAlwaysOffered() {
+        for ready in [true, false] {
+            for active in [true, false] {
+                for armed in [true, false] {
+                    XCTAssertTrue(
+                        menu(linkReady: ready, locatorActive: active, armed: armed)
+                            .contains(.appFlightLogs),
+                        "ready=\(ready) active=\(active) armed=\(armed)")
+                }
+            }
+        }
     }
 
     /// Deployment Test is last, not third: it is armed-only, so it never shares the list
@@ -94,7 +112,7 @@ final class MenuGatingTests: XCTestCase {
     /// furthest from a thumb.
     func testFullyConnectedArmedOrderMatchesAndroid() {
         XCTAssertEqual([.communication, .receiverSettings, .appSettings,
-                        .downloadMap, .deploymentTest],
+                        .downloadMap, .appFlightLogs, .deploymentTest],
                        menu(linkReady: true, locatorActive: true, armed: true))
     }
 }

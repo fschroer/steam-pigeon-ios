@@ -31,9 +31,14 @@ struct LocatorSettingsView: View {
                     // screen is for: the channels are what changes between flights, and
                     // the rest is set once per installation.
                     if let version = model.versionInfo, !version.locatorVersion.isEmpty {
+                        // A plain `Text` on Android, so it takes the default body
+                        // style and the default content colour — the same mapping as
+                        // every other bare caption on this screen. It was bodyMedium in
+                        // onSurfaceVariant here, which is the "drifting a detail at a
+                        // time" divergence: muted and a size down from what Android
+                        // draws, for no reason recorded anywhere.
                         Text("Firmware: \(version.locatorVersion)")
-                            .font(SPFont.bodyMedium)
-                            .foregroundStyle(SPColor.onSurfaceVariant)
+                            .font(SPFont.bodyLarge)
                     }
 
                     ForEach(0..<4, id: \.self) { channel in

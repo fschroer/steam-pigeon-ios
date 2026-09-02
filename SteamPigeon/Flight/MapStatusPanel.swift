@@ -18,6 +18,10 @@ struct MapStatusPanel: View {
     /// Android's `lastMessageAge < messageTimeout` for this row: whether the locator has
     /// spoken recently enough for its name — or its absence — to be worth reporting.
     var locatorFresh: Bool = false
+    /// What the receiver is doing instead of listening, or nil when it is listening. A
+    /// scan is the app's OWN doing, so the silence it causes must not be reported as a
+    /// missing locator — see `locatorText`.
+    var scanInProgress: String?
     let satellites: UInt8?
     let armed: Bool
     let locatorBatteryMv: UInt16?
@@ -324,26 +328,37 @@ struct MapStatusPanel: View {
     /// The device name alone. Armed state is carried by the rocket icon's tint, as on
     /// Android — spelling it out again in the row is a second claim to keep in sync.
     ///
-    /// Three cases, in Android's order (`FlightMapScreen.kt`):
+    /// Four cases, in Android's order (`FlightMapScreen.kt`):
     ///
     /// 1. **Something is arriving** — its name, and nothing else. That name can be blank
     ///    for a locator first heard while ARMED and never authorized here, because only
     ///    `PreLaunchData` carries one; blank is then the honest answer, and "No Locator"
     ///    is a flat contradiction of the telemetry being plotted beside it. (Authorized
     ///    locators are named from the stored label — `LinkViewModel.adoptStoredLabel`.)
-    /// 2. **Nothing arriving, receiver up** — "No Locator": there is a radio listening
+    /// 2. **A scan is running** — what the receiver is doing instead of listening. A scan
+    ///    parks the receiver on other channels for up to ~90 s, so the locator goes quiet
+    ///    BECAUSE THE USER ASKED IT TO, and "No Locator" reports the app's own action as
+    ///    a fault. It is the dangerous direction, not a cosmetic one: arm/disarm stays
+    ///    live throughout — deliberately, since ADR-0029 decision 7 has a queued command
+    ///    END the sweep so an operator's Arm is never silently delayed — so the panel was
+    ///    inviting the user to press Arm believing nothing could happen, and then it
+    ///    happens. Reported from the Android bench 2026-08-30 running bench 4.
+    /// 3. **Nothing arriving, receiver up** — "No Locator": there is a radio listening
     ///    and it is hearing nothing.
-    /// 3. **Nothing arriving, no receiver** — blank. Gated on `.ready` so this row cannot
+    /// 4. **Nothing arriving, no receiver** — blank. Gated on `.ready` so this row cannot
     ///    second-guess the receiver row above it: with no receiver there is nothing to
     ///    hear a locator THROUGH, and saying so twice reads as two faults instead of one.
     private var locatorText: String {
-        Self.locatorText(name: locatorName, fresh: locatorFresh, state: connectionState)
+        Self.locatorText(name: locatorName, fresh: locatorFresh, state: connectionState,
+                         scanInProgress: scanInProgress)
     }
 
     /// Static so the rule can be tested without a view — it is the rule, not the
     /// rendering, that was wrong.
-    static func locatorText(name: String?, fresh: Bool, state: TransportState) -> String {
+    static func locatorText(name: String?, fresh: Bool, state: TransportState,
+                            scanInProgress: String? = nil) -> String {
         if fresh { return name ?? "" }
+        if let scanInProgress { return scanInProgress }
         return state == .ready ? "No Locator" : ""
     }
 

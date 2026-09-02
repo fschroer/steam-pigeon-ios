@@ -26,6 +26,22 @@ final class FlightSpeech: NSObject {
     private let synthesizer = AVSpeechSynthesizer()
     private weak var settings: AppSettings?
 
+    /// Called with every line that actually reaches the synthesizer, so the App Flight Log
+    /// can hold what was said and when (ADR-0030).
+    ///
+    /// **This is where Android needed an `Announcer` facade and iOS does not.** There, some
+    /// nineteen sites called `TextToSpeech.speak` directly, and a logging rule that has to
+    /// be remembered at each is one that will be missed at the next one added; the facade
+    /// exists to funnel them. `say` was already that funnel here — including the
+    /// voice-enabled check — so the hook sits inside it and every present and future callout
+    /// is carried by construction.
+    ///
+    /// Fires only when speech genuinely went out. With voice switched off nothing is spoken
+    /// and nothing is recorded: the log is a record of what the operator heard, not of what
+    /// the app would have said, and an entry for a callout nobody heard would put a cause in
+    /// the timeline for a reaction that never happened.
+    var onSpoken: ((String) -> Void)?
+
     init(settings: AppSettings) {
         self.settings = settings
         super.init()
@@ -65,6 +81,7 @@ final class FlightSpeech: NSObject {
         if priority == .urgent, synthesizer.isSpeaking {
             synthesizer.stopSpeaking(at: .immediate)
         }
+        onSpoken?(text)
         let utterance = AVSpeechUtterance(string: text)
         if let id = settings?.voiceIdentifier, let voice = AVSpeechSynthesisVoice(identifier: id) {
             utterance.voice = voice

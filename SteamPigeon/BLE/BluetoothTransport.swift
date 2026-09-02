@@ -27,6 +27,41 @@ enum TransportState: Equatable {
 /// things it relies on do not exist here, and each is handled rather than emulated:
 /// MAC addresses, an explicit MTU request, connection-priority control, and a
 /// foreground service.
+/// The transport surface `LinkViewModel` drives.
+///
+/// Extracted so the view model can be built against a fake. It exists for one reason
+/// worth stating: **`send` returns whether the write went out, and every caller that has
+/// a failure state to set must read it** — a result that was discarded at all 17 call
+/// sites, reporting a write that never left as `Sent`, and invisible in tests because
+/// `transport` was a concrete `BluetoothTransport` that no test could make fail.
+///
+/// Nothing here is an abstraction over Bluetooth; it is exactly what the view model
+/// already used, named.
+@MainActor
+protocol LocatorTransport: AnyObject {
+    var onFrame: (([UInt8]) -> Void)? { get set }
+    var onStateChange: ((TransportState) -> Void)? { get set }
+    var onNameChange: ((String?) -> Void)? { get set }
+    var onDiscover: (([CBPeripheral]) -> Void)? { get set }
+    var onHealthProbe: (() -> Void)? { get set }
+    var onBadFrameCount: ((Int) -> Void)? { get set }
+    var onReject: ((PacketFramer.Reject) -> Void)? { get set }
+    var onDroppedWrites: ((Int) -> Void)? { get set }
+
+    var connectedName: String? { get }
+
+    /// Whether the message was **accepted for transmission** — see
+    /// `BluetoothTransport.send` for the full contract. Deliberately NOT
+    /// `@discardableResult` here: the compiler never complained about the 17 discards,
+    /// and it is the one place that can.
+    func send(_ bytes: [UInt8]) -> Bool
+    func startScan()
+    func connectToDiscovered(_ id: UUID)
+    func disconnect()
+}
+
+extension BluetoothTransport: LocatorTransport {}
+
 final class BluetoothTransport: NSObject {
 
     // MARK: - GATT layout (confirmed on hardware)
