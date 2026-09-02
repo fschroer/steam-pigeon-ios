@@ -145,6 +145,40 @@ final class WireLayoutTests: XCTestCase {
         XCTAssertEqual(.unknown, ChannelSurvey.Status.from(4))
     }
 
+    /// `cancelledByUser` is the app's own value and must stay unreachable from the wire.
+    /// The receiver reports one `cancelled` for all three of its causes; the app
+    /// substitutes this one because it is the party that sent the cancel. If a firmware
+    /// ever does distinguish them, this test is what forces the decision to be made
+    /// deliberately rather than a byte quietly acquiring a second meaning — 4 decoding
+    /// to `cancelledByUser` would make "you pressed Stop" reachable for a sweep the user
+    /// never touched.
+    func testCancelledByUserNeverComesOffTheWire() {
+        for b in UInt8.min...UInt8.max {
+            XCTAssertNotEqual(.cancelledByUser, ChannelSurvey.Status.from(b))
+        }
+    }
+
+    /// The cancel is app→receiver, so the framer must never try to frame one.
+    func testChannelSurveyCancelRequestIsNotFramed() {
+        var header = [UInt8](repeating: 0, count: WireProtocol.headerSize)
+        header[0] = WireProtocol.systemId
+        header[1] = MsgType.channelSurveyCancelRequest.rawValue
+        XCTAssertEqual(.unframeable, PacketFramer.expectedPacketLength(header))
+    }
+
+    /// Header-only on the wire, and receiver-directed. **Its own message type rather
+    /// than a flag on `channelSurveyRequest`**: the receiver sizes payloads from
+    /// `msg_type` alone, so growing that header-only request would desync a receiver
+    /// predating the change on the ordinary scan too, not merely on a cancel.
+    func testChannelSurveyCancelRequestIsHeaderOnlyAndReceiverDirected() throws {
+        let msg = try XCTUnwrap(OutboundMessage.cancelChannelSurvey())
+        XCTAssertEqual(WireProtocol.headerSize, msg.count)
+        XCTAssertEqual(25, MsgType.channelSurveyCancelRequest.rawValue)
+        XCTAssertEqual(MsgType.channelSurveyCancelRequest.rawValue, msg[1])
+        XCTAssertNil(OutboundMessage.locatorDirected(.channelSurveyCancelRequest,
+                                                     targetLocatorId: 0x1234_5678))
+    }
+
     // ── Locator search (ADR-0029) ───────────────────────────────────────────────
     //
     // Additive and receiver-directed: the locator reserves MsgType 23/24 and implements

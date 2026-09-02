@@ -27,6 +27,8 @@ enum OutboundMessage {
         // precisely when no locator is connected, so treating it as locator-directed
         // would disable it in the only state it is for.
         .locatorSearchRequest,
+        // Stopping a sweep must work in exactly the states starting one does.
+        .channelSurveyCancelRequest,
     ]
 
     /// Build a receiver-directed message.
@@ -61,6 +63,15 @@ enum OutboundMessage {
         out[4] = UInt8(truncatingIfNeeded: crc)
         out[5] = UInt8(truncatingIfNeeded: crc >> 8)
         return out
+    }
+
+    /// `ChannelSurveyCancelRequest`: stop a sweep in progress.
+    ///
+    /// Header-only, like the request it stops — which sweep to stop is never in
+    /// question, there is only ever one. The receiver answers with a `cancelled` status
+    /// even when nothing was running, so the app never waits on silence.
+    static func cancelChannelSurvey() -> [UInt8]? {
+        receiverDirected(.channelSurveyCancelRequest)
     }
 
     /// `LocatorSearchRequest`: search `channels`, or the whole band when it is empty.

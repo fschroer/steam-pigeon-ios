@@ -1638,6 +1638,16 @@ broadcast is still up to a second away — and flickers back a moment later. Res
 outlive the visit on either platform; the entry-time clear drops them, with the same
 *except one still running* exception.
 
+> **Do not narrow this gate again — since 2026-09-02 it holds a control, not just an
+> indicator.** Both apps gained a **Stop** button on the sweep that day (ADR-0019 tier 3
+> item 5, `MsgType` 25), and on both it lives inside this section. Had this fix landed a
+> day later, the button would have vanished about five seconds into an ~8 s sweep, taking
+> itself away for exactly the stretch someone reaching for it is in. The feature is
+> matched on both platforms — same message, same wording, same `cancelledByUser`
+> substitution — and it is matched partly *because* this closed first. The cost of
+> reintroducing the narrow gate is no longer a missing "Scanning…" label; it is a scan
+> that cannot be called off.
+
 The rule the gate encodes (ADR-0029: the sweep is offered only while a locator is heard) is
 unchanged. It is about **offering** a scan, and was being applied to one already under way
 — the same mistake, in the same file, that clearing the scans unconditionally on entry made

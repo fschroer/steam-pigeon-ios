@@ -21,7 +21,8 @@ enum ChannelSurvey {
     /// receiver said the sweep succeeded, and a value this build cannot interpret must
     /// not present as a good reading.
     enum Status: Equatable {
-        case ok, refusedArmed, refusedBusy, cancelled, unknown
+        /// `cancelledByUser` is **never decoded from a byte** — see `from(_:)`.
+        case ok, refusedArmed, refusedBusy, cancelled, cancelledByUser, unknown
 
         static func from(_ v: UInt8) -> Status {
             switch v {
@@ -33,6 +34,14 @@ enum ChannelSurvey {
             // transfer is in progress", which would be a plain lie about what just
             // happened. One more value in a byte that already existed — no size change.
             case 3:  return .cancelled
+            // No case for `cancelledByUser`, deliberately. The receiver reports one
+            // `Cancelled` for all three of its causes — a queued operator command, a
+            // receiver channel change, and the operator's own Stop — and cannot say
+            // which; it only distinguishes them on its console. The app is the one
+            // party that KNOWS when it asked, so it substitutes the value itself
+            // rather than inferring it from the wire. Worth the extra case: the
+            // shared wording is a specific claim about why the sweep ended, and it is
+            // false for a Stop the user pressed.
             default: return .unknown
             }
         }
@@ -88,7 +97,9 @@ enum ChannelSurvey {
     }
 
     struct Result: Equatable {
-        let status: Status
+        /// `var` so the view model can substitute `cancelledByUser` over the receiver's
+        /// `cancelled`, exactly as `LocatorSearch.Run.status` is assigned on a cancel.
+        var status: Status
         /// Quietest first. Empty unless `status` is `.ok`.
         let ranked: [Ranked]
         /// True when every confirmed channel is loud.

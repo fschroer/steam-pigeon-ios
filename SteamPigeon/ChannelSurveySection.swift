@@ -2,7 +2,7 @@ import SwiftUI
 
 /// "Find a clean channel" — the tier-3 channel survey (ADR-0019, #33).
 ///
-/// **On demand only.** A sweep costs about a second of deafness and the decision it
+/// **On demand only.** A sweep costs about eight seconds of deafness and the decision it
 /// informs is made once, on the ground.
 ///
 /// Three presentation rules come straight from the ADR, and each exists because the
@@ -34,6 +34,7 @@ struct ChannelSurveySection: View {
     /// labels and nothing more.
     var labelOf: (UInt32) -> String? = { _ in nil }
     let onScan: () -> Void
+    let onCancel: () -> Void
     let onPick: (Int) -> Void
 
     var body: some View {
@@ -41,10 +42,19 @@ struct ChannelSurveySection: View {
             HStack(alignment: .center) {
                 // Filled, like Update: these start work rather than offering a choice,
                 // and the outlined style read as secondary next to the fields below.
-                Button(inProgress ? "Scanning… (about 7 seconds)" : "Find a clean channel",
+                Button(inProgress ? "Scanning… (about 8 seconds)" : "Find a clean channel",
                        action: onScan)
                     .buttonStyle(.materialFilled)
                     .disabled(!enabled || inProgress)
+                // Only while a sweep is running, and plain like the search's Stop, so the
+                // filled Scan button stays the section's title. The sweep is only ~8 s,
+                // but the reason to stop one is that the locator is live and its
+                // telemetry is wanted back — waiting out the confirm phase is exactly
+                // what the user cannot afford in that moment. Stops the RECEIVER, not
+                // just the wait: the request ends the sweep and restores the home channel.
+                if inProgress {
+                    Button("Stop", action: onCancel)
+                }
                 // This section's button is its title, so the help hangs off the button.
                 // What a pick does depends on whether a locator is connected — moving the
                 // whole system or only the receiver — so that line is chosen here rather
@@ -71,9 +81,12 @@ struct ChannelSurveySection: View {
     @ViewBuilder private func results(_ survey: ChannelSurvey.Result) -> some View {
         switch survey.status {
         case .refusedArmed:
-            ChannelNote("The locator is armed. Scanning would stop telemetry for about a "
-                        + "second, and the channel cannot be changed while armed. Disarm "
-                        + "first.", SPColor.error)
+            // "about a second" until 2026-09-02, which was the coarse pass alone: the
+            // confirm phase dwells 1.4 s on each of five candidates, so the real cost is
+            // ~7.8 s. Matches Android's survey_refused_armed and the manual.
+            ChannelNote("The locator is armed. Scanning would stop telemetry for about "
+                        + "eight seconds, and the channel cannot be changed while armed. "
+                        + "Disarm first.", SPColor.error)
         case .refusedBusy:
             ChannelNote("The receiver is busy — a flight data transfer, or a command "
                         + "still on its way to the locator. Try again in a moment.",
@@ -84,6 +97,12 @@ struct ChannelSurveySection: View {
         case .cancelled:
             ChannelNote("Scan stopped so your command could reach the locator. Scan again "
                         + "when you are ready.", SPColor.onSurfaceVariant)
+        // Nor is this one, and it is the case the user is least surprised by — they
+        // pressed Stop. Worth its own wording all the same: what they want to know is
+        // whether the receiver is listening again, which is the whole reason to stop it.
+        case .cancelledByUser:
+            ChannelNote("Scan stopped. The receiver is back on your channel and "
+                        + "listening.", SPColor.onSurfaceVariant)
         case .unknown:
             ChannelNote("No response from the receiver. If its firmware predates channel "
                         + "scanning, update it — otherwise try again.", SPColor.error)

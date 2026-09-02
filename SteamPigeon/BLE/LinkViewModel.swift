@@ -319,6 +319,10 @@ final class LinkViewModel: ObservableObject {
     /// Seam for the tests: a real result only arrives from a receiver.
     func setChannelSurveyForTesting(_ r: ChannelSurvey.Result) { channelSurvey = r }
 
+    /// Seam for the tests, alongside `setLocatorSearchForTesting`: a sweep only starts
+    /// against a live receiver, and the cancel path is gated on one being in progress.
+    func setSurveyInProgressForTesting(_ v: Bool) { surveyInProgress = v }
+
     /// Move the locator — and therefore the whole system — to `channel`.
     ///
     /// **This retunes a live locator.** ADR-0011: the request goes out on the OLD
@@ -557,6 +561,7 @@ final class LinkViewModel: ObservableObject {
     func requestChannelSurvey() {
         guard !surveyInProgress else { return }
         channelSurvey = nil
+        surveyCancelRequested = false
         surveyToken &+= 1
         let token = surveyToken
 
@@ -574,10 +579,52 @@ final class LinkViewModel: ObservableObject {
         Task { @MainActor in
             try? await Task.sleep(for: .seconds(Self.surveyTimeout))
             guard surveyInProgress, token == surveyToken else { return }
+            // A cancel that was never answered is a receiver that stopped answering,
+            // not a cancel that worked — report the silence.
+            surveyCancelRequested = false
             surveyInProgress = false
             channelSurvey = ChannelSurvey.failed(homeChannel: remoteReceiverConfig.channel)
         }
     }
+
+    /// Ask the receiver to stop sweeping.
+    ///
+    /// The point is the radio, not the button: a sweep leaves the home channel for the
+    /// best part of eight seconds, and the reason to stop one is almost always that the
+    /// locator is live and its telemetry is wanted back now. The receiver restores the
+    /// channel and re-arms RX as it ends the sweep, so it is listening again within a
+    /// poll instead of at the end of the confirm phase.
+    ///
+    /// Settles through the response rather than a local guess, exactly as
+    /// `cancelLocatorSearch` does: the sweep is still running until the receiver says
+    /// otherwise, and clearing the UI early would claim the deafness was over while it
+    /// still had a second or more to run.
+    func cancelChannelSurvey() {
+        guard surveyInProgress else { return }
+        surveyCancelRequested = true
+        // Both failures mean the same thing and get the same answer: nothing left the
+        // phone, so no response is coming and the 15 s timeout would be the only way
+        // out of a sweep the user has already asked to stop.
+        //
+        // The send result is CHECKED, unlike `cancelLocatorSearch` above, which only
+        // checks that the message could be built. Two reasons, and Android is both of
+        // them: its `cancelChannelSurvey` checks the boolean and settles on a false, so
+        // matching it is parity rather than invention — and `LocatorTransport.send` is
+        // deliberately not `@discardableResult`, so a bare call here would be one more
+        // silent discard in the one place the compiler was just given the power to
+        // object to them.
+        guard let msg = OutboundMessage.cancelChannelSurvey(),
+              transport.send(msg) else {
+            surveyCancelRequested = false
+            surveyInProgress = false
+            channelSurvey = ChannelSurvey.failed(homeChannel: remoteReceiverConfig.channel)
+            return
+        }
+    }
+
+    /// Set while a cancel we sent is outstanding. Exists only to word the outcome
+    /// truthfully — see `ChannelSurvey.Status.cancelledByUser`.
+    private var surveyCancelRequested = false
 
     /// Android's `SURVEY_TIMEOUT_MS`.
     private static let surveyTimeout: TimeInterval = 15
@@ -2018,6 +2065,7 @@ final class LinkViewModel: ObservableObject {
         receiverInfo = nil
         channelSurvey = nil
         surveyInProgress = false
+        surveyCancelRequested = false
         remoteLocatorConfig = LocatorConfig()
         pendingChannelMove = nil
         conflictLocatorId = nil
@@ -2315,7 +2363,23 @@ final class LinkViewModel: ObservableObject {
                 versionInfoStale = false
             }
         case .channelSurvey:
-            if let r = ChannelSurvey.parse(frame) {
+            if var r = ChannelSurvey.parse(frame) {
+                // A cancel is answered even when the receiver had nothing to cancel —
+                // deliberately, so the app never waits on silence. That makes a stray
+                // response possible: tap Stop just as the sweep finishes and the receiver
+                // queues its Ok, then answers the cancel with a Cancelled describing
+                // nothing. Landing it would replace a good ranking with "Scan stopped".
+                //
+                // Gated on a sweep being outstanding rather than on the status alone: the
+                // second response is only meaningless once the first has been consumed.
+                guard r.status != .cancelled || surveyInProgress else { return }
+                // Only when we asked, and only over a `cancelled`: a sweep cancelled for
+                // a queued command while the user happened to be pressing Stop is still
+                // that first thing, and the receiver's own reason outranks ours.
+                if surveyCancelRequested, r.status == .cancelled {
+                    r.status = .cancelledByUser
+                }
+                surveyCancelRequested = false
                 channelSurvey = r
                 surveyInProgress = false
             }

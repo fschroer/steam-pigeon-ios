@@ -173,6 +173,7 @@ struct CommunicationView: View {
                             : model.receiverConfigMessageState == .idle,
                         labelOf: { model.storedLabel(for: $0) },
                         onScan: { model.requestChannelSurvey() },
+                        onCancel: { model.cancelChannelSurvey() },
                         onPick: { channel in
                             if locatorConnected {
                                 // Move the whole system. "Find a clean channel" means the

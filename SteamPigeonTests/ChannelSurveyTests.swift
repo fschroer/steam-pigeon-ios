@@ -1,4 +1,5 @@
 import XCTest
+import CoreBluetooth
 @testable import SteamPigeon
 
 /// Ranking the receiver's band sweep (ADR-0019 tier 3), ported from Android's
@@ -325,5 +326,144 @@ final class ChannelSurveyLifecycleTests: XCTestCase {
         m.requestChannelSurvey()
         XCTAssertNotEqual(ChannelSurvey.Status.ok, m.channelSurvey?.status ?? .ok,
                           "the stale ranking must not survive into the new sweep")
+    }
+
+    /// A `Cancelled` frame that follows a cancel WE sent is worded as the user's own
+    /// Stop, not as the firmware giving way to a queued command.
+    ///
+    /// This is the whole reason `cancelledByUser` exists. The receiver reports one
+    /// status byte for all three causes, so without the substitution the user who just
+    /// pressed Stop is told "Scan stopped so your command could reach the locator" —
+    /// a specific claim about the hardware, and a false one.
+    func testAUserCancelIsWordedAsTheUsersOwn() {
+        let m = model(accepts: true)
+        m.setSurveyInProgressForTesting(true)
+        m.cancelChannelSurvey()
+        m.ingestForTesting(cancelledResponseFrame())
+        XCTAssertEqual(.cancelledByUser, m.channelSurvey?.status)
+        XCTAssertEqual(false, m.surveyInProgress)
+    }
+
+    /// The same frame with no cancel of ours outstanding keeps the receiver's own
+    /// meaning. The firmware cancels sweeps for a queued operator command and for a
+    /// receiver channel change, and neither is something the user did.
+    func testAnUnsolicitedCancelKeepsTheReceiversOwnWording() {
+        let m = model(accepts: true)
+        m.setSurveyInProgressForTesting(true)
+        m.ingestForTesting(cancelledResponseFrame())
+        XCTAssertEqual(.cancelled, m.channelSurvey?.status)
+    }
+
+    /// One cancel does not colour the next sweep. Without the reset, a sweep that ended
+    /// for a queued command would be reported as the user's Stop for the rest of the
+    /// session.
+    func testTheCancelFlagDoesNotSurviveIntoTheNextSweep() {
+        let m = model(accepts: true)
+        m.setSurveyInProgressForTesting(true)
+        m.cancelChannelSurvey()
+        m.ingestForTesting(cancelledResponseFrame())
+        XCTAssertEqual(.cancelledByUser, m.channelSurvey?.status)
+
+        m.setSurveyInProgressForTesting(true)
+        m.ingestForTesting(cancelledResponseFrame())
+        XCTAssertEqual(.cancelled, m.channelSurvey?.status)
+    }
+
+    /// Stop tapped as the sweep finishes: the receiver answers the completed sweep AND
+    /// the cancel it had nothing left to cancel, and the second answer must not land.
+    ///
+    /// The firmware answers an idle cancel on purpose — silence is the one reply an app
+    /// cannot tell apart from firmware that never heard of the message — so this stray
+    /// response is a designed consequence, not a fault. Without the guard it replaces a
+    /// good ranking with "Scan stopped", which is the opposite of what happened.
+    func testAStrayCancelDoesNotOverwriteACompletedSweep() {
+        let m = model(accepts: true)
+        m.setSurveyInProgressForTesting(true)
+        m.cancelChannelSurvey()
+
+        var levels = [Int8](repeating: -110, count: WireProtocol.surveyChannelCount)
+        levels[7] = -60
+        m.ingestForTesting(okResponseFrame(levels: levels))
+        XCTAssertEqual(.ok, m.channelSurvey?.status, "the completed sweep should land")
+
+        m.ingestForTesting(cancelledResponseFrame())
+        XCTAssertEqual(.ok, m.channelSurvey?.status,
+                       "the cancel's own answer describes nothing and must not land")
+    }
+
+    /// A cancel the transport will not take is a cancel that never happened, and the
+    /// sweep must not be left reading "Scanning…" until the 15 s timeout — the user has
+    /// already said they want it to stop.
+    ///
+    /// `LocatorTransport.send` is deliberately not `@discardableResult`, so this path
+    /// exists to be checked rather than discarded; the equivalent Android branch settles
+    /// the same way.
+    func testACancelThatCannotBeSentSettlesRatherThanHanging() {
+        let m = model(accepts: false)
+        m.setSurveyInProgressForTesting(true)
+        m.cancelChannelSurvey()
+        XCTAssertFalse(m.surveyInProgress, "a cancel that never left the phone must not hang")
+        XCTAssertEqual(.unknown, m.channelSurvey?.status)
+    }
+
+    /// A per-test `UserDefaults` suite, as `SendFailureTests` does: these models read and
+    /// write stored locator state, and `.standard` would carry it between tests.
+    /// `LinkViewModel` holds the transport strongly, so nothing here needs to retain it.
+    private func model(accepts: Bool) -> LinkViewModel {
+        let t = StubTransport()
+        t.accepts = accepts
+        return LinkViewModel(
+            defaults: UserDefaults(suiteName: "ChannelSurveyTests.\(UUID().uuidString)")!,
+            transport: t)
+    }
+
+    /// This repo keeps its test doubles file-local — `SendFailureTests.DeadTransport` is
+    /// private — so this is the survey suite's own copy rather than a shared helper.
+    private final class StubTransport: LocatorTransport {
+        var onFrame: (([UInt8]) -> Void)?
+        var onStateChange: ((TransportState) -> Void)?
+        var onNameChange: ((String?) -> Void)?
+        var onDiscover: (([CBPeripheral]) -> Void)?
+        var onHealthProbe: (() -> Void)?
+        var onBadFrameCount: ((Int) -> Void)?
+        var onReject: ((PacketFramer.Reject) -> Void)?
+        var onDroppedWrites: ((Int) -> Void)?
+        var connectedName: String?
+
+        private(set) var attempted = 0
+        var accepts = false
+
+        func send(_ bytes: [UInt8]) -> Bool { attempted += 1; return accepts }
+        func startScan() {}
+        func connectToDiscovered(_ id: UUID) {}
+        func disconnect() {}
+    }
+
+    /// A completed sweep, so the race above has something real to be overwritten.
+    private func okResponseFrame(levels: [Int8]) -> [UInt8] {
+        var f = [UInt8](repeating: 0,
+                        count: WireProtocol.headerSize + WireProtocol.channelSurveyPayloadSize)
+        f[0] = WireProtocol.systemId
+        f[1] = MsgType.channelSurvey.rawValue
+        f[6] = 0        // ChannelSurveyStatus::Ok
+        f[7] = UInt8(levels.count)
+        for (i, l) in levels.enumerated() { f[9 + i] = UInt8(bitPattern: l) }
+        let o = 9 + WireProtocol.surveyChannelCount
+        f[o] = 1        // confirmed_count
+        f[o + 1] = 7    // confirmed_channel[0]
+        return f
+    }
+
+    /// A `ChannelSurveyResponse` carrying `Cancelled`. Unsealed, like the neighbouring
+    /// `responseFrame`: `ingest` dispatches on the type byte and the CRC was checked by
+    /// the framer well before it.
+    private func cancelledResponseFrame() -> [UInt8] {
+        var f = [UInt8](repeating: 0,
+                        count: WireProtocol.headerSize + WireProtocol.channelSurveyPayloadSize)
+        f[0] = WireProtocol.systemId
+        f[1] = MsgType.channelSurvey.rawValue
+        f[6] = 3        // ChannelSurveyStatus::Cancelled
+        f[7] = 0        // channel_count — nothing measured
+        return f
     }
 }

@@ -97,4 +97,14 @@ enum MsgType: UInt8, CaseIterable {
     /// and one answer at the end would leave the app with a dead progress bar and no
     /// way to show a hit the moment it happens.
     case locatorSearchResult = 24
+    /// App→receiver: stop a channel survey in progress (no locator involved).
+    ///
+    /// **Its own message rather than a flag on `channelSurveyRequest`**, which is the
+    /// shape `locatorSearchRequest` uses for its cancel. That request already carried a
+    /// payload; `ChannelSurveyRequest` is header-only, and the receiver derives payload
+    /// length from `msg_type` alone — there is no length field on the wire. Growing it
+    /// would desync a receiver predating the change on the ORDINARY scan, not merely on
+    /// a cancel. A new type leaves that path untouched: old firmware fails this frame's
+    /// CRC, resets, and keeps sweeping.
+    case channelSurveyCancelRequest = 25
 }
