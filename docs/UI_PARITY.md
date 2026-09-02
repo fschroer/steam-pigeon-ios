@@ -1,26 +1,40 @@
 # Android ⇄ iOS UI parity — inventory, audits and deliberate gaps
 
-**Status, 2026-08-31. Every Android screen is ported EXCEPT one.** The flight map,
+**Status, 2026-09-01. Every Android screen is ported.** The flight map,
 Application Settings, Receiver Settings, Locator Settings, Flight Profiles, Download maps
 and Deployment Test. Everything up to Locator Settings has been exercised on hardware; the
 three newest screens have been driven on the simulator only — though Download maps has
 downloaded a real region there, which is the half of it that could not be faked.
 
-**Android gained an eighth screen on 2026-08-31: App Flight Logs**
-([ADR-0030](../../steam-pigeon-locator/docs/adr/0030-app-flight-log.md)). It is not
-ported, and it is the first time since 2026-08-21 that this line has had an exception —
-which is precisely why it is at the top rather than in a table further down.
+**App Flight Logs, Android's eighth screen
+([ADR-0030](../../steam-pigeon-locator/docs/adr/0030-app-flight-log.md)), was ported
+2026-09-01** — fschroer having exercised the Android side with simulated flight data, which
+is the condition the divergence row named. See the audit below.
 
 What otherwise remains is **features inside screens**: the flight TTS callouts, the
 camera passthrough behind the heads-up gauges, the archived-path map control (unblocked
 by the flight-data transfer layer), and path export. `NEXT_SESSION.md` has the list.
+
+**Update, 2026-09-01. The "iOS OWES THIS" list is empty.** All seven items closed in one
+pass against the Android source: the two `ChannelOccupancy` fixes, the armed-scan
+affordance, the scan notice on the status panel, the survey section's gate,
+`isFromChannelBeingLeft`, the discarded `transport.send` results, and the ADR-0011
+channel-move port (`ChannelMove` + `ChannelMoveRunner` + three test suites, replacing the
+revert-on-silence cut). Then the Firmware rows, and the App Flight Logs port. 730 tests pass. **None of it has been on hardware** — and the
+channel-move path in particular cannot be exercised without a receiver, so it is pinned by
+tests and by nothing else. The "ANDROID OWES THESE" list below is untouched and still open.
+
+**Also 2026-09-01: the Firmware row on Locator Settings and Receiver Settings was never
+populated** — both rows, the message type and the parser were all in place, and nothing
+ever sent the request. Ported Android's version loop; see the Locator Settings audit.
 
 **How to use this file.** The audits below are the record of what was compared against
 Android and what was found — read the one for the screen you are about to touch before
 writing anything, rather than re-deriving it. The **deliberate divergences** are listed
 with what would close each one; every other difference found in this port was a defect.
 
-**The nine deliberate divergences.** Three of the rows below are struck through: two
+**The nine deliberate divergences.** Four are now struck through.
+ Three of the rows below are struck through: two
 closed on the Android side on 2026-08-21 and one on iOS on 2026-08-29, and all three are
 left in the table as the record of what closed them. Two were added on 2026-08-28 with the
 Communication screen, one on 2026-08-29, one on 2026-08-30, and one on 2026-08-31.
@@ -42,7 +56,7 @@ gets read before someone concludes a missing screen is a defect:
 | The password prompt refuses interactive (swipe) dismissal, where Compose's `AlertDialog` dismisses on an outside tap | Its two buttons mean different things — one connects, the other reverts the receiver to the channel it came from — and a swipe expresses neither. On iOS a swipe is far easier to trigger by accident than a scrim tap, and the consequence here is a channel revert the user did not ask for | never — the asymmetry is in the gesture, not the design |
 | The search's **Looking for** picker is a SwiftUI `Menu` styled as a field, where Android uses `ExposedDropdownMenuBox` | ADR-0016's sanctioned list covers pickers outright, and Download maps already uses `Menu` for the same reason. The part that was **not** treated as sanctioned is the *appearance*: Android deliberately moved this control from a bare `TextButton` to a field showing its current value, because the value is what a user must check before starting a search that behaves differently depending on it — so the iOS label is a value plus a chevron in a 200 pt filled field, not a text button | never — but the field shape is the requirement, not the menu mechanism |
 | **A dropped BLE link clears the receiver readout on iOS; Android keeps it.** `clearLiveReadouts` sets `receiverInfo = nil` with the rest; Android's link-loss release ([ADR-0011](../../steam-pigeon-locator/docs/adr/0011-locator-lora-channel-from-app.md), 2026-08-30) deliberately leaves `_remoteReceiverConfig` standing | The **locator** half matches — both platforms release the connection and blank the locator's configuration, because a section left reading channel 0 is a plausible-looking value where the truth is "nothing is connected". The receiver half cannot: Android seeds `_remoteReceiverConfig` from user preferences and saves it back, so clearing it would blank the Receiver channel field on every drop and raise that same hazard on the other field. iOS's `receiverInfo` is not persisted and has no such role | never — the difference is in where the value is stored, not in what either app wants to show |
-| **App Flight Logs is Android-only.** A per-flight CSV of what the *phone* received and announced — the frame plus the receiver's RSSI/SNR/noise floor plus the app's own verdicts and spoken callouts, none of which exist in the locator's archive because they are measured or decided on this side of the radio | Not a divergence of taste — the feature is four days old and has never flown. Porting a recording feature before its first hardware run would mean debugging two implementations against one unknown. The **portable half is already shaped for the port**: `FlightLogRecorder` holds no clock, no Android types and no flows, exactly as `ChannelMoveRunner` does, and its 23 tests drive it through a `Sink` protocol that Swift has verbatim | when the Android side has flown at least once and the CSV has been read on a PC. Then port `FlightLogRecorder` + `FlightLog` + `FlightLogRecorderTest` **as a unit** rather than re-deriving the close-signal set — landing deliberately does NOT close a log, and a BLE dropout deliberately does not either, and both are the kind of rule that gets "simplified" back out by a reimplementation. Storage and export are genuinely platform-specific: `UIActivityViewController` for the share sheet, and app-private storage plus `LSSupportsOpeningDocumentsInPlace` / `UIFileSharingEnabled` is the Files-app question Android answers with a `FileProvider` |
+| ~~**App Flight Logs is Android-only.**~~ **CLOSED 2026-09-01** — ported once the Android side had been exercised with simulated flight data, which is exactly what this row's *closes when* asked for. Left in as the record. Original text: A per-flight CSV of what the *phone* received and announced — the frame plus the receiver's RSSI/SNR/noise floor plus the app's own verdicts and spoken callouts, none of which exist in the locator's archive because they are measured or decided on this side of the radio | Not a divergence of taste — the feature is four days old and has never flown. Porting a recording feature before its first hardware run would mean debugging two implementations against one unknown. The **portable half is already shaped for the port**: `FlightLogRecorder` holds no clock, no Android types and no flows, exactly as `ChannelMoveRunner` does, and its 23 tests drive it through a `Sink` protocol that Swift has verbatim | when the Android side has flown at least once and the CSV has been read on a PC. Then port `FlightLogRecorder` + `FlightLog` + `FlightLogRecorderTest` **as a unit** rather than re-deriving the close-signal set — landing deliberately does NOT close a log, and a BLE dropout deliberately does not either, and both are the kind of rule that gets "simplified" back out by a reimplementation. Storage and export are genuinely platform-specific: `UIActivityViewController` for the share sheet, and app-private storage plus `LSSupportsOpeningDocumentsInPlace` / `UIFileSharingEnabled` is the Files-app question Android answers with a `FileProvider` |
 | ~~iOS remembers the name of **every** locator it accepts a broadcast from; Android remembers one only for locators whose password it holds~~ **CLOSED 2026-08-21** by Android `b209671`, which stores the name from every accepted broadcast exactly as described below. The one asymmetry left — Android noted the name **before** its `mayConnect` check and iOS only on `.accepted` — was closed here 2026-08-23: `noteName` now runs on the conflict path too, so a second authorized locator heard while ours holds the link is remembered | — | — |
 
 Everything else on these screens matches Android, including field order, widget shapes,
@@ -87,7 +101,7 @@ Android UI is ~14,900 lines across `ui/`. By screen:
 | `ReceiverSettingsScreen` | 463 | absent |
 | `AppSettingsScreen` | 202 | absent |
 | `DeploymentTest` | 160 | **present** (`DeploymentTestView`), 2026-08-21 |
-| `AppFlightLogsScreen` | 288 | absent — new 2026-08-31, see the divergence table. The logic behind it is **not** in `ui/`: `data/FlightLog.kt` (303) + `FlightLogRecorder.kt` (148) are the portable part, `FlightLogStore.kt` (223) is the Android-specific half |
+| `AppFlightLogsScreen` | 288 | **present** (`AppFlightLogsView`), 2026-09-01 — with `Protocol/FlightLog.swift` + `FlightLogRecorder.swift` (the portable half) and `Flight/FlightLogStore.swift` (the iOS-specific half). Exercised on the simulator with injected logs; never on hardware |
 | `ExportFlightPathScreen` | — | absent |
 | `LocatorPasswordDialog` | 139 | **present** (`PasswordChallengeView`) |
 | `DevicePickerDialog` | 103 | absent — iOS auto-connects to the first FFE0 peripheral |
@@ -749,6 +763,45 @@ while the diagnostics screen lists everything audible, which is a different ques
 Four deployment channels, each a mode picker plus **only** the numeric field its
 selected mode needs; locator name, LoRa channel, mounting axis, firmware version, and
 the staged Update row.
+
+#### ✅ FIXED 2026-09-01 — the Firmware row on both settings screens was never populated
+
+Reported by fschroer as version information missing from Locator Settings and Receiver
+Settings. **The rows were there all along**: `LocatorSettingsView` and
+`ReceiverSettingsView` have carried Android's `Text("Firmware: …")` in Android's position
+since they were ported, and `MsgType.versionRequest` / `.versionInfo`, `VersionInfo.parse`
+and the framer entry were all in place. **Nothing ever sent the request.** `versionInfo`
+stayed nil for the life of the process, and because both screens hide the row while it is
+empty, the gap was invisible — the screens looked finished.
+
+An unusually good illustration of *silence reads as parity*: every individual piece
+matched Android and the feature did not exist.
+
+What landed, ported from Android's `versionJob` / `connectionJob` and
+`BluetoothService.requestVersionInfo`:
+
+- `LinkViewModel.versionTick`, a 1 s timer beside the channel watch. The request is
+  **locator-directed** (ADR-0020) — absent from Android's `isReceiverDirected` list — so it
+  carries the connected locator's id and cannot go out with nothing connected. One request
+  fills BOTH rows: the receiver forwards it, the locator answers, and the receiver appends
+  its own version before relaying.
+- `versionInfoStale`, kept separate from the version strings exactly as Android keeps it.
+  A rising edge on the LoRa link means the locator may have been reflashed (flashing takes
+  it off the air); a BLE drop means the receiver may have been. The strings are **not**
+  blanked on either — both screens hide the row while empty, so blanking would flicker it
+  on every brief dropout. The stale stamp stands until a newer one replaces it.
+- The steady state is silent: it transmits only while stale, so a version loop cannot
+  become a request every few seconds forever.
+
+Pinned by `FirmwareVersionTests` (7). The one seam worth naming is
+`setLastLocatorMessageForTesting`: the silence window and the request back-off are both
+5 s, so a test of either has to hold the other still.
+
+**One divergence found and closed in passing.** Both rows were `bodyMedium` in
+`onSurfaceVariant` — muted, and a size down from Android, which draws a plain `Text` and
+therefore gets the default body style and content colour, the same mapping every other bare
+caption on these two screens already uses. Nothing recorded the difference, so it was drift
+rather than a decision. Now `bodyLarge` with the default foreground.
 
 **The limits are interlocked, and that is the safety-relevant part.** A drogue backup
 must fire AFTER its primary and a main backup BELOW its primary, so each bound is
@@ -1496,13 +1549,16 @@ re-verified against the Android source on 2026-08-29 at the line cited.
 | 3 | **The released locator's configuration is left on screen.** After a receiver-only channel change the Locator channel field goes on showing the *previous* locator's channel, and corrects only when a `PreLaunchData` from the new one is admitted — so a locator that is never admitted leaves it wrong indefinitely. Reported 2026-08-29: receiver reading 48, locator field reading 34, two real locators on two real channels | `RocketViewModel.kt:1245-1263` — `beginChannelChangeRecognition` clears ten fields and **not** `_remoteLocatorConfig` | `remoteLocatorConfig = LocatorConfig()` on release, matching what `clearLiveReadouts` already does when the link drops |
 | 4 | **The candidate list's middle is order-unstable between runs.** `knownChannels` comes from a protobuf map whose iteration order is unspecified, so which remembered channels survive the 16-channel cap — and in what order — can differ between two runs with identical stored state. With more than 14 remembered locators it changes which channels are actually searched | `RocketViewModel.kt:903` — `.values.mapNotNull { … }` over `knownLocatorsMap` | `searchCandidates` sorts the other locators' channels by id, so the list is reproducible |
 
-#### Known on both platforms — **fixed on Android 2026-08-29, iOS owes the port**
+#### ✅ Known on both platforms — fixed on Android 2026-08-29, **ported to iOS 2026-09-01**
 
 **`ChannelOccupancy.occupantOf` renders `00000000` down the search path** where the survey
 path deliberately reports nothing — full description in the ADR-0029 audit above. It was
 mirrored rather than fixed here, per "Android is the reference implementation"; Android has
-now moved, so **iOS owes two changes** to `ChannelOccupancy.swift` and
-`ChannelOccupancyTests.swift`:
+now moved, and both changes have landed on iOS in `ChannelOccupancy.swift` and
+`ChannelOccupancyTests.swift` (three new cases, mirroring Android's three). The
+`unrecognizedLabel` parameter is a constant with a default rather than a resource lookup,
+because this app's strings are inline; the hit row already said the same words. What was
+owed:
 
 1. **An anonymous search hit is named, not hexed, and does not swallow the survey.** The
    two scans part company deliberately. The **survey** still reports nothing: its
@@ -1532,19 +1588,22 @@ now moved, so **iOS owes two changes** to `ChannelOccupancy.swift` and
 Android side: `ChannelOccupancy.kt`, `CommunicationScreen.kt` (both call sites pass
 `unrecognizedLabel`), `strings.xml`, and three new cases in `ChannelOccupancyTest.kt`.
 
-#### ⚠️ iOS OWES THIS — the armed refusal is only reachable by pressing
+#### ✅ CLOSED 2026-09-01 — the armed refusal was only reachable by pressing
 
 Android greys both scan buttons while the locator is armed or flying and shows the reason
-above them (2026-08-30); iOS still offers the buttons and surfaces the refusal only after a
-press. Mirror the **receiver's** condition — armed, or a flight state that is neither
+above them (2026-08-30); iOS offered the buttons and surfaced the refusal only after a
+press. `LinkViewModel.locatorArmedOrFlying` now carries the receiver's condition and sits
+directly beside `isInFlight`, which is the only way the difference between them stays
+visible. Mirror the **receiver's** condition — armed, or a flight state that is neither
 `waitingLaunch` nor `landed` — not the flight panel's "in flight", which counts `landed` as
 flying and would grey out a scan the receiver would have run. The receiver's gate stays the
 real one; this is an affordance.
 
-#### ⚠️ iOS OWES THIS — a scan's silence reads as a missing locator
+#### ✅ CLOSED 2026-09-01 — a scan's silence read as a missing locator
 
-**`MapStatusPanel.locatorText` returns "No Locator" while a scan is running**, the same way
-Android did until 2026-08-30. Its three documented cases have no fourth for "the receiver is
+**`MapStatusPanel.locatorText` returned "No Locator" while a scan was running**, the same
+way Android did until 2026-08-30. It now takes a `scanInProgress` string and reports it as
+a fourth case, ahead of the freshness test, with two cases in the panel's tests. Its three documented cases have no fourth for "the receiver is
 parked on another channel because the user asked it to be", and a whole-band search is up to
 ~90 s of that.
 
@@ -1561,10 +1620,11 @@ fourth case, ahead of the freshness test, with a case in the panel's tests.
 **Do not "fix" the arm gate instead.** Gating arm/disarm on freshness rather than on the
 connection would put back an Arm that appears to do nothing during a sweep.
 
-#### ⚠️ iOS OWES THIS — the survey section hides its own scan
+#### ✅ CLOSED 2026-09-01 — the survey section hid its own scan
 
-**`CommunicationView.swift:129` gates the survey section on `hearingLocator` alone**, the
-same way Android did until 2026-08-30. A sweep leaves the receiver deaf for ~7.8 s, which
+**`CommunicationView` gated the survey section on `hearingLocator` alone**, the same way
+Android did until 2026-08-30. It now reads
+`hearingLocator || model.surveyInProgress || model.channelSurvey != nil`. A sweep leaves the receiver deaf for ~7.8 s, which
 is longer than the 5 s silence window that gate is judged on, so the section hides itself
 about five seconds into its own scan — taking the *"Scanning…"* indicator with it — and
 reappears with the results once broadcasts resume. Reported from the Android bench as the
@@ -1583,7 +1643,7 @@ unchanged. It is about **offering** a scan, and was being applied to one already
 — the same mistake, in the same file, that clearing the scans unconditionally on entry made
 in the other direction.
 
-#### ⚠️ iOS OWES THIS — a channel move reverts the receiver on silence, not on evidence
+#### ✅ PORTED 2026-09-01 — a channel move reverted the receiver on silence, not on evidence
 
 **`LinkViewModel.recoverLocatorChannel` fires on the absence of a confirmation, and that
 condition does not distinguish two opposite failures.** Landed on Android and in the
@@ -1707,13 +1767,36 @@ the same way is most of the work, and the tests are what stop iOS rediscovering 
 sequence one bench run at a time.
 
 Issue #20 is closed: criteria 1, 2, 3, 5 pass on hardware; 4 was retired as unreachable.
-**None of this is bench-validated on iOS.**
 
-#### ⚠️ iOS OWES THIS — the channel being left reclaims the connection mid-move
+**Ported 2026-09-01.** `ChannelMove.swift` and `ChannelMoveRunner.swift` carry the two data
+files, with all three test suites ported case for case — `ChannelMoveTests` (12),
+`ChannelMoveOrchestrationTests` (14) and `ChannelMoveRunnerTests` (18), the last driving
+the sequence against a scripted fake and asserting the same call order Android's does. The
+live side is `ChannelMoveLiveOps` in `LinkViewModel`, which replaced `recoverLocatorChannel`
+— the revert-on-silence cut this amendment exists to remove. The receipt latch
+(`channelMoveReceipt`), the hard deadline in `waitForLocatorConfig`, the separated banner
+channel and the five `ChannelMove.message` sentences all landed with it.
 
-**`admit`'s `.accepted` branch clears `awaitingChannelRecognition` and takes the
+Two mapping notes, neither a behaviour change: times are `Date`/`TimeInterval` where
+Android uses epoch milliseconds, so "no receipt" is `nil` rather than `0`; and iOS polls
+for the probe's terminator on a 100 ms loop where Android suspends on
+`locatorSearch.first { … }`, because there is no flow to await.
+
+**Still not bench-validated on iOS** — nor on the simulator in any meaningful sense, since
+none of this path exists without a receiver. It is pinned by 44 tests and by nothing else.
+
+#### ✅ CLOSED 2026-09-01 — the channel being left reclaimed the connection mid-move
+
+**`admit`'s `.accepted` branch cleared `awaitingChannelRecognition` and took the
 connection with no test on which channel the frame was relayed from.** Reported on
-Android 2026-08-29 and fixed there; iOS has the identical hole and owes the port.
+Android 2026-08-29 and fixed there; iOS had the identical hole.
+
+`LocatorConnection.isFromChannelBeingLeft` is ported with Android's five cases in
+`ChannelChangeRecognitionTests`, plus two end-to-end ones. **One shape difference worth
+knowing:** Android calls the guard between `noteLocatorChannel` and `mayConnect`, which
+are separate steps there. iOS's `gate.evaluate` authorizes and takes the connection in one
+mutating step, so the guard is asked *before* `evaluate`, using `gate.isAuthorized` — the
+name and last-heard channel are still recorded first, exactly as Android records them.
 
 `beginChannelChangeRecognition` releases the connection *before* the change goes out, so
 between the BLE write and the receiver's retune the slot is empty and **the locator being
@@ -1752,9 +1835,9 @@ true facts about a locator we are authorized for, and the search runs on them) a
 Full account in ADR-0011, "The channel being left keeps broadcasting into the slot the
 move just opened".
 
-#### ⚠️ iOS OWES THIS — a gap found while auditing the "Android owes" list
+#### ✅ CLOSED 2026-09-01 — a gap found while auditing the "Android owes" list
 
-**Every `transport.send` result is discarded, so a failed write is reported as `Sent`.**
+**Every `transport.send` result was discarded, so a failed write was reported as `Sent`.**
 `BluetoothTransport.send` returns `Bool` — false when the peripheral, the write
 characteristic or the `.ready` state is missing — and is marked `@discardableResult`, so
 the compiler never complains. All 17 call sites in `LinkViewModel.swift` ignore it, and
@@ -1774,11 +1857,27 @@ iOS's `pointReceiverAtChannel` reports that the in-flight guard passed, which is
 claim than "the change went out". The user-visible half of that fix — staging only after
 the guard — is real and Android genuinely owed it.
 
-*Closes when* `send`'s result is checked at the sites that have a failure state to set
-(`changeReceiverConfig`, `changeLocatorConfig`, the arm/disarm and deployment-test paths),
-with `@discardableResult` kept only for the fire-and-forget sends that have nowhere to
-report to. `transport` is a `private let` concrete `BluetoothTransport`, so covering this
-with a test needs it injected behind a protocol first.
+**Closed 2026-09-01.** `send`'s result is now read at the five sites that have a failure
+state to set — `changeReceiverConfig`, `changeLocatorConfig`, `openFlightProfile`,
+`requestFlightProfileMetadata` (which returns it, for the retry loop that already branched
+on it) and `toggleArmed`. `@discardableResult` stays only on the fire-and-forget sends that
+have nowhere to report to.
+
+`transport` is now a `LocatorTransport` behind an injected default, which is what made this
+testable: `SendFailureTests` drives a transport that accepts nothing and asserts each site
+reports the failure rather than `Sent`. The protocol deliberately does **not** mark `send`
+`@discardableResult` — the compiler never complained about the 17 discards, and this is the
+one place that can.
+
+**Arm/disarm departs from Android's shape, not its behaviour.** Android sets
+`locatorArmedMessageState = SendFailure`; iOS carries arm state as `armCommandPending`, so
+the equivalent is to not blink for an acknowledgement that cannot come, and to say so via
+`transientMessage`.
+
+**The deployment-test path was left alone, deliberately.** The list above named it, but
+Android discards that result too (`DeploymentTest.kt:62`, `:92` — bare
+`service?.deploymentTest(…)`), so checking it on iOS would be a divergence rather than a
+port. If it should be checked, it is Android's change to make first.
 
 #### iOS-only, nothing owed to Android
 
@@ -1968,6 +2067,84 @@ has been exchanged with hardware**, and per `steam-pigeon-ios` practice the simu
 cannot speak for iOS 16 or for Bluetooth.
 
 Everything not on this list should mirror Android.
+
+### App Flight Logs — ported 2026-09-01, against `AppFlightLogsScreen.kt`
+
+Ported to [ADR-0030](../../steam-pigeon-locator/docs/adr/0030-app-flight-log.md) on
+fschroer's word that the Android side had been exercised with simulated flight data — the
+condition the divergence row named. `FlightLogRecorder` + `FlightLog` + the recorder's tests
+came across **as a unit**, as the porting note asked, rather than re-deriving the
+close-signal set: landing deliberately does NOT close a log, a BLE dropout deliberately does
+not either, and both are the kind of rule a reimplementation quietly simplifies back out.
+24 recorder cases and 13 store cases pin them.
+
+**What is faithful, and checkable.** `FlightLog.fileName` produces Android's exact bytes —
+`Kestrel_2025-08-24_014640.csv` from the same epoch and zone is asserted on both platforms —
+and every row renders `FlightLog.COLUMN_COUNT` columns with the same blank-not-zero rules:
+a non-finite AGL and the receiver's unknown-noise-floor sentinel both go out empty, because
+`NaN` in a numeric column turns it into strings and `-32768` reads as a measurement.
+
+**Three places iOS differs, all in the platform half:**
+
+| | Android | iOS |
+|---|---|---|
+| Storage | `filesDir/flight_logs` | **Application Support**, and deliberately NOT `Documents` with `UIFileSharingEnabled` / `LSSupportsOpeningDocumentsInPlace` — that pair is the exact iOS spelling of the shared-storage alternative ADR-0030 rejected, and it would give the same stale-list hazard |
+| Export | `Intent.ACTION_SEND` through a `FileProvider` | `UIActivityViewController`. Same reach — AirDrop, Mail, Files, Drive — with nothing installed at the far end, which is the whole reason decision 5 chose a share sheet over a serial protocol |
+| Announcement capture | An `Announcer` facade, built because ~19 sites called `TextToSpeech.speak` directly | **None needed.** `FlightSpeech.say` was already the single funnel, voice-enabled check included, so the `onSpoken` hook sits inside it and every present and future callout is carried by construction. The rule still holds: it fires only when speech actually went out, so a log entry always means the operator heard it |
+
+**The watchers are `didSet` rather than flow collectors**, which is the shape difference that
+carries the most risk of drift: Android collects `armedState`, `remoteReceiverConfig`,
+`connectedLocatorId` and the BLE state as four coroutines. Each is edge-triggered here on
+the same value, with the same asymmetry on the locator — a release is ignored, a reconnect
+to the same locator resumes the file, and only a *different* non-null locator ends it,
+because a dropout mid-recovery is the case this log exists to capture.
+
+#### ✅ FIXED ON BOTH 2026-09-01 — the log list was not "newest first" with more than one locator
+
+Found on the iOS simulator with two injected logs, and **it was Android's behaviour, not a
+port defect**: `FlightLogStore.list` sorted `sortedByDescending { it.name }`, and the name is
+`<locator>_<date>_<time>`, so the sort was locator-major. `Twist_Lock_5` from yesterday
+listed above `Kestrel` from today. The Kotlin doc comment directly above it claimed ordering
+"by the timestamp in the name", which was true only within a single locator — so the comment
+was right about the intent and the code was what disagreed.
+
+It matters for the question the screen exists to answer: *which of these six was the flight
+after lunch.*
+
+**Why it survived four days on Android:** a single-locator directory sorts identically under
+either rule, so nothing looked wrong until two airframes shared a screen. That is also why
+it surfaced on the port rather than on the platform that wrote it — the iOS port mirrored the
+sort faithfully, including the defect, and the injected fixture happened to have two locators
+in it.
+
+**Fixed on Android first**, per "Android is the reference implementation", then mirrored:
+
+- `FlightLogFile.captureKey` — the `YYYY-MM-DD_HHmmss` half of the name, or null when it does
+  not parse. Deliberately **not** `capturedAt`: that falls back to the raw stem so the screen
+  always has something to show, and a stem starting with a letter sorts *above* every real
+  date in a descending order, so reusing it would put unparseable files first — the opposite
+  of what the fallback is for. Fixed-width and zero-padded, so lexicographic order is
+  chronological order and nothing has to parse a date to sort.
+- `FlightLogStore.ordered` (Kotlin, in the companion) and `[FlightLogFile].sortedNewestFirst`
+  (Swift) — **pure and lifted out of `list()` on both sides**, because this is the part that
+  was wrong while the directory listing around it was fine, and Android had no way to test
+  the ordering without a `Context`. New: `FlightLogFileTest` (10) on Android, four more cases
+  in `FlightLogStoreTests` here.
+- Unparseable names sort last, ordered by name for stability; two logs captured in the same
+  second tie-break on name so the order does not depend on the order the directory listing
+  returned them in.
+
+Verified on the iOS simulator against the same two logs that exposed it. **The Android side
+is written but not compiled or run** — there is no JDK on this machine, so `gradlew` cannot
+start.
+
+#### Not yet verified
+
+The screen, the empty state, the row, the CSV viewer and the list were exercised on the
+simulator against **injected** logs, which is what proves the reading half. Nothing has
+written a log from real telemetry: that needs a receiver, a locator and a launch, and the
+recorder's own decisions — the 2 s pre-roll, landing-does-not-close, disarm-closes — are
+pinned only by tests until then.
 
 ## Sequence
 
