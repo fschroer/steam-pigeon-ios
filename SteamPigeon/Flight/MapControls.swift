@@ -93,6 +93,10 @@ struct MapControlsColumn: View {
     /// Whether new fixes are being appended to the track.
     @Binding var recording: Bool
     let onResetTrack: () -> Void
+    /// Whether a downloaded archive record is available to switch to.
+    var hasArchivedPath = false
+    /// Whether the map is currently drawing it rather than the live track.
+    @Binding var showArchivedPath: Bool
 
     var body: some View {
         VStack(spacing: 0) {
@@ -123,6 +127,24 @@ struct MapControlsColumn: View {
             }
             .accessibilityLabel(recording ? "Stop recording flight path"
                                           : "Start recording flight path")
+
+            // Only offered once a record has been downloaded — otherwise there is no
+            // archived track to switch to and the control would be a dead button.
+            //
+            // Cyan when engaged, matching Android's `COLOR_ARCHIVED_ACTIVE`, and the same
+            // cyan the one-second markers use: both mean "this came off the archive".
+            if hasArchivedPath {
+                Button { showArchivedPath.toggle() } label: {
+                    Image(systemName: "clock.arrow.circlepath")
+                        .font(.system(size: 24))
+                        .foregroundStyle(showArchivedPath
+                                         ? Color(red: 0, green: 0xE5 / 255.0, blue: 1)
+                                         : .white.opacity(0.35))
+                        .frame(width: 48, height: 48)
+                }
+                .accessibilityLabel(showArchivedPath ? "Show live GPS path"
+                                                     : "Show archived (fused) path")
+            }
 
             // Full white unconditionally — it is an action, not a state, so there is
             // no "off" for it to be dimmed into.

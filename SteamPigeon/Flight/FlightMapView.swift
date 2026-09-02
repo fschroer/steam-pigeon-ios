@@ -27,7 +27,9 @@ struct FlightMapView: UIViewRepresentable {
     /// significant, so it is drawn rather than described.
     let phoneAccuracyM: Double?
     /// Recorded ground track, oldest first.
-    let track: [CLLocationCoordinate2D]
+    /// The recorded track, with altitude and capture time — the curtain and the
+    /// one-second markers are built from both, so coordinates alone will not do.
+    let track: [TrackPoint]
     /// Increment to request a re-frame. The camera otherwise fits once and then stays
     /// out of the way.
     var recentreToken: Int = 0
@@ -117,6 +119,24 @@ struct FlightMapView: UIViewRepresentable {
 
         private var styleReady = false
         private var pending: (() -> Void)?
+
+        // ── Flight-path geometry: rebuilt on the PATH ALONE, off the main thread ──
+        //
+        // `updateUIView` runs on every SwiftUI update — every telemetry fix at 1 Hz, every
+        // marker-state change, every camera control — and the path geometry is by far the
+        // most expensive thing it can touch: an archived record is up to
+        // `curtainMaxQuads` (20 000) extruded quads that never change at all. Rebuilding
+        // and re-uploading those once a second is what a jetsam kill looks like from the
+        // inside, and Android hit exactly this before it keyed its sources the same way.
+        //
+        // The last track is held so an unchanged path costs one array comparison instead
+        // of a rebuild. That comparison is O(n) on a few thousand small structs, which is
+        // nothing next to what it is guarding.
+        private var lastPathTrack: [TrackPoint]?
+        /// Discards a build that a newer track has already superseded.
+        private var pathGeneration = 0
+        private let pathQueue = DispatchQueue(label: "com.steampigeon.map.pathgeometry",
+                                              qos: .userInitiated)
         private var lastRecentreToken = 0
         var onCameraChange: ((Double, Double, CLLocationCoordinate2D) -> Void)?
 
@@ -322,6 +342,10 @@ struct FlightMapView: UIViewRepresentable {
 
         func mapView(_ map: MLNMapView, didFinishLoading style: MLNStyle) {
             styleReady = true
+            // A reloaded style carries none of the previous layers, so the cached track
+            // must not suppress the rebuild that puts them back. Android keys its effect
+            // on `styleReady` alongside the path for the same reason.
+            lastPathTrack = nil
             pending?()
             pending = nil
         }
@@ -331,7 +355,7 @@ struct FlightMapView: UIViewRepresentable {
                    phone: CLLocationCoordinate2D?,
                    rocketAccuracyM: Double?,
                    phoneAccuracyM: Double?,
-                   track: [CLLocationCoordinate2D],
+                   track: [TrackPoint],
                    recentreToken: Int = 0,
                    markerState: RocketMarkerState = .live) {
             if recentreToken != lastRecentreToken {
@@ -362,7 +386,7 @@ struct FlightMapView: UIViewRepresentable {
                           phone: CLLocationCoordinate2D?,
                           rocketAccuracyM: Double?,
                           phoneAccuracyM: Double?,
-                          track: [CLLocationCoordinate2D],
+                          track: [TrackPoint],
                           markerState: RocketMarkerState) {
 
             // Accuracy rings first, so the markers sit on top of them.
@@ -371,8 +395,9 @@ struct FlightMapView: UIViewRepresentable {
             upsertCircle(style, id: "rocket-acc", centre: rocket, radiusM: rocketAccuracyM,
                          colour: markerState.color, opacity: 0.18)
 
-            // The ground track.
-            upsertLine(style, id: "track", coords: track, colour: RocketMarkerState.live.color, width: 2)
+            // The flight path is rebuilt only when it actually changes, and off this
+            // thread — see `lastPathTrack`.
+            rebuildPathIfNeeded(track)
 
             upsertRocket(style, map: nil, at: rocket, state: markerState)
             upsertPoint(style, id: "phone", at: phone, colour: .systemBlue, radius: 5)
@@ -474,6 +499,112 @@ struct FlightMapView: UIViewRepresentable {
                 layer.lineColor = NSExpression(forConstantValue: colour)
                 layer.lineWidth = NSExpression(forConstantValue: width)
                 layer.lineJoin = NSExpression(forConstantValue: "round")
+                layer.lineCap = NSExpression(forConstantValue: "round")
+                style.addLayer(layer)
+            }
+        }
+
+        /// Rebuild the three path sources, if and only if the path changed.
+        ///
+        /// The build runs on `pathQueue` because at 20 000 quads the geometry pass and the
+        /// feature construction are tens of milliseconds, and on the main thread they land
+        /// on the same runloop as gesture handling.
+        private func rebuildPathIfNeeded(_ track: [TrackPoint]) {
+            guard track != lastPathTrack else { return }
+            lastPathTrack = track
+
+            pathGeneration += 1
+            let generation = pathGeneration
+            pathQueue.async { [weak self] in
+                let geometry = FlightPathGeometry.build(track)
+                DispatchQueue.main.async {
+                    guard let self,
+                          // A newer track superseded this one while it was building.
+                          generation == self.pathGeneration,
+                          // Re-read the style after the hop: it may have been torn down,
+                          // or reloaded, while the geometry was being built.
+                          let style = self.mapView?.style
+                    else { return }
+                    self.applyPathGeometry(style, geometry)
+                }
+            }
+        }
+
+        /// Uploads prebuilt geometry to its three sources.
+        ///
+        /// **Order matters and is Android's.** The curtain sits above the ground track so
+        /// the wall reads as rising from it, and the markers are added after the curtain so
+        /// they sort in front where the two overlap — they are the reference marks the wall
+        /// is read against, so they must not pick up its colour.
+        private func applyPathGeometry(_ style: MLNStyle, _ geometry: PathGeometry) {
+            upsertLine(style, id: "track", coords: geometry.track.map(\.coordinate),
+                       colour: Self.pathColour, width: 8)
+            upsertExtrusions(style, id: "track-curtain", quads: geometry.curtain,
+                             colour: Self.pathColour, opacity: 0.75)
+            upsertExtrusions(style, id: "track-ticks", quads: geometry.ticks,
+                             colour: Self.pathTickColour, opacity: 1.0)
+        }
+
+        /// Android's `COLOR_PATH` — orange, and **not** the marker's green. The track was
+        /// drawn in `RocketMarkerState.live.color`, which made it a flat green line where
+        /// Android draws an orange wall.
+        static let pathColour = UIColor(red: 1.0, green: 0x66 / 255.0, blue: 0, alpha: 1)
+
+        /// Android's `COLOR_PATH_TICK`. Cyan against the path's orange: near-complementary,
+        /// so the second markers stay legible where they cross the curtain and over
+        /// satellite imagery alike.
+        static let pathTickColour = UIColor(red: 0, green: 0xE5 / 255.0, blue: 1.0, alpha: 1)
+
+        /// A wall of extruded prisms, each raised to its own `height` attribute.
+        ///
+        /// Height comes from the feature rather than a layer constant, which is what lets
+        /// one layer draw the whole altitude profile — the same reason Android reads
+        /// `Expression.get("height")`.
+        ///
+        /// Opacity is not decoration either: the curtain is a chain of *separate* prisms,
+        /// so each segment carries end-cap faces where it meets its neighbour. At low
+        /// opacity those internal faces all show through and the wall reads as a ladder.
+        private func upsertExtrusions(_ style: MLNStyle, id: String,
+                                      quads: [ExtrudedQuad],
+                                      colour: UIColor, opacity: Double) {
+            guard !quads.isEmpty else { removeLayer(style, id: id); return }
+
+            // **One feature per distinct height, not one per quad.** Measured on the
+            // simulator in Release: a 2000-point archived record (~17 000 quads) cost
+            // +230 MB of resident memory as one feature each — about 11 KB per quad for
+            // 80 bytes of coordinates, because the cost is `MLNPolygonFeature` plus its
+            // per-feature attribute dictionary plus MapLibre's own per-feature bookkeeping,
+            // none of which scales with the geometry inside it.
+            //
+            // Grouping is free of visual consequence because the wall's top edge is
+            // ALREADY a staircase quantised to the riser: `fill-extrusion-height` is
+            // constant per feature, so quads sharing a rounded height were going to draw at
+            // the same height anyway. Rounding to `curtainTargetRiserM` is the conservative
+            // choice — it is never coarser than the step the curtain already took.
+            //
+            // This is a divergence from Android, which emits one feature per quad; the
+            // rendered result is identical and it is recorded in `docs/UI_PARITY.md`.
+            let quantum = Double(FlightPathGeometry.curtainTargetRiserM)
+            var byHeight: [Int: [MLNPolygon]] = [:]
+            for quad in quads {
+                let bucket = Int((Double(quad.heightM) / quantum).rounded())
+                var ring = quad.ring.map(\.coordinate)
+                byHeight[bucket, default: []]
+                    .append(MLNPolygon(coordinates: &ring, count: UInt(ring.count)))
+            }
+            let features: [MLNMultiPolygonFeature] = byHeight.map { bucket, polygons in
+                let feature = MLNMultiPolygonFeature(polygons: polygons)
+                feature.attributes = ["height": Double(bucket) * quantum]
+                return feature
+            }
+            let collection = MLNShapeCollectionFeature(shapes: features)
+            let source = upsertSource(style, id: id, shape: collection)
+            if style.layer(withIdentifier: id) == nil {
+                let layer = MLNFillExtrusionStyleLayer(identifier: id, source: source)
+                layer.fillExtrusionColor = NSExpression(forConstantValue: colour)
+                layer.fillExtrusionHeight = NSExpression(forKeyPath: "height")
+                layer.fillExtrusionBase = NSExpression(forConstantValue: 0)
+                layer.fillExtrusionOpacity = NSExpression(forConstantValue: opacity)
                 style.addLayer(layer)
             }
         }

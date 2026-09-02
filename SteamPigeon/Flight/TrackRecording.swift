@@ -11,6 +11,15 @@ struct TrackPoint: Equatable {
     /// Wall clock, NOT a monotonic clock: the track is persisted and reloaded across
     /// process restarts, where a monotonic zero has moved.
     let timestampMs: Int64
+    /// True when `timestampMs` is a placeholder rather than a capture time — a row
+    /// restored from a recording made before capture times were written.
+    ///
+    /// Android's `PathPoint.timeSynthetic`, and it earns its place the moment second
+    /// markers exist: those are placed at real elapsed seconds, so marking a placeholder
+    /// would stand a post at a second the rocket was never at. The geometry is still
+    /// drawn from these points — the track is where the rocket went, which is recovery
+    /// data; the marks are a reading aid.
+    var timeSynthetic: Bool = false
 
     var coordinate: CLLocationCoordinate2D {
         CLLocationCoordinate2D(latitude: latitude, longitude: longitude)

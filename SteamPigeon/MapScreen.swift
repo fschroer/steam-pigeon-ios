@@ -53,7 +53,9 @@ struct MapScreen: View {
                     phone: model.phone.coordinate,
                     rocketAccuracyM: model.rocketAccuracyM,
                     phoneAccuracyM: model.phone.horizontalAccuracyM,
-                    track: model.trackCoordinates,
+                    // The archived record substitutes for the live track when engaged —
+                    // see `LinkViewModel.mapTrack`.
+                    track: model.mapTrack,
                     recentreToken: recentre,
                     markerState: model.markerState,
                     // NOT gated on compass trust. ADR-0023 Decision 5 suppresses the
@@ -118,7 +120,10 @@ struct MapScreen: View {
                         autoZoom: $autoZoom,
                         headingUp: $headingUp,
                         recording: $model.isRecordingTrack,
-                        onResetTrack: { model.resetTrack() })
+                        onResetTrack: { model.resetTrack() },
+                        hasArchivedPath: !model.archivedTrack.isEmpty,
+                        showArchivedPath: Binding(get: { model.showArchivedPath },
+                                                  set: { _ in model.toggleArchivedPath() }))
                 }
                 .padding(8)
 

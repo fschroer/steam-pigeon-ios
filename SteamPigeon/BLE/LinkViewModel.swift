@@ -1365,6 +1365,48 @@ final class LinkViewModel: ObservableObject {
     /// arm the recorder is a flight lost.
     @Published var isRecordingTrack = true
 
+    /// The downloaded archive record as a map path — the fused, GPS-disciplined track.
+    /// Empty until a record is transferred, which is what gates the map's source control.
+    ///
+    /// **A snapshot, deliberately not derived from `flightData.samples`.** That is the
+    /// transfer assembly buffer: `beginTransfer()` empties it and `clearFlightProfileData()`
+    /// reaches it through `cancelTransfer()` when you navigate back from the chart. Deriving
+    /// from it would leave the path empty by the time the map was on screen — and the whole
+    /// point of the feature is to load a record and *then* go look at it, which cannot work
+    /// if leaving the profile screen discards it.
+    ///
+    /// So this outlives the chart on purpose. It is replaced when the next record arrives,
+    /// and cleared by `resetTrack()`.
+    @Published private(set) var archivedTrack: [TrackPoint] = []
+
+    /// Which track the map draws. Live is raw GPS; archived is the EKF solution.
+    @Published private(set) var showArchivedPath = false
+
+    func toggleArchivedPath() { showArchivedPath.toggle() }
+
+    /// What the map should draw.
+    ///
+    /// The archived track **substitutes** for the live one rather than drawing alongside it:
+    /// they are the same quantity measured two ways, so overlaying them in the same colour
+    /// would read as one noisy path rather than two estimates.
+    var mapTrack: [TrackPoint] {
+        showArchivedPath && !archivedTrack.isEmpty ? archivedTrack : track
+    }
+
+    /// Snapshots the transferred samples as the archived map path.
+    ///
+    /// **An empty buffer never overwrites the snapshot**, which is Android's
+    /// `samples.isNotEmpty()` guard and is load-bearing rather than defensive. This runs
+    /// from `publishFlightSamples` on every absorbed packet, and `clearFlightProfileData`
+    /// empties the transfer buffer when you leave the chart — so a single late packet
+    /// arriving after that would blank the very snapshot the feature exists to keep,
+    /// reintroducing the trap one layer down. A *new* record still replaces the old one,
+    /// because a new record has samples.
+    private func publishArchivedPath(_ samples: [FlightSample]) {
+        guard !samples.isEmpty else { return }
+        archivedTrack = FlightPathGeometry.archivedPathPoints(samples)
+    }
+
     private var recorder = TrackRecorder()
     private let trackStore = TrackStore()
 
@@ -1377,6 +1419,11 @@ final class LinkViewModel: ObservableObject {
         isRecordingTrack = true
         recorder.reset()
         trackStore.delete()
+        // Clear the archived track too, and fall back to live. Reset is the map's "start
+        // clean" control, and leaving a downloaded track drawn after it would look like the
+        // reset had failed.
+        archivedTrack = []
+        showArchivedPath = false
     }
 
     /// Offer one fix to the track.
@@ -1394,6 +1441,12 @@ final class LinkViewModel: ObservableObject {
             // `recordTrack` runs from `updateVector`, which the ingest branches call
             // before they log the sample.
             openFlightLog(at: Date())
+        }
+        if case .newFlight = outcome {
+            // Fall back to the live track. The archived record substitutes for the live path
+            // while displayed, so a new flight left on the archived source would draw the
+            // old record and none of the flight now in the air. The download itself is kept.
+            showArchivedPath = false
         }
         var changed = false
         if case .newFlight = outcome, !track.isEmpty {
@@ -1670,6 +1723,10 @@ final class LinkViewModel: ObservableObject {
     /// What every link loss runs — including the scan that starts a second after launch.
     func clearLiveReadoutsForTesting() { clearLiveReadouts() }
 
+    /// Drives the real snapshot path, samples in, so a test exercises the conversion and
+    /// the lifecycle together rather than assigning the result.
+    func publishArchivedPathForTesting(_ samples: [FlightSample]) { publishArchivedPath(samples) }
+
     /// One turn of the firmware-version loop. The real one is a 1 s timer, and what is
     /// worth testing is the rising edge and the back-off, not the scheduler.
     func versionTickForTesting(now: Date = Date()) { versionTick(now: now) }
@@ -1931,6 +1988,7 @@ final class LinkViewModel: ObservableObject {
     /// Republish what the repository holds after a packet is absorbed.
     private func publishFlightSamples() {
         flightSamples = flightData.samples
+        publishArchivedPath(flightData.samples)
         flightTransferProgress = flightData.progress
     }
 

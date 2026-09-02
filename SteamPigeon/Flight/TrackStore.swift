@@ -37,7 +37,8 @@ struct TrackStore {
                 return TrackPoint(latitude: lat, longitude: lon, altitudeM: alt, timestampMs: ts)
             case 3:
                 return TrackPoint(latitude: lat, longitude: lon, altitudeM: alt,
-                                  timestampMs: Int64(index) * Self.legacyPlaceholderIntervalMs)
+                                  timestampMs: Int64(index) * Self.legacyPlaceholderIntervalMs,
+                                  timeSynthetic: true)
             default:
                 return nil
             }
@@ -48,7 +49,14 @@ struct TrackStore {
     /// a flight over, and the in-memory copy is unaffected.
     func save(_ points: [TrackPoint]) {
         let text = points.map {
-            "\($0.latitude),\($0.longitude),\($0.altitudeM),\($0.timestampMs)"
+            // A synthetic time goes back out as the three-column row it came from, which
+            // is what the note on `legacyPlaceholderIntervalMs` promises and what `save`
+            // did not do: writing the placeholder into the fourth column promoted it to
+            // looking like a real capture time on the next load, and the second markers
+            // would then be placed at seconds the rocket was never at.
+            $0.timeSynthetic
+                ? "\($0.latitude),\($0.longitude),\($0.altitudeM)"
+                : "\($0.latitude),\($0.longitude),\($0.altitudeM),\($0.timestampMs)"
         }.joined(separator: "\n")
         try? text.write(to: url, atomically: true, encoding: .utf8)
     }
