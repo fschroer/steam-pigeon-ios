@@ -127,12 +127,56 @@ final class ArchivedPathSourceTests: XCTestCase {
     /// control stays hidden rather than offering an empty track.
     func testARecordWithNoUsablePositionYieldsNoArchivedTrack() {
         let m = model()
-        let fixless = (0..<20).map { i in
+        m.publishArchivedPathForTesting(fixless())
+        XCTAssertTrue(m.archivedTrack.isEmpty)
+    }
+
+    // MARK: - Saying why, when there is nothing to draw
+
+    /// **The failure this feature suffers silently.** A record with no position yields no
+    /// path, so the map control never appears — and without something saying so, "this
+    /// record has no position" is indistinguishable from "the transfer is broken". A
+    /// locator that never got a fix writes exactly such a record.
+    func testARecordWithNoPositionSaysWhyRatherThanFailingSilently() {
+        let m = model()
+        m.publishArchivedPathForTesting(fixless())
+        let note = m.archivedPathNote
+        XCTAssertNotNil(note, "a record that drew nothing must explain itself")
+        XCTAssertTrue(note!.contains("20"), "says how many samples arrived: \(note!)")
+        XCTAssertTrue(note!.lowercased().contains("position"))
+    }
+
+    /// Nothing to explain when a path was drawn.
+    func testAUsableRecordLeavesNoNote() {
+        let m = model()
+        m.publishArchivedPathForTesting(record())
+        XCTAssertNil(m.archivedPathNote)
+    }
+
+    /// A good record after a bad one clears the note, so a stale explanation cannot sit
+    /// under a path that is now on screen.
+    func testAGoodRecordClearsAnEarlierNote() {
+        let m = model()
+        m.publishArchivedPathForTesting(fixless())
+        XCTAssertNotNil(m.archivedPathNote)
+        m.publishArchivedPathForTesting(record())
+        XCTAssertNil(m.archivedPathNote)
+        XCTAssertFalse(m.archivedTrack.isEmpty)
+    }
+
+    func testResetClearsTheNoteWithTheTrack() {
+        let m = model()
+        m.publishArchivedPathForTesting(fixless())
+        m.resetTrack()
+        XCTAssertNil(m.archivedPathNote)
+    }
+
+    /// Samples with no fix at all, as a locator with no GPS lock records them.
+    private func fixless(_ n: Int = 20) -> [FlightSample] {
+        (0..<n).map { i in
             FlightSample(timestampMs: i * 50, altitudeM: Float(i),
                          accel: Vec3f(x: 0, y: 0, z: 0), gyro: Vec3f(x: 0, y: 0, z: 0),
                          latRad: 0, lonRad: 0)
         }
-        m.publishArchivedPathForTesting(fixless)
-        XCTAssertTrue(m.archivedTrack.isEmpty)
     }
 }

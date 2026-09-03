@@ -292,6 +292,31 @@ struct LinkView: View {
                     }
                 }
 
+                // A downloaded record that yielded nothing to draw. Without this the map
+                // control just never appears, and there is no way to tell a record with no
+                // position from a broken transfer.
+                if let c = model.archivedPathCounts {
+                    // Two numbers, not one, and the difference is the point. The first
+                    // pair is a SNAPSHOT taken when the record was published; `held` is
+                    // the live array the map actually reads. Equal means the track
+                    // survives and anything missing on screen is a rendering problem;
+                    // `held 0` after a non-zero build means something cleared it
+                    // afterwards, which no snapshot could ever show.
+                    grid([("Archived", "\(c.kept) of \(c.offered) samples drew a path"),
+                          ("", "held now: \(model.archivedTrack.count)"
+                             + "   control: \(model.archivedTrack.isEmpty ? "hidden" : "shown")"
+                             + "   source: \(model.showArchivedPath ? "archived" : "live")")])
+                }
+                if let note = model.archivedPathNote {
+                    Text("Archived flight path")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.orange)
+                    Text(note)
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(.orange)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
                 Text("Recent frames").font(.subheadline.weight(.semibold))
                 ScrollView {
                     VStack(alignment: .leading, spacing: 2) {

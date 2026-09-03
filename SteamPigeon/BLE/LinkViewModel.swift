@@ -1451,8 +1451,39 @@ final class LinkViewModel: ObservableObject {
     /// because a new record has samples.
     private func publishArchivedPath(_ samples: [FlightSample]) {
         guard !samples.isEmpty else { return }
-        archivedTrack = FlightPathGeometry.archivedPathPoints(samples)
+        let points = FlightPathGeometry.archivedPathPoints(samples)
+        // **The one failure this feature can suffer silently**, and the reason Android
+        // logs it: a record whose samples carry no position yields no path, so the map
+        // control simply never appears — and "the record has no position" is
+        // indistinguishable from "the plumbing is broken" without something saying so.
+        // A locator that never got a fix writes exactly such a record, which is the same
+        // condition that leaves `FlightRecordMetadata.date` nil in the flight list.
+        //
+        // Android writes it to logcat. iOS has no log an operator can reach, so it goes on
+        // the diagnostics sheet instead — recorded in `docs/UI_PARITY.md`.
+        archivedPathNote = points.isEmpty
+            ? "\(samples.count) archived samples carried no usable position "
+              + "(all zero or non-finite lat/lon) — no archived path to draw"
+            : nil
+        // The counts regardless of outcome, which the warning alone cannot give.
+        //
+        // Android warns only on the empty case, which answers "did the record have a
+        // position". It does not answer the question a field failure actually poses —
+        // *where* in the chain the path was lost — because an absent warning is
+        // ambiguous between "a path was built" and "this never ran at all". These two
+        // numbers separate those: no line means `publishArchivedPath` was never reached,
+        // `0 of N` means the record carried nothing usable, and `M of N` means the track
+        // exists and anything still missing on screen is downstream of here.
+        archivedPathCounts = (kept: points.count, offered: samples.count)
+        archivedTrack = points
     }
+
+    /// Points kept and samples offered, from the last record published. Nil until one is.
+    @Published private(set) var archivedPathCounts: (kept: Int, offered: Int)?
+
+    /// Why a downloaded record produced no archived path, when it produced none. Nil when
+    /// there is nothing to explain — either a path was drawn, or no record has arrived.
+    @Published private(set) var archivedPathNote: String?
 
     private var recorder = TrackRecorder()
     private let trackStore = TrackStore()
@@ -1471,6 +1502,8 @@ final class LinkViewModel: ObservableObject {
         // reset had failed.
         archivedTrack = []
         showArchivedPath = false
+        archivedPathNote = nil
+        archivedPathCounts = nil
     }
 
     /// Offer one fix to the track.
