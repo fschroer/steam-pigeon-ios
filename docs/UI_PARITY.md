@@ -5,7 +5,9 @@ The flight map, Application Settings, Receiver Settings, Locator Settings, Fligh
 Download maps, Deployment Test and App Flight Logs.
 
 **Hardware coverage caught up on 2026-09-02** (fschroer), which is the line this file has
-had to hedge since 2026-08-21. Confirmed on a device that day: the survey **Stop** button
+had to hedge since 2026-08-21. The performance reports from that same day resolved to the
+debug environment rather than the app — wireless debugging and Metal API Validation, both
+recorded in the 3D path audit — and the curtain constants remain identical to Android's. Confirmed on a device that day: the survey **Stop** button
 and its gate, the ADR-0011 channel move, the firmware-version rows on both settings screens,
 App Flight Logs writing from real telemetry, and the 3D flight path. Each audit below says
 what its own run did and did not reach.
@@ -2214,7 +2216,7 @@ negative ahead of it, and whether the row count matches the flight's duration at
 are visible in the CSV at a glance, and both would show a pre-roll or a close-signal rule
 misbehaving in a way a green suite would not.
 
-### ⚠️ The 3D path's memory cost, and one divergence it forced (2026-09-02)
+### The 3D path's memory cost, and the stalls that turned out to be the debugger (2026-09-02)
 
 Reported as a jetsam kill: *"Debug session ended with code 9: Terminated due to memory
 issue."* Two things came out of measuring it, and they are not the same thing.
@@ -2276,7 +2278,10 @@ that actually killed the process.
 and names both the app's footprint at kill time and the limit it crossed. That single file
 turns this from an inference into a measurement, and it needs no change to the app.
 
-#### ⚠️ Half the work was moved off the main thread, not all of it — fixed 2026-09-02
+#### Half the work was moved off the main thread, not all of it — fixed 2026-09-02
+
+*Worth keeping on its own merits, but note the resolution below: this was not the cause of
+the slowness it was written in response to.*
 
 The first cut moved `FlightPathGeometry.build` to a background queue and left the more
 expensive half behind: turning ~17 000 quads into `MLNPolygon`s, grouping them by height and
@@ -2294,11 +2299,45 @@ only hands finished ones to the style: `shapes(for:)` produces a `PathShapes`,
 `applyPathShapes` uploads it. Only `MLNStyle` mutation was ever required to be on main, and
 that is all that remains there.
 
-**Still open.** 371 MB for a large archived record, on a 222 MB baseline, is not comfortable
-for an app whose deployment target is iOS 16 and which is flown on older hardware. The
-remaining lever is the quad count itself — `curtainTargetRiserM` at 0.25 m produces ~17 000
-quads for a 450 m flight — and moving it changes how the wall looks, which is a fidelity
-decision for fschroer rather than an optimisation to take unilaterally.
+#### ✅ RESOLVED 2026-09-02 — the stalls were the debugger, not the geometry
+
+Everything above about *slowness* was chasing the wrong thing, and the record should say so
+because the wrong answer was nearly shipped as a divergence.
+
+Three symptoms were reported and all three were the measurement path:
+
+| symptom | actual cause |
+|---|---|
+| ~70 s from ⌘R to a usable app | the phone had silently fallen back to **wireless** debugging (`transport: localNetwork`), so every run shipped the whole Debug bundle over Wi-Fi. The build itself was **0.1 s** — a no-op, confirmed by *Build With Timing Summary* |
+| 12–19 s hangs at launch | the debugger attaching over that same wireless link |
+| the map hanging every few seconds while pinching and rotating, but only under ⌘R and never when launched from the phone | **Metal API Validation**, which Xcode leaves ON by default for Debug runs. MapLibre renders through Metal, so validation inspects every draw call while the map re-tiles. Unticking it in Run ▸ Diagnostics restored good responsiveness with the curtain unchanged |
+
+**The geometry was never implicated.** The only trustworthy timing taken all session is that
+the Swift halves are ~22 ms at 17 600 quads — 8 ms to build the quads, 14 ms to make the
+shapes. Everything else was inference stacked on a compromised channel.
+
+**A divergence was proposed and reverted.** `curtainMaxQuads` was lowered to 3 000 on the
+strength of those stalls, which reverses a decision Android made deliberately and measured
+— its ceiling is 20 000 precisely so noise cannot coarsen the wall on the densest data. It
+is back at 20 000, and `testSensorNoiseOnAHighRatePathDoesNotCoarsenTheRiser` is Android's
+again. **iOS and Android agree on every curtain constant.**
+
+The lesson worth keeping: three independent symptoms all pointed at the newest code, and all
+three were environmental. Check the transport and the scheme's Diagnostics tab before
+believing a performance report taken through a debug session — and note that only the
+comparison with launching from the phone made any of it visible.
+
+**What remains open, honestly.** Memory: 371 MB for a large archived record on a 222 MB
+baseline, measured in Release on the simulator. That number is real and unexplained by any
+of the above — but it has never been tied to an observed failure either, the one jetsam
+report pulled off the device turned out not to involve this app at all, and an iPhone 11 has
+4 GB. Left alone until something reproduces.
+
+**Projected cost of a real flight**, since the test records are short. An 8-minute descent
+at 20 Hz is ~9 600 samples and ~25 000 quads — only ~1.7× an 848-point record, because past
+about two minutes the 20 000 backstop binds and relaxes the riser instead of the count
+scaling with duration. That is the backstop doing its job, and it is another reason not to
+have lowered it.
 
 ### The archived flight path on the map — ported 2026-09-01, confirmed 2026-09-02
 
