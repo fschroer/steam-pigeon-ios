@@ -251,6 +251,29 @@ struct FlightMapView: UIViewRepresentable {
         @objc func tickCamera() {
             guard let map = mapView, styleReady else { return }
 
+            // **Adopt the live camera the first time there is one.** The filter moves
+            // nothing until it has been seeded, and the three places that used to seed it
+            // are all conditional: a gesture, a recentre tap, and the one-shot initial
+            // centre — which only fires while the ROCKET has no fix. So a map created
+            // with a locator already reporting a position was never seeded at all, and
+            // auto-centre, auto-zoom, tilt and heading-up were dead together until a
+            // finger touched the map. That is two ordinary situations, not an edge case:
+            // opening the app at the pad with the locator already broadcasting, and
+            // coming back to portrait from the heads-up sight, which is where it was
+            // reported from (2026-09-02 — "neither the rose nor the map rotates as I
+            // turn ... a two-finger rotate and it starts working again").
+            //
+            // Android has no seeded state to be missing: `CameraFilterState` starts at
+            // concrete values and its tick always runs. The flag is an iOS addition —
+            // worth keeping, since seeding from the live camera is what stops the first
+            // frame dragging in from null island — but it has to be satisfied here rather
+            // than left to whichever path happens to run first.
+            if !filter.isSeeded {
+                filter.seed(centre: map.centerCoordinate,
+                            zoom: map.zoomLevel,
+                            pitch: map.camera.pitch)
+            }
+
             if userGestureRecent() {
                 filter.seed(centre: map.centerCoordinate,
                             zoom: map.zoomLevel,

@@ -24,6 +24,22 @@ final class PhoneLocation: NSObject, ObservableObject {
     /// tilt mode: raise the phone toward the horizon and the map leans with it.
     @Published private(set) var devicePitchDeg: Double?
 
+    /// True-north bearing the BACK CAMERA is pointing along, for the landscape AR
+    /// overlay. Nil when the sight is not on screen, and nil when the attitude stream has
+    /// no true-north reference frame to work from — the same "no bearing to be had" the
+    /// overlay already suppresses for.
+    ///
+    /// Kept apart from `trueHeadingDeg` for the reason Android keeps
+    /// `handheldCameraAzimuth` apart from `handheldDeviceAzimuth`: the heading is the
+    /// direction the top of the phone points, which is 90° off in landscape and
+    /// degenerate with the phone held up at the sky.
+    @Published private(set) var cameraAzimuthDeg: Double?
+
+    /// Elevation of the back camera above the horizon, degrees, positive looking up —
+    /// Android's `handheldDevicePitch`. Signed, and NOT `devicePitchDeg`, which is
+    /// unsigned and measured about a different axis.
+    @Published private(set) var cameraElevationDeg: Double?
+
     /// Effective compass trust after the ADR-0023 §4 hold.
     @Published private(set) var compassTrust: CompassTrust = .high
 
@@ -50,46 +66,93 @@ final class PhoneLocation: NSObject, ObservableObject {
         manager.requestWhenInUseAuthorization()
         manager.startUpdatingLocation()
         if CLLocationManager.headingAvailable() { manager.startUpdatingHeading() }
-        startFieldMonitor()
         startAttitudeMonitor()
     }
 
     func stop() {
         manager.stopUpdatingLocation()
         manager.stopUpdatingHeading()
-        motion.stopMagnetometerUpdates()
         motion.stopDeviceMotionUpdates()
     }
 
-    /// ADR-0023 §3b: total field strength, the source that asks the physics rather
-    /// than the vendor. Raw magnetometer — only the MAGNITUDE is used, never as a
-    /// heading, so an uncalibrated hard-iron offset does not matter here.
-    /// Device attitude, for the follow-device tilt mode.
+    /// Whether the landscape AR sight is on screen. It asks for two things the rest of
+    /// the app does not, and both are scoped to it — see `startAttitudeMonitor`.
+    private var cameraSensing = false
+
+    /// The AR sight is up: north-reference the attitude, and sample faster.
+    func beginCameraSensing() {
+        guard !cameraSensing else { return }
+        cameraSensing = true
+        startAttitudeMonitor()
+    }
+
+    /// Back to the configuration the map runs on.
+    func endCameraSensing() {
+        guard cameraSensing else { return }
+        cameraSensing = false
+        cameraAzimuthDeg = nil
+        cameraElevationDeg = nil
+        startAttitudeMonitor()
+    }
+
+    /// One device-motion stream, carrying three things: the follow-device tilt, the AR
+    /// sight's boresight, and ADR-0023 §3b's field magnitude.
+    ///
+    /// **The reference frame is north-referenced wherever the hardware allows it, and
+    /// that is not the sight's requirement — it is the compass's.** `magneticField` is
+    /// published as a *calibrated* field only while device motion runs a magnetic or
+    /// true-north frame, and the calibrated field is the whole of ADR-0023 §3b on iOS:
+    /// the raw magnetometer this used to read carries the phone's own hard-iron offset,
+    /// which held the ∞ mark permanently red on a device whose heading was fine. True
+    /// north is preferred because the sight also differences the camera's bearing against
+    /// a true-north bearing — the need Android meets with `GeomagneticField` — and
+    /// magnetic north still serves the compass when there is no fix to convert with.
+    ///
+    /// **The rate is what the sight scopes.** 60 ms is what Android registers at
+    /// (`SENSOR_DELAY_UI`), and its comment says why it did not ask for more: every sample
+    /// there recomposes the whole map screen. That cost does not exist on the iOS sight —
+    /// in landscape the map is not mounted and what redraws is one `Canvas` — and 10 Hz
+    /// was reported from the phone as visibly stepped against Android. So the sight
+    /// samples at 60 Hz and the map keeps the 10 Hz it was verified at.
     private func startAttitudeMonitor() {
         guard motion.isDeviceMotionAvailable else { return }
-        motion.deviceMotionUpdateInterval = 0.1
-        motion.startDeviceMotionUpdates(to: .main) { [weak self] data, _ in
-            guard let pitch = data?.attitude.pitch else { return }
+        motion.stopDeviceMotionUpdates()
+        motion.deviceMotionUpdateInterval = cameraSensing ? 1.0 / 60 : 0.1
+
+        let available = CMMotionManager.availableAttitudeReferenceFrames()
+        let trueNorth = available.contains(.xTrueNorthZVertical)
+        let frame: CMAttitudeReferenceFrame =
+            trueNorth ? .xTrueNorthZVertical
+                      : (available.contains(.xMagneticNorthZVertical) ? .xMagneticNorthZVertical
+                                                                      : .xArbitraryZVertical)
+
+        motion.startDeviceMotionUpdates(using: frame, to: .main) { [weak self] data, _ in
+            guard let self, let data else { return }
             // 0 is flat on a table, 90 is upright. Android measures from upright, so
             // this reports the same way.
-            self?.devicePitchDeg = 90 - abs(pitch * 180 / .pi)
-        }
-    }
+            self.devicePitchDeg = 90 - abs(data.attitude.pitch * 180 / .pi)
 
-    private func startFieldMonitor() {
-        guard motion.isMagnetometerAvailable else { return }
-        motion.magnetometerUpdateInterval = 0.2
-        motion.startMagnetometerUpdates(to: .main) { [weak self] data, _ in
-            guard let self, let f = data?.magneticField else { return }
-            let magnitude = (f.x * f.x + f.y * f.y + f.z * f.z).squareRoot()
-            self.fieldSource = FieldMagnitude.classify(magnitudeUt: magnitude)
+            // Silent under `.xArbitraryZVertical`, where the field is not calibrated and
+            // `CalibratedField` says so by returning nil — a source that cannot speak
+            // must not vote.
+            self.fieldSource = CalibratedField.classify(data.magneticField)
             self.recomputeTrust()
+
+            // Only true north gives a bearing the locator's can be differenced against.
+            guard trueNorth, self.cameraSensing else { return }
+            self.cameraElevationDeg = CameraBoresight.elevationDeg(gravity: data.gravity)
+            self.cameraAzimuthDeg = CameraBoresight.azimuthDeg(
+                rotation: data.attitude.rotationMatrix, gravity: data.gravity)
         }
     }
 
+    /// **Assigned only on a change.** The verdict is recomputed on every attitude sample,
+    /// which is 60 a second while the sight is up; republishing an unchanged value would
+    /// invalidate every view observing this object at that rate for nothing.
     private func recomputeTrust() {
         let combined = CompassTrustHold.worstOf([headingSource, fieldSource]) ?? .high
-        compassTrust = hold.update(combined)
+        let effective = hold.update(combined)
+        if effective != compassTrust { compassTrust = effective }
     }
 
     /// True when the phone's own fix is good enough to anchor a bearing. A position

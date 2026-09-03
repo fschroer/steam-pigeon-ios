@@ -1,3 +1,4 @@
+import CoreMotion
 import XCTest
 @testable import SteamPigeon
 
@@ -35,6 +36,49 @@ final class CompassTrustTests: XCTestCase {
     /// That measurement is what turned the envelope from a guess into a bound.
     func testMeasuredMagnetPeakIsDetected() {
         XCTAssertEqual(.unreliable, FieldMagnitude.classify(magnitudeUt: 106))
+    }
+
+    // MARK: - The calibrated source (§3b on iOS)
+
+    private func calibrated(_ magnitudeUt: Double,
+                            _ accuracy: CMMagneticFieldCalibrationAccuracy = .high)
+    -> CMCalibratedMagneticField {
+        // Magnitude along one axis: the classifier takes the vector's length, and a
+        // single axis is the clearest way to state the number being tested.
+        CMCalibratedMagneticField(field: CMMagneticField(x: magnitudeUt, y: 0, z: 0),
+                                  accuracy: accuracy)
+    }
+
+    /// The bands are unchanged — what changed is which sensor's number reaches them.
+    func testTheCalibratedFieldIsClassifiedByTheSameBands() {
+        XCTAssertEqual(.high, CalibratedField.classify(calibrated(52.3)))
+        XCTAssertEqual(.low, CalibratedField.classify(calibrated(80)))
+        XCTAssertEqual(.unreliable, CalibratedField.classify(calibrated(106)))
+    }
+
+    /// **The defect this exists to stop coming back.** An uncalibrated field arrives as
+    /// zeros, which the gross band would read as a reading so far outside the Earth's
+    /// envelope that the bearing is taken away. A source that cannot speak votes nothing.
+    func testAnUncalibratedFieldVotesNothingRatherThanUnreliable() {
+        XCTAssertNil(CalibratedField.classify(calibrated(0, .uncalibrated)))
+        // Even carrying a plausible-looking number: the accuracy flag is the gate.
+        XCTAssertNil(CalibratedField.classify(calibrated(52.3, .uncalibrated)))
+    }
+
+    /// Low and medium calibration still produce usable field values — only
+    /// `.uncalibrated` is documented as unusable — so they are classified, not skipped.
+    func testLowAndMediumCalibrationStillVote() {
+        XCTAssertEqual(.high, CalibratedField.classify(calibrated(52.3, .low)))
+        XCTAssertEqual(.high, CalibratedField.classify(calibrated(52.3, .medium)))
+    }
+
+    /// And the whole point of the change: a silent source cannot outvote a live one, so
+    /// an uncalibrated field leaves the heading source deciding alone rather than
+    /// dragging the verdict to unreliable.
+    func testASilentFieldLeavesTheHeadingSourceDeciding() {
+        XCTAssertEqual(.high, CompassTrustHold.worstOf([.high, nil]))
+        XCTAssertEqual(.low, CompassTrustHold.worstOf([.low, nil]))
+        XCTAssertNil(CompassTrustHold.worstOf([nil, nil]))
     }
 
     // MARK: - Hold (§4)

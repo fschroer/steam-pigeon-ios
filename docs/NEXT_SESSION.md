@@ -1,6 +1,6 @@
 # Resume here — iOS port
 
-Updated 2026-08-31. **606 tests passing**, clean build with no warnings from our own
+Updated 2026-09-02. **850 tests passing**, clean build with no warnings from our own
 sources.
 
 ## 2026-08-31 — Android gained a screen: App Flight Logs (NOT ported)
@@ -310,13 +310,113 @@ either screen.** It records
 what was mirrored deliberately, the two Android FEC bugs fixed here rather than
 reproduced, and the one number in the chart with no exact answer.
 
+**Camera passthrough — done 2026-09-02.** Reported from the phone as "the camera is not
+functioning when the map screen is rotated to landscape". The heads-up view had been a
+placeholder — two gauges on black — and the whole of Android's `CameraPreviewScreen` is
+now ported: the camera behind it, the crosshair, the locator ring and its off-screen edge
+arrow, both ±45° HUD scales, tap-to-zoom, and the two flight instruments on Android's
+in-flight gate. New: `Flight/CameraPassthrough.swift` (AVFoundation session + preview),
+`Flight/CameraBoresight.swift` (where the back camera points), `Flight/ARSight.swift` (the
+overlay geometry), and `NSCameraUsageDescription`. `PhoneLocation`'s device-motion stream
+now runs in the true-north reference frame.
+
+**First hardware pass, same day (fschroer): the preview is upright in both landscape
+orientations.** What is still unsettled is whether the marker lands on the rocket rather
+than 180° opposite — that needs a locator — and how the deflection per degree compares
+with Android side by side.
+
+**Reported with it: the rotation occasionally sticks, with the map screen still partly on
+screen in landscape.** A main-thread stall during the rotation animation, not a layout
+fault. The camera's share of it is fixed — `RootView` owns the session and the preview
+view, so a rotation starts and stops an already-built session on the capture queue instead
+of building one on the main thread. **Two costs are left in that same run loop turn**, and
+both are pre-existing:
+
+- `MLNMapView` is destroyed and rebuilt, style and all, on every rotation. The largest one
+  now. Same fix as the camera's if it recurs: own it above the swap.
+- ~~`SpeechCoordinator` is rebuilt on every rotation~~ **fixed 2026-09-02.** `RootView`
+  owns the voice now, so the pad alert, its haptic and the arm/disarm callout keep running
+  in landscape as Android's do, and a rotation no longer builds a synthesiser or activates
+  an audio session on the main thread. **Not on hardware** — the pad alert needs a locator
+  reporting prepped-and-disarmed, and the haptic needs a device. One divergence came out of
+  it and is recorded in `UI_PARITY.md`: the announcer keeps speaking while a sheet is up,
+  where Android's stops on leaving the map screen. That one is a decision, not a defect.
+- **The flight callouts are now ported too (2026-09-02).** `FlightAnnouncer` (pure) plus
+  `FlightAnnouncerRunner` (timer + speech), owned by `RootView`: apogee, the four charges,
+  100 m ascent bands, descent warnings, landing — including the dead-reckoned one when the
+  link dies on the way down — telemetry lost/restored and GPS lost/restored. Android's
+  `LandingCalloutTest` is ported case for case; 27 new tests in all. **Android's `Announcer`
+  facade has no counterpart here on purpose**: `FlightSpeech.say` was already the single
+  funnel it was introduced to create, and ADR-0030's log hook already sits inside it.
+- **A defect on the Android side came out of it**, now #5 in the "ANDROID OWES THESE"
+  table: the charge callouts consult deployment channels 1 and 2 only, while the locator
+  has four and the stock wiring puts MainPrimary on **channel 3** — so "Main charge." is
+  unreachable there with the default configuration. iOS checks every channel.
+
+**Round two on the phone, same day: no stuck rotation in 15–20 tries.** Three follow-ups,
+all recorded in `UI_PARITY.md` → "Heads-up sight (landscape)":
+
+- **Marker jerkiness — fixed by rate.** The sight now samples attitude at 60 Hz while it
+  is on screen; the map keeps 10 Hz. Android's ~60 ms rate was chosen against a cost
+  (recomposing the map screen per sample) that does not exist on this screen.
+- **Fast landscape-to-landscape flip lands upside down.** `CameraPreviewView` now re-reads
+  the interface orientation on `UIDevice.orientationDidChangeNotification`, since a 180°
+  flip changes neither bounds nor size class. **Unresolved until someone says whether the
+  overlay flips too** — if it does, the interface itself is landing wrong and this is not
+  the fix.
+- **Controls reset on the way back to portrait is Android parity** (`remember` inside
+  `MapWithOverlays`, portrait branch only). Hoisting the four flags into `RocketViewModel`
+  is an Android-first change if it is wanted.
+- **"The compass stopped working" was the camera filter, and it is the biggest thing in
+  this round.** The clue was that a two-finger rotate plus the five-second timeout cured
+  it: seeding the filter is what a gesture does, and `CameraFilter.tick` returns nil until
+  it is seeded. All three seed sites were conditional — a gesture, a recentre tap, and the
+  initial centre, which fires **only while the rocket has no fix** — so a map built while a
+  locator is already reporting was never seeded, and auto-centre, auto-zoom, tilt and
+  heading-up were dead together. **That also means opening the app at the pad with the
+  locator already broadcasting**, which is nothing to do with the camera work and is the
+  more serious half. `tickCamera` now seeds from the live camera on its first frame;
+  Android needs no equivalent because its filter starts at concrete values and always
+  ticks.
+- **Corrected while summarising: the AR marker's gate was missing the compass term.** It
+  read `vector != nil` alone, on the assumption that a suppressed vector carried ADR-0023's
+  compass test too; it does not — the vector is published under an unreliable compass
+  because the map only quotes a distance from it. Now `vector != nil && compassTrust !=
+  .unreliable && a camera bearing`, which is Android's `bearingValid` term for term.
+  **This couples to the item below**: red on the rose is `.unreliable`, so while that mark
+  stays stuck the marker is correctly suppressed and will not draw on that phone at all.
+- **Fixed: the permanently red figure-eight.** ADR-0023 §3b classifies field magnitude,
+  and Android's source is the **calibrated** magnetometer; the iOS port read the **raw**
+  one, which carries the phone's own hard-iron offset — on a MagSafe-era iPhone that alone
+  pins the total above the 70 µT ceiling for the life of the device. The envelope was
+  working perfectly on a number that was never the Earth's field. Now
+  `CMDeviceMotion.magneticField` via `CalibratedField.classify`, with `.uncalibrated`
+  voting nothing rather than unreliable (its values arrive as zeros, which the gross band
+  would suppress the bearing for). **ADR-0023 §3b carries the whole account** as a dated
+  addition, including the option not taken — `CMCalibratedMagneticField.accuracy` as a
+  fourth source, deliberately not bundled into a change whose job was clearing a stuck
+  warning.
+- **Consequence worth knowing:** the calibrated field is published only under a magnetic or
+  true-north reference frame, so that frame is no longer scoped to the heads-up sight — it
+  is what the app runs. Only the sample *rate* is scoped (10 Hz map, 60 Hz sight). It
+  replaces a raw magnetometer stream that ran continuously anyway.
+- **Confirmed on the phone the same day:** the landscape-flip fix holds, and the compass
+  performs in portrait after a rotation round trip.
+- **Confirmed on the phone, same day:** the marker appears and **lands on the rocket
+  rather than 180° opposite** — which is the gravity cross-check in `CameraBoresight`
+  proving out, and the only evidence that check can ever have — and **60 Hz cures the
+  stepped motion**. The ∞ mark clearing follows from the marker drawing at all, since the
+  gate refuses to draw at `.unreliable`, but nobody has said so directly.
+- **What the sight still owes a phone:** deflection per degree beside Android. Aiming at
+  the rocket tests the zero point; the scale only shows itself with the rocket off-centre,
+  so it wants a side-by-side rather than another solo run.
+
 **Features remaining:**
 
 - **Flight TTS callouts.** `FlightSpeech` exists and the pad alert and arm/disarm use it.
   `FlightSpeechAnnouncer`'s ascent/descent/apogee/landing/link-loss callouts are unported.
   ADR-0022 rule when porting: a withheld distance must mean **silence**, not a stale
   number read aloud.
-- **Camera passthrough** behind the heads-up gauges (landscape).
 - **Export flight path.** Android has an `ExportFlightPathScreen`; nothing here does.
 - **Archived-path map control.** Now unblocked — see above.
 

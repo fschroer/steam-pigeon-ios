@@ -41,6 +41,22 @@ final class CameraFilterTests: XCTestCase {
         XCTAssertNil(f.tick(inputs(rocket: pad)))
     }
 
+    /// The flag the map's per-frame tick branches on. It reads false on a filter that
+    /// has just been constructed — which is the state a freshly built map hands it, on a
+    /// cold start and on every return from the heads-up sight — and true once seeded.
+    /// `tickCamera` seeds on that first frame precisely because nothing else reliably
+    /// does; a filter left unseeded takes auto-centre, auto-zoom, tilt and heading-up
+    /// down together, and looks like a compass fault.
+    func testSeedingIsWhatTakesTheFilterOutOfDoingNothing() {
+        var f = CameraFilter()
+        XCTAssertFalse(f.isSeeded)
+        XCTAssertNil(f.tick(inputs(rocket: pad)))
+
+        f.seed(centre: pad, zoom: 15, pitch: 0)
+        XCTAssertTrue(f.isSeeded)
+        XCTAssertNotNil(f.tick(inputs(rocket: pad)))
+    }
+
     func testItConvergesOnTheTarget() {
         let target = CLLocationCoordinate2D(latitude: 47.01, longitude: -122.0)
         var f = seeded(at: pad)

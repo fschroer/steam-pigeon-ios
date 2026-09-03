@@ -24,7 +24,18 @@ final class FlightSpeech: NSObject {
     }
 
     private let synthesizer = AVSpeechSynthesizer()
-    private weak var settings: AppSettings?
+
+    /// The settings this reads `voiceEnabled` and `voiceIdentifier` from.
+    ///
+    /// **Settable after construction, and weak.** The voice is owned by `RootView` now
+    /// (Android runs its announcer outside the orientation branch, so it has to outlive
+    /// the map screen), and constructing it there eagerly enough to be handed the same
+    /// `AppSettings` instance the settings screen writes to would mean building an
+    /// `AVSpeechSynthesizer` and activating an audio session on every re-init of the root.
+    /// So the object is built lazily and the settings are attached on the first
+    /// `onAppear`, alongside the model start. Until then `say` is a no-op, which is the
+    /// same thing it does with the voice switched off.
+    weak var settings: AppSettings?
 
     /// Called with every line that actually reaches the synthesizer, so the App Flight Log
     /// can hold what was said and when (ADR-0030).
@@ -42,7 +53,7 @@ final class FlightSpeech: NSObject {
     /// the timeline for a reaction that never happened.
     var onSpoken: ((String) -> Void)?
 
-    init(settings: AppSettings) {
+    init(settings: AppSettings? = nil) {
         self.settings = settings
         super.init()
         configureAudioSession()

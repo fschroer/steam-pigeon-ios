@@ -90,6 +90,12 @@ struct CameraFilter {
 
     private var seeded = false
 
+    /// Whether the filter knows where the camera is yet. **Nothing moves until it does**
+    /// (`tick` returns nil), so whoever owns a map has to seed it — see the note in
+    /// `FlightMapView.Coordinator.tickCamera`, where a filter that reached the field
+    /// unseeded left auto-centre, auto-zoom, tilt and heading-up all dead at once.
+    var isSeeded: Bool { seeded }
+
     /// Adopt the live camera as the filter's state.
     ///
     /// Called while the user is gesturing, so that when the backoff expires the filter

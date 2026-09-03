@@ -147,6 +147,12 @@ struct TelemetryData: Equatable {
     var deployChannelContinuity: [Bool] {
         deploymentChannelStats.map { $0 & 0x20 != 0 }
     }
+
+    /// Whether each channel has fired — **bit 2**, Android's `deploymentCh1Stats.and(4)`.
+    /// The flight-log path decodes the same bit; this is the accessor the callouts read.
+    var deployChannelFired: [Bool] {
+        deploymentChannelStats.map { $0 & 4 == 4 }
+    }
     var altitudeAgl: Float = 0
     var velocityNed = Vec3f(x: 0, y: 0, z: 0)
     var attitude = Quaternionf(w: 0, x: 0, y: 0, z: 0)

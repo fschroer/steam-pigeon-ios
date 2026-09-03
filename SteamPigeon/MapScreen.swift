@@ -13,7 +13,6 @@ struct MapScreen: View {
         self.model = model
         self.settings = settings
         _sheet = sheet
-        _voice = StateObject(wrappedValue: SpeechCoordinator(settings: settings))
     }
 
     @State private var recentre = 0
@@ -36,10 +35,6 @@ struct MapScreen: View {
     /// because an ancestor that also presents (the password challenge) cannot while a
     /// descendant is presenting, and the prompt lost that race.
     @Binding var sheet: MapSheet?
-
-    /// The voice and the haptic. Owned here because the map screen is where the pad
-    /// alert is displayed, and the three channels should start and stop together.
-    @StateObject private var voice: SpeechCoordinator
 
     var body: some View {
         // Measured HERE, at the top, rather than from the map's background. The panel
@@ -185,21 +180,9 @@ struct MapScreen: View {
             }
         }
         .ignoresSafeArea(edges: .bottom)
-        // The locator's verdict drives the voice and the haptic. Gated on hearing from
-        // it, exactly as the banner is: a warning about a rocket the app is out of
-        // contact with is a claim it cannot make, and a haptic that outlives its cause
-        // teaches the operator the phone is broken.
-        .onChange(of: model.isLocatorFresh ? model.padAlert : .quiet) {
-            voice.padAlert.update($0)
-        }
-        // Android speaks the arm state on every change, from the status panel.
-        .onChange(of: model.armed) { voice.speech.say($0 ? "Armed" : "Disarmed") }
-        // Every line that actually reaches the synthesizer is recorded in the App Flight
-        // Log (ADR-0030). Set here rather than in `SpeechCoordinator` because this is the
-        // first place both objects are in scope; `say` is the single funnel, so one hook
-        // covers every callout the app has or gains.
-        .onAppear { voice.speech.onSpoken = { [weak model] in model?.logAnnouncement($0) } }
-        .onDisappear { voice.padAlert.stop() }
+        // The voice, the haptic and the arm/disarm callout used to be wired here. They
+        // live on `RootView` now, because this screen does not exist in landscape and
+        // Android's announcer does — see `SpeechCoordinator`.
     }
 
     /// Changes whenever a camera control does, and is otherwise stable.

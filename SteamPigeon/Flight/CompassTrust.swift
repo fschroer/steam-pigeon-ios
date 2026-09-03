@@ -1,3 +1,4 @@
+import CoreMotion
 import Foundation
 
 /// How far the phone's heading can be trusted (ADR-0023).
@@ -47,6 +48,41 @@ enum FieldMagnitude {
         // Outside the Earth's envelope but not by much: enough to raise the prompt,
         // not enough to take the bearing away.
         return .low
+    }
+}
+
+/// ADR-0023 §3b on iOS: **the magnitude has to come from the CALIBRATED field.**
+///
+/// Android's source is `TYPE_MAGNETIC_FIELD`, which is the bias-corrected sensor — its
+/// uncalibrated readings live behind a different constant entirely. The first iOS port
+/// reached for `CMMotionManager.startMagnetometerUpdates`, whose `magneticField` is
+/// **raw**: it carries the phone's own hard-iron offset, and on a MagSafe-era iPhone the
+/// magnet array alone can hold the total above the 70 µT ceiling for the life of the
+/// device. Reported from the phone on 2026-09-02 as an ∞ mark permanently red beside a
+/// heading that was near-correct against a landmark — the ADR's envelope working
+/// perfectly on a number that was never the Earth's field to begin with.
+///
+/// The calibrated equivalent is `CMDeviceMotion.magneticField`, which arrives only while
+/// device motion runs a magnetic or true-north reference frame — see
+/// `PhoneLocation.startAttitudeMonitor`, where that requirement is what decides the frame.
+enum CalibratedField {
+
+    /// This source's verdict, or **nil when it has nothing to say**.
+    ///
+    /// `.uncalibrated` is the nil case, and deliberately so: CoreMotion documents the
+    /// field values as unusable in that state, and they arrive as zeros — which the
+    /// magnitude bands would read as a gross reading and suppress the bearing for. That
+    /// is the same false positive in a new place. ADR-0023's "a source that has never
+    /// spoken contributes nothing" covers it exactly.
+    ///
+    /// Whether `.uncalibrated` should instead be a verdict in its own right — it is the
+    /// closest thing iOS has to the vendor flags Decision 3 is written around — is the
+    /// open question recorded in that ADR, not something to settle here.
+    static func classify(_ field: CMCalibratedMagneticField) -> CompassTrust? {
+        guard field.accuracy != .uncalibrated else { return nil }
+        let f = field.field
+        let magnitude = (f.x * f.x + f.y * f.y + f.z * f.z).squareRoot()
+        return FieldMagnitude.classify(magnitudeUt: magnitude)
     }
 }
 

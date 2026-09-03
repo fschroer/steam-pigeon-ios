@@ -2154,6 +2154,31 @@ final class LinkViewModel: ObservableObject {
         return now.timeIntervalSince(last) < Self.channelWatchSilence
     }
 
+    /// What the flight callouts read — one reading of everything `FlightAnnouncer`
+    /// depends on, assembled where the broadcasts are already understood.
+    ///
+    /// The deployment MODES come from the pre-launch broadcast and the FIRED bits from
+    /// telemetry, which is the same split Android reads them from: the configuration is
+    /// what the locator was set up with, the stats are what happened.
+    var announcerSample: FlightAnnouncer.Sample {
+        let t = telemetry
+        return FlightAnnouncer.Sample(
+            inFlight: isInFlight,
+            flightState: flightState,
+            altitudeAglM: altitudeAglM,
+            // NED down is positive while descending, which is the sign the callouts want.
+            descentRateMs: t?.velocityNed.z ?? 0,
+            velocityMs: t?.velocityNed.magnitude ?? 0,
+            gpsOk: gpsStatus == .ok,
+            // Never heard from reads as infinitely old, which is what it is.
+            messageAge: lastLocatorMessage.map { Date().timeIntervalSince($0) } ?? .infinity,
+            position: rocketCoordinate.map { (lat: $0.latitude, lon: $0.longitude) },
+            drogueDeployDetected: (t?.physicalDeploymentStats ?? 0) & 1 == 1,
+            mainDeployDetected: (t?.physicalDeploymentStats ?? 0) & 2 == 2,
+            channelModes: prelaunch?.deployChannelModes ?? [],
+            channelFired: t?.deployChannelFired ?? [])
+    }
+
     var markerState: RocketMarkerState {
         RocketMarkerState.from(
             lastMessageAge: lastLocatorMessage.map { Date().timeIntervalSince($0) } ?? .infinity,

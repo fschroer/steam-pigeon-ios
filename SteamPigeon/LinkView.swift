@@ -17,6 +17,22 @@ struct RootView: View {
     // init, which is a different declaration from this one.
     @StateObject private var model = LinkViewModel()
     @StateObject private var settings = AppSettings()
+    /// **The voice lives here, not on the map screen.** Android calls
+    /// `FlightSpeechAnnouncer` from `HomeScreen` *outside* the orientation branch, so it
+    /// keeps announcing in landscape; while this was owned by `MapScreen` the announcer,
+    /// the pad alert and its haptic all stopped existing the moment the phone was turned
+    /// sideways, and coming back built a synthesiser and activated an audio session on the
+    /// main thread again. The settings it reads are attached on first appearance — see
+    /// `FlightSpeech.settings`.
+    @StateObject private var voice = SpeechCoordinator()
+
+    /// **The camera lives here, not in `HeadsUpView`.** It is only ever used in
+    /// landscape, but a capture session owned by that view would be built and torn down
+    /// on every rotation — main-thread work landing in the same run loop turn as the
+    /// rotation animation and MapLibre's teardown, which is what left a rotation stuck
+    /// with half a map screen on it (reported 2026-09-02). The camera still runs only
+    /// while the heads-up view is on screen; it is the SETUP that is paid once.
+    @StateObject private var camera = CameraPassthrough()
 
     @State private var showDiagnostics = false
     /// What the map screen wants shown. Owned HERE, not there, because this view is the
@@ -36,7 +52,7 @@ struct RootView: View {
             // (FlightMapScreen.kt:739). Rotating the phone is the gesture on both
             // platforms, so the manual needs no per-OS instruction.
             if isLandscape {
-                HeadsUpView(model: model)
+                HeadsUpView(model: model, camera: camera)
             } else {
                 MapScreen(model: model, settings: settings, sheet: $mapSheet)
             }
@@ -78,7 +94,42 @@ struct RootView: View {
         .preferredColorScheme(.dark)     // matches Android: read outdoors, not in a browser
         .tint(SPColor.primary)
         .background(SPColor.background)
-        .onAppear { model.start() }
+        .onAppear {
+            voice.attach(settings)
+            // Android's `rememberUpdatedState(rocketState)`: the poll loop reads the
+            // latest sample rather than the one it started with.
+            voice.flight.sample = { [weak model] in model?.announcerSample ?? .init() }
+            voice.flight.setInFlight(model.isInFlight)
+            // Every line that actually reaches the synthesizer is recorded in the App
+            // Flight Log (ADR-0030). `say` is the single funnel, so one hook covers every
+            // callout the app has or gains.
+            voice.speech.onSpoken = { [weak model] in model?.logAnnouncement($0) }
+            model.start()
+        }
+        // The locator's verdict drives the voice and the haptic. Gated on hearing from it,
+        // exactly as the banner is: a warning about a rocket the app is out of contact
+        // with is a claim it cannot make, and a haptic that outlives its cause teaches the
+        // operator the phone is broken.
+        //
+        // **Attached to the root**, so it runs in both orientations as Android's does. It
+        // therefore also keeps running while a sheet is up, where Android — whose
+        // destinations replace the map rather than covering it — would have stopped. That
+        // difference is recorded in `docs/UI_PARITY.md` rather than decided here.
+        .onChange(of: model.isLocatorFresh ? model.padAlert : .quiet) {
+            voice.padAlert.update($0)
+        }
+        // Android speaks the arm state on every change, from the status panel.
+        .onChange(of: model.armed) { voice.speech.say($0 ? "Armed" : "Disarmed") }
+        // The two effects Android's `FlightSpeechAnnouncer` is built from: one keyed on
+        // the flight state, one a poll loop keyed on `inFlight`.
+        .onChange(of: model.flightState) { _ in voice.flight.flightStateChanged() }
+        .onChange(of: model.isInFlight) { voice.flight.setInFlight($0) }
+        // A haptic must never outlive its cause, and nothing polls once the app's own
+        // screen is gone.
+        .onDisappear {
+            voice.padAlert.stop()
+            voice.flight.stop()
+        }
         // **THE app's only sheet** — the menu, a screen behind it, diagnostics, and the
         // password challenge, all through one presentation. A second `.sheet` anywhere
         // in this hierarchy, on this view or any descendant, reintroduces both failures:

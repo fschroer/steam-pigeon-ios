@@ -24,8 +24,16 @@ region there, which is the half of it that could not be faked.
 is the condition the divergence row named. See the audit below.
 
 What otherwise remains is **features inside screens**: the flight TTS callouts, the
-camera passthrough behind the heads-up gauges, the archived-path map control (unblocked
-by the flight-data transfer layer), and path export. `NEXT_SESSION.md` has the list.
+archived-path map control (unblocked by the flight-data transfer layer), and path export.
+`NEXT_SESSION.md` has the list.
+
+**The camera passthrough landed 2026-09-02**, reported from the phone as the camera not
+working when the map screen is rotated to landscape. It was not a fault: the heads-up view
+had been standing in with gauges on a black background since the port began, and this file
+listed the missing background as outstanding rather than as a defect. The whole of
+`CameraPreviewScreen` is now ported — camera, crosshair, marker, edge arrow, both HUD
+scales and tap-to-zoom. See the audit below. **None of it has been on hardware**, and the
+simulator can show almost none of it: it has neither a camera nor a compass.
 
 **Update, 2026-09-01. The "iOS OWES THIS" list is empty.** All seven items closed in one
 pass against the Android source: the two `ChannelOccupancy` fixes, the armed-scan
@@ -69,6 +77,10 @@ gets read before someone concludes a missing screen is a defect:
 | The search's **Looking for** picker is a SwiftUI `Menu` styled as a field, where Android uses `ExposedDropdownMenuBox` | ADR-0016's sanctioned list covers pickers outright, and Download maps already uses `Menu` for the same reason. The part that was **not** treated as sanctioned is the *appearance*: Android deliberately moved this control from a bare `TextButton` to a field showing its current value, because the value is what a user must check before starting a search that behaves differently depending on it — so the iOS label is a value plus a chevron in a 200 pt filled field, not a text button | never — but the field shape is the requirement, not the menu mechanism |
 | **A dropped BLE link clears the receiver readout on iOS; Android keeps it.** `clearLiveReadouts` sets `receiverInfo = nil` with the rest; Android's link-loss release ([ADR-0011](../../steam-pigeon-locator/docs/adr/0011-locator-lora-channel-from-app.md), 2026-08-30) deliberately leaves `_remoteReceiverConfig` standing | The **locator** half matches — both platforms release the connection and blank the locator's configuration, because a section left reading channel 0 is a plausible-looking value where the truth is "nothing is connected". The receiver half cannot: Android seeds `_remoteReceiverConfig` from user preferences and saves it back, so clearing it would blank the Receiver channel field on every drop and raise that same hazard on the other field. iOS's `receiverInfo` is not persisted and has no such role | never — the difference is in where the value is stored, not in what either app wants to show |
 | ~~**App Flight Logs is Android-only.**~~ **CLOSED 2026-09-01** — ported once the Android side had been exercised with simulated flight data, which is exactly what this row's *closes when* asked for. Left in as the record. Original text: A per-flight CSV of what the *phone* received and announced — the frame plus the receiver's RSSI/SNR/noise floor plus the app's own verdicts and spoken callouts, none of which exist in the locator's archive because they are measured or decided on this side of the radio | Not a divergence of taste — the feature is four days old and has never flown. Porting a recording feature before its first hardware run would mean debugging two implementations against one unknown. The **portable half is already shaped for the port**: `FlightLogRecorder` holds no clock, no Android types and no flows, exactly as `ChannelMoveRunner` does, and its 23 tests drive it through a `Sink` protocol that Swift has verbatim | when the Android side has flown at least once and the CSV has been read on a PC. Then port `FlightLogRecorder` + `FlightLog` + `FlightLogRecorderTest` **as a unit** rather than re-deriving the close-signal set — landing deliberately does NOT close a log, and a BLE dropout deliberately does not either, and both are the kind of rule that gets "simplified" back out by a reimplementation. Storage and export are genuinely platform-specific: `UIActivityViewController` for the share sheet, and app-private storage plus `LSSupportsOpeningDocumentsInPlace` / `UIFileSharingEnabled` is the Files-app question Android answers with a `FileProvider` |
+| **The pad alert and the arm/disarm callout keep speaking while a sheet is up.** Android's announcer stops when you leave the map screen | Not a decision so much as the shape of the two navigations: Android's destinations *replace* `HomeScreen`, which disposes the announcer with it; every iOS destination is a sheet presented **over** a root that stays alive. `RootView` already draws that equivalence for the wake lock, where it gates on "no sheet is up" — the same gate could be applied here and would match Android exactly. It is not, because the two cases argue differently: a screen held awake while the user reads settings is waste, whereas a pad alert silenced while the user reads settings is the one channel of four that was telling them a live rocket is unarmed | on a decision, not a discovery — fschroer's call. Gating it is a two-line change; the argument for leaving it is that this alert is the safety channel and its whole design (ADR-0021) is anti-habituation |
+| **The heads-up sight samples the attitude at 60 Hz**, where Android registers its rotation vector at `SENSOR_DELAY_UI` (~60 ms) | Android's rate comment states its own reason: every sample there recomposes the whole map screen, so it deliberately did not ask for more. In landscape on iOS the map is not mounted and one `Canvas` redraws, so the constraint that set Android's number does not exist — and 10 Hz was reported from the phone as visibly stepped against Android's overlay. The **map** keeps 10 Hz | **Confirmed on the phone 2026-09-02: 60 Hz cures the stepping.** What a side-by-side would still settle is deflection per degree, which is a different number on the same screen |
+| **The camera is asked for on the first rotation into the heads-up view, not at launch.** Android lists `CAMERA` in `requiredPermissions` beside location and Bluetooth and asks for all of them as the app opens | *When* a permission is requested is a platform convention, not app behaviour: an iOS prompt at first launch arrives with nothing on screen to explain it, and iOS users read an unexplained camera request as a reason to say no. Asking on the rotation puts the request where the feature is, and the string names the feature | never — the prompt text is the parity surface, not its timing |
+| **The AR overlay keeps drawing when there is no picture behind it**, with one line saying why. Android's `CameraPreviewScreen` draws nothing at all — overlay included — while the camera provider is null | On Android that state is barely reachable: the app asks for the camera at launch and the screen is written as if it always has one. On iOS a refusal is a state the user can sit in indefinitely, and the crosshair, the scales and the angles are worth having without a picture. The alternative is a black screen with no explanation, which reads as the crash this report started as | when Android grows a no-camera state of its own; the drawing rule would then be worth matching in whichever direction it lands |
 | ~~iOS remembers the name of **every** locator it accepts a broadcast from; Android remembers one only for locators whose password it holds~~ **CLOSED 2026-08-21** by Android `b209671`, which stores the name from every accepted broadcast exactly as described below. The one asymmetry left — Android noted the name **before** its `mayConnect` check and iOS only on `.accepted` — was closed here 2026-08-23: `noteName` now runs on the conflict path too, so a second authorized locator heard while ours holds the link is remembered | — | — |
 
 Everything else on these screens matches Android, including field order, widget shapes,
@@ -123,8 +135,8 @@ Android UI is ~14,900 lines across `ui/`. By screen:
 
 From `FlightMapScreen.kt`: navigation drawer; `MapControlsColumn`; `LocatorStats` panel;
 `drawVelocityGauge`; `drawRocket3D` (3D attitude render); `GenericScaleBar`;
-`LinkQualityNote` with `rssiColor`/`snrColor` bands; `CameraPreviewScreen` (the AR
-"point at the sky" view); `PulsingText` / `BlinkingText` alert treatments;
+`LinkQualityNote` with `rssiColor`/`snrColor` bands; `PulsingText` / `BlinkingText` alert
+treatments;
 `FlightSpeechAnnouncer`; `ExitAppButton`; heading-up map rotation with smoothing;
 auto-zoom and auto-centre with deadbands; tilt from device pitch; keep-screen-on.
 
@@ -141,6 +153,12 @@ The three font families ship as `.ttf` in `res/font/` and can be bundled on iOS
 unchanged, which is the cheapest large step toward "looks like the same app".
 
 ## Flight map — line-by-line audit against `FlightMapScreen.kt` (2026-08-20)
+
+> **2026-09-02, read this first if you are touching the camera:** the per-frame filter was
+> reaching the field **unseeded** whenever the map was built while the locator already had
+> a fix — which took auto-centre, auto-zoom, tilt and heading-up down together, at the pad
+> as well as after a rotation. Fixed in `tickCamera`; the account is in the heads-up
+> sight's audit below, under "Hardware, round two", because that is where it surfaced.
 
 Prompted by four defects reported from the phone, all four of which came from
 **assuming** what the Android map did instead of reading it. What follows is the whole
@@ -1444,6 +1462,258 @@ One detail left over, small and worth deciding once rather than drifting: the ap
 the docs and both repo names. Neither is wrong, but they are two spellings of one name,
 and the home screen is the more public of the two.
 
+## Heads-up sight (landscape) — audit against `CameraPreviewScreen` (2026-09-02)
+
+Reported from the phone as **"rotate to landscape from the map and the camera is not
+functioning — it is a key feature of the Android app"**. Correct, and it was not a
+regression: `HeadsUpView` had been a placeholder since the port began — the two gauges on
+a black background, with a distance-and-bearing readout **Android does not have on this
+screen at all** — and its own doc comment said the camera was "not here yet". This closes
+it against the Kotlin, top to bottom.
+
+**What the screen is.** Not a panel of gauges: an AR sight. The back camera fills the
+screen, a crosshair marks where it is aimed, a ring marks the rocket against the real sky,
+and two HUD scales say how far off the aim is. The velocity gauge and the attitude render
+are the *smaller* half of it, and Android draws them only while a flight is under way.
+
+| `FlightMapScreen.kt` | iOS | Note |
+|---|---|---|
+| `CameraPreviewScreen` gate at line 738 | `RootView.isLandscape` → `HeadsUpView` | unchanged — the rotation was already the gesture |
+| `PreviewView` + `bindToLifecycle` | `CameraPassthrough` + `CameraPassthroughView` | session starts on appear, stops on disappear, as CameraX's lifecycle binding does |
+| tap → `zoomRatio` 1 ⇄ `maxZoomRatio` | tap → `videoZoomFactor` 1 ⇄ `maxAvailableVideoZoomFactor` | two states, no pinch, as Android |
+| crosshair: gap 50 dp, arm 25 dp, stroke 2 dp | same, in points | |
+| marker ring 50 dp, edge arrow 14 dp at a 20 dp margin | `ARSight.marker` | the on-screen test is Android's, one full radius of slack each side |
+| `scale = 10f` px per degree | `ARSight.pointsPerDegree(screenScale:)` = 10 ÷ display scale | **the one unit conversion.** Every other constant on that screen is dp; this one is applied to a pixel canvas, so taking the 10 as points would swing the marker ~3× too far for the same angle |
+| HUD scales: ±45°, minor 5°, major 15°, 0.65 w × 22 dp and 0.55 h × 22 dp, 16 dp inset | same | including the white zero reference at 1.5× stroke and the pointer triangles at 0.8× the bar |
+| labels at ±45, ±22, 0 with `toInt()` | `Int(degrees)` | truncated, not rounded — 22, not 23 |
+| colours `FF6080` / `C0FFC0` / `FFC040` / 50 % black | same | |
+| label paint: platform sans, 10 sp, alpha 200 | `SPFont.chartLabel(size: 10)` at 200/255 | the same substitution the flight chart's raw `TextPaint` gets |
+| `drawVelocityGauge` at (100, 100) dp, r 80 | `VelocityGauge`, 160 pt frame centred at (100, 100) | already ported; only its placement and gate were missing |
+| `drawRocket3D` at (w − 100, 100) dp, scale 70 | `AttitudeView`, 156 pt frame centred there | 156 = 2 × 70 ÷ 0.9, the view's own radius factor |
+| `inFlight && lastMessageAge < messageTimeout` | `model.isInFlight && model.isLocatorFresh` | the same two clocks |
+| `bearingValid = locatorFixUsable && compassUsable` | a non-nil `model.vector`, `compassTrust != .unreliable`, **and** a camera bearing | Three terms, because the first two are genuinely separate here — see the correction below. Suppressed means **nothing drawn**: no ring, and no edge arrow either, which is the more confident of the two |
+
+**Where the camera is pointing — the one part with no line-for-line equivalent.** Android
+remaps the rotation matrix (`AXIS_X, AXIS_Z`) so the screen-normal axis takes the compass
+role, and adds magnetic declination by hand. iOS has neither call. `CameraBoresight` does
+the same job from a `.xTrueNorthZVertical` device-motion stream, which is true-referenced
+already — the same saving `trueHeadingDeg` gets from CoreLocation. Two things are worth
+knowing before touching it:
+
+1. **Elevation comes from gravity alone**, not from `attitude.pitch`. `devicePitchDeg`,
+   which drives the map's tilt-follow mode, is unsigned and measured about a different
+   axis; in landscape it is ~0 however the phone is tilted. Android keeps one signed value
+   for both jobs; here they are two, and the AR one is `cameraElevationDeg`.
+2. **CoreMotion does not say which way `rotationMatrix` maps.** Reference-to-device and
+   device-to-reference differ by a transpose, and for this axis that is the difference
+   between the rocket's bearing and the exact opposite — an overlay that sits confidently
+   on the patch of sky 180° away. So it is not assumed: one reading of the matrix's third
+   row/column is gravity in device coordinates and the other is the boresight, and the
+   accelerometer says which. `CameraBoresightTests` drives every pose **both ways round**.
+   **Confirmed on hardware 2026-09-02** — the marker lands on the rocket — which is the
+   only evidence that could exist for this, since both readings are self-consistent and a
+   simulator with no compass exercises neither. Do not "simplify" the cross-check away.
+
+**Hardware, 2026-09-02 (fschroer).** The preview is **upright in both landscape
+orientations** — the interface-orientation table is right, and that row is closed. One
+fault reported with it: *infrequently the rotation gets stuck, with the map screen still
+partly on screen while the phone is in landscape.* That is a **main-thread stall during
+the rotation animation**, not a layout fault — while the main thread is blocked, UIKit
+holds the rotation snapshot, which is a portrait-shaped picture of the map on a landscape
+screen. Three things were being built or destroyed in that one run loop turn:
+
+1. **The capture session** — finding the device, building an `AVCaptureDeviceInput`,
+   attaching the session to a preview layer (which takes the session's own lock), and
+   tearing all three down on the way back. All of it on the main thread, all of it on
+   *every* rotation, because `HeadsUpView` owned the object as a `@StateObject` and that
+   dies with the view. **Fixed:** `RootView` owns the `CameraPassthrough` and the one
+   preview view, the session is attached to that view once at construction, and everything
+   else runs on the capture queue. A rotation now only starts or stops a session that is
+   already built. The *camera* still runs only while the heads-up view is on screen, which
+   is Android's lifecycle binding.
+2. **`MLNMapView`** — destroyed entering landscape and built again, style and all, coming
+   back. Still true, and now the largest remaining cost at that moment. Left alone
+   deliberately: Android's composable is recreated too, and this is a hardware-verified
+   screen. If the stall is still reported, hoisting the map view the way the camera was
+   hoisted is the same fix, one level up.
+3. **`SpeechCoordinator`** — `MapScreen` owned it, so every rotation to portrait
+   constructed an `AVSpeechSynthesizer` and called `AVAudioSession.setActive(true)` on the
+   main thread. **The more interesting half was a parity gap**: Android calls
+   `FlightSpeechAnnouncer` *outside* the orientation branch, so it announces in landscape
+   too, while here the announcer, the pad alert and its haptic all stopped existing the
+   moment the phone was turned sideways — on the one screen you are looking at *because*
+   you are walking toward a rocket. **Fixed 2026-09-02**: `RootView` owns the coordinator,
+   and the pad-alert, arm/disarm and log hooks are attached there. The settings it reads
+   are attached on first appearance rather than passed to the initialiser, so the root can
+   own it without building a synthesiser and activating an audio session on every re-init
+   (`FlightSpeech.settings` carries that reasoning). The map screen keeps only what it
+   draws.
+
+A second defect found while fixing the first: the overlay was redrawn only when
+`LinkViewModel` published, roughly once a second, because nothing observed `PhoneLocation`
+— so the marker lagged a crosshair that moves with the hand. `HeadsUpView` now observes the
+sensors directly, at the 10 Hz the device-motion stream runs at. Android redraws on
+rotation-vector events, measured there at ~16 Hz.
+
+**Hardware, round two (fschroer, 2026-09-02).** No stuck rotation in 15–20 tries, so the
+ownership fix above stands. Three further observations, and they are not the same kind of
+thing as each other:
+
+1. **The marker moves more often but is still jerky beside Android.** Rate, and it was
+   ours to fix: the attitude stream ran at 10 Hz where Android registers its rotation
+   vector at `SENSOR_DELAY_UI`, ~60 ms. Android's own comment says why it did not ask for
+   more — every sample there recomposes the whole map screen. **That cost does not exist
+   on this screen**: in landscape the map is not mounted and what redraws is one `Canvas`.
+   So the sight now samples at **60 Hz while it is on screen**, and the map keeps the
+   10 Hz it was verified at. Listed as a divergence above, since it is a number that
+   differs from Android's on purpose. If it is still stepped at 60 Hz the cause is not the
+   rate, and the next thing to look at is easing — Android eases its *map* azimuth
+   (`easeAngle`) and publishes the camera azimuth raw, which is what this does.
+2. **Fast landscape-to-landscape flip ends up upside down.** A 180° flip changes neither
+   the size class nor the view's bounds, so neither a layout pass nor a SwiftUI update is
+   guaranteed — and the one thing that did change is the only thing the preview cares
+   about. `CameraPreviewView` now also listens for
+   `UIDevice.orientationDidChangeNotification` and re-reads the **interface** orientation
+   twice: on the notification, and again after the run loop turn the rotation is committed
+   in. **Answered the same day: only the camera picture** — the crosshair, the scales and
+   the text stayed upright — so the fault is the preview connection's orientation and this
+   is the whole of it, rather than the interface landing in the wrong orientation.
+3. **"Controls reset and the compass stopped working" on the way back to portrait.** Two
+   findings, and they separate cleanly:
+   - **The reset is parity, not a defect.** Android holds `autoTargetMode`,
+     `autoZoomMode`, `compassEnabled` and `tiltMode` as `remember { … }` inside
+     `MapWithOverlays`, which is composed only in the portrait branch — so they leave the
+     composition on the way to landscape and come back at their defaults, exactly as the
+     iOS `@State` does. Changing it is a real improvement and a reasonable thing to want;
+     under the Android-is-the-reference rule it lands there first, by hoisting the four
+     into `RocketViewModel`.
+   - **The compass was not the compass.** The reported detail is what solved it: *"if I
+     rotate the map with two fingers, then after the five-second timeout it starts
+     rotating with the compass again."* Five seconds is the gesture backoff, and what a
+     gesture does besides start that clock is **seed the camera filter** — so the filter
+     was reaching the field unseeded, and `CameraFilter.tick` returns nil until it is.
+     Everything the filter drives was dead together: auto-centre, auto-zoom, tilt and
+     heading-up. It only looked like a compass fault because heading-up is the one a
+     stationary map makes visible.
+
+     **Three seed sites, all conditional**: a gesture, a recentre tap, and
+     `initialCentreIfNeeded` — which fires only while the **rocket has no fix**. So a map
+     built while a locator is already reporting a position was never seeded at all. That
+     is two ordinary situations rather than an edge case: coming back to portrait from the
+     sight, and **opening the app at the pad with the locator already broadcasting**,
+     which is the more serious of the two and had nothing to do with the camera work.
+
+     **Android has no such state to be missing** — `CameraFilterState` starts at concrete
+     values and its tick always runs. The `seeded` flag is an iOS addition, and worth
+     keeping (seeding from the live camera is what stops the first frame dragging in from
+     null island), but it now has to be satisfied by the frame loop itself:
+     `tickCamera` seeds from the live camera on the first frame it has one.
+     `CameraFilterTests` pins the flag the loop branches on.
+
+     **The permanently red figure-eight was the same class of fault, and is now fixed
+     (2026-09-02).** ADR-0023 §3b classifies total field magnitude, and Android's source
+     `TYPE_MAGNETIC_FIELD` is the **calibrated** magnetometer — the uncalibrated readings
+     are a different sensor there. The iOS port read `startMagnetometerUpdates`, which is
+     the **raw** field: it carries the phone's own hard-iron offset, and on a MagSafe-era
+     iPhone the magnet array alone holds the total above the 70 µT ceiling for the life of
+     the device. The envelope was working perfectly on a number that was never the Earth's
+     field, which is why the mark was red beside a heading that checked out against a
+     landmark — and why the AR marker would have stayed suppressed for good.
+
+     `PhoneLocation` now takes the magnitude from `CMDeviceMotion.magneticField`
+     (`CalibratedField.classify`), and `.uncalibrated` **votes nothing** rather than
+     voting unreliable: CoreMotion delivers zeros in that state, which the gross band would
+     read as a reading far outside the envelope — the same false positive one layer down.
+     Both rules are pinned in `CompassTrustTests`.
+
+     **What it cost elsewhere, stated because it undoes part of the previous entry:** the
+     calibrated field is published only while device motion runs a magnetic or true-north
+     reference frame, so that frame is no longer scoped to the sight — it is what the app
+     runs. Only the **rate** is scoped now (10 Hz for the map, 60 Hz for the sight). The
+     raw magnetometer stream it replaces was already running continuously, so what is added
+     is the fusion rather than the sensor. The whole of it is written into ADR-0023 §3b as
+     a dated addition, with the option not taken — `CMCalibratedMagneticField.accuracy` as
+     a fourth source — recorded there rather than here.
+
+**Correction, found while summarising (2026-09-02).** The first version of this screen
+gated the marker on `model.vector != nil` alone, on the assumption that a suppressed vector
+carried ADR-0023's compass test as well as ADR-0022's distance test. **It does not.**
+`updateVector` publishes the vector under an unreliable compass and records the fact in
+`vectorSuppressedReason`, because the only thing the map quotes from it is a distance,
+which no compass is involved in — and ADR-0023 Decision 5 suppresses the *AR overlay*,
+which did not exist on iOS until today. That is why `vectorSuppressedReason` had no reader:
+the thing it was written to suppress had not been ported. The gate is now Android's, term
+for term: `vector != nil && compassTrust != .unreliable && a camera bearing`.
+
+**This coupled the two open items, and is why the trust fault was fixed the same day.** Red
+on the rose IS `.unreliable` (`MapScaleBar.CompassRose`), so while the mark stayed
+permanently red the marker was correctly suppressed and would not have drawn at all on that
+device — the gate is right, and it made the trust false positive a prerequisite for
+verifying the sight rather than an independent tidy-up. Both halves are now in.
+
+**Still needs a phone, and says so.** The simulator
+has no camera (the screen falls to its "No camera available" line there) and
+`headingAvailable()` is false, so the marker and both pointers never move. What a device
+has to settle:
+
+- that the marker lands on the rocket rather than 180° from it, which is the check the
+  gravity cross-check above is meant to make impossible but nothing here can prove;
+- that the marker's deflection per degree feels right beside Android's — the pixel/point
+  conversion is arithmetic, not judgement, but only a side-by-side settles the judgement;
+- ~~the flip fix, and tilt-follow after a rotation round trip~~ **confirmed on the phone,
+  2026-09-02**;
+- ~~that the marker appears, and lands on the rocket rather than 180° from it~~ **confirmed
+  the same day** — which is the gravity cross-check in `CameraBoresight.azimuthDeg` proving
+  out. It picked the right reading of a matrix whose direction CoreMotion does not document,
+  and the wrong one would have been the exact opposite bearing;
+- ~~that 60 Hz cures the stepped marker~~ **confirmed the same day**;
+- ~~the ∞ mark~~ **confirmed the same day: the interference mark clears, and goes yellow
+  when it should** — so the calibrated-field fix is right at both bands, not merely quiet;
+- ~~deflection per degree against Android~~ **confirmed consistent the same day**, which
+  settles the one number in this screen that had no exact answer: Android's `scale = 10f`
+  is ten *device pixels* per degree, and converting it through the display scale rather
+  than reading it as points was the right call.
+
+**Everything on this screen is now hardware-confirmed** except a genuine side-by-side
+photograph of the two phones, which is the standing caveat at the foot of this file rather
+than an open item of its own.
+
+## Flight callouts — audit against `FlightSpeechAnnouncer` (2026-09-02)
+
+The last of the "features inside screens". Android's announcer is a headless composable
+called from `HomeScreen` **outside** the orientation branch; ported here as
+`FlightAnnouncer` (pure) plus `FlightAnnouncerRunner` (the timer and the speech engine),
+owned by `RootView` so it runs in both orientations as Android's does.
+
+| Android | iOS | Note |
+|---|---|---|
+| `LaunchedEffect(rocketState.flightState)` | `flightStateChanged(_:)` | same guard: `inFlight`, and the state must have advanced |
+| `LaunchedEffect(inFlight)` + `while(true) { delay(500) }` | `pollingStarted()` + `poll(_:now:)` on a 500 ms timer | the loop's four locals reset on restart, and are deliberately **not** part of the landing reset |
+| `rememberUpdatedState(rocketState)` | `FlightAnnouncerRunner.sample` closure | the loop reads the latest telemetry, not the one it started with |
+| `announcer.add` / `announcer.flush` | `.routine` / `.urgent` | `FlightSpeech.say` was already the single funnel `Announcer` was introduced to create on Android, so the facade has no counterpart here — ADR-0030's log hook already sits inside it |
+| apogee, four charges, ascent bands, descent warnings, landing, telemetry lost/restored, GPS lost/restored, drogue/main deployed | same lines, same words, same priorities | the strings are Android's verbatim, including the leading space and full stop in " N meters <ordinal> of launch point." |
+| `landingImminent` / `landedThroughBlackout` / `timeToGroundSeconds` | same, with `LandingCalloutTest` ported case for case as `LandingCalloutTests` | the field case: the link dies in the last few hundred metres and never returns, so a callout that waits to *hear* the touchdown never comes |
+| pad alert + haptic inside the same composable | already ported as `PadAlertAnnouncer` | not re-ported; it moved to `RootView` with the rest of the voice earlier the same day |
+
+**Three things worth knowing before touching it:**
+
+1. **Almost every rule is a rule about staying quiet** — over a rocket already down, over a
+   position ADR-0022 will not stand behind, over a link that was never live, over a
+   deployment bit that arrives latched. Those are invisible when they work, and they are
+   what the 27 new tests are about.
+2. **`isAirborne` in the deployment block is load-bearing.** Reaching Landed resets every
+   guard for the next flight while the poll loop is still polling that same Landed
+   telemetry, whose deploy bits are still latched true. Without it the next tick
+   re-announces both deployments, having just been told it never announced them. Android
+   says so in a comment; the ported test says so in an assertion.
+3. **One divergence, listed above as something Android owes**: the charge callouts consult
+   every deployment channel here, where Android tests only channels 1 and 2 — which its own
+   default wiring makes unreachable for the main charge.
+
+**Not on hardware.** Nothing on this path can be exercised without a locator flying: the
+simulator has no Bluetooth, and a flight is the input. What can be said is that the state
+machine is pinned by tests, including Android's own landing cases.
+
 ## Where iOS idiom should win
 
 Recorded so departures are deliberate rather than accidental:
@@ -1565,6 +1835,7 @@ re-verified against the Android source on 2026-08-29 at the line cited.
 | 1 | **A changed password permanently bricks the connection.** Once connected, a locator whose password is changed on the device can never be re-authenticated: its frames stop authenticating so nothing is admitted, `connectedLocatorId` goes on naming it because nothing releases a connection on an auth failure, and the passive challenge refuses to prompt while anything is connected. The only things on screen are a conflict banner calling the connected locator "another locator" and a panel reading "No Locator" over the last good RSSI. **No recovery inside the app** short of dropping the BLE link | `RocketViewModel.kt:1232` — `_connectedLocatorId.value == null` gates the passive challenge | `ChallengePolicy.Trigger.credentialsChanged`: an unauthorized frame **from the holder itself** releases the connection (a stale belief, not something to protect) and prompts, asking even though something was connected and even if that locator was declined before. A *stranger* still cannot knock out a standing connection |
 | 2 | **Connect / pick buttons stay live while a change is in flight, and the channel is staged before the send is accepted.** The second tap is refused by the in-flight guard and does nothing at all; meanwhile the Receiver channel field shows a channel the app never visited, with an enabled Update button offering to apply it | `CommunicationScreen.kt:1043` — hit-row `Button` with no `enabled`; `:307-309` and `:352-354` — `stagedReceiverChannel` written *before* the guarded `pointReceiverAtChannel` | `pointReceiverAtChannel` returns whether the change was **accepted for sending** — i.e. whether the in-flight guard passed, not whether the write reached the receiver (see the iOS gap below); callers stage only on success. Search Connect and survey pick are disabled while the change they would make is in flight |
 | 3 | **The released locator's configuration is left on screen.** After a receiver-only channel change the Locator channel field goes on showing the *previous* locator's channel, and corrects only when a `PreLaunchData` from the new one is admitted — so a locator that is never admitted leaves it wrong indefinitely. Reported 2026-08-29: receiver reading 48, locator field reading 34, two real locators on two real channels | `RocketViewModel.kt:1245-1263` — `beginChannelChangeRecognition` clears ten fields and **not** `_remoteLocatorConfig` | `remoteLocatorConfig = LocatorConfig()` on release, matching what `clearLiveReadouts` already does when the link drops |
+| 5 | **The charge callouts only ever consult deployment channels 1 and 2**, while the locator has four and the stock wiring puts MainPrimary on **channel 3** — so with the default configuration Android's "Main charge." and "Main backup charge." callouts are unreachable, and a rocket wired on 3 or 4 flies in silence through the events it did announce the state transitions for. Found 2026-09-02 while porting `FlightSpeechAnnouncer` | `FlightMapScreen.kt:924-953` — each of the four blocks tests `deploymentChannel1Mode`/`channel1Fired` and `deploymentChannel2Mode`/`channel2Fired` only, against a `LocatorConfig` carrying `deploymentChannel1Mode`…`4Mode` (`RocketState.kt:135-138`) and a `RocketState` carrying `channel1Fired`…`channel4Fired` (`:109-112`); the default wiring is ch1 DroguePrimary, ch2 DrogueBackup, **ch3 MainPrimary**, ch4 MainBackup (`LocatorConfigWire.kt:51-54`) | `FlightAnnouncer.fired(_:_:)` zips modes against fired flags across **every** channel. Covered by `FlightAnnouncerTests.testTheMainChargeOnChannelThreeIsAnnounced` |
 | 4 | **The candidate list's middle is order-unstable between runs.** `knownChannels` comes from a protobuf map whose iteration order is unspecified, so which remembered channels survive the 16-channel cap — and in what order — can differ between two runs with identical stored state. With more than 14 remembered locators it changes which channels are actually searched | `RocketViewModel.kt:903` — `.values.mapNotNull { … }` over `knownLocatorsMap` | `searchCandidates` sorts the other locators' channels by id, so the list is reproducible |
 
 #### ✅ Known on both platforms — fixed on Android 2026-08-29, **ported to iOS 2026-09-01**
