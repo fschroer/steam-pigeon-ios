@@ -11,8 +11,7 @@ App Flight Logs writing from real telemetry, and the 3D flight path. Each audit 
 what its own run did and did not reach.
 
 Two things are still not hardware-verified and are called out where they belong rather than
-here: `FlightProfilesScreen`, the **archived record drawn on the map** (which needs a real
-transfer from a locator), and — separately from "it draws correctly on iOS" — a
+here: `FlightProfilesScreen`, and — separately from "it draws correctly on iOS" — a
 **side-by-side against Android**, which the note at the foot of this file calls the only
 real check on appearance. Download maps remains simulator-only, though it downloaded a real
 region there, which is the half of it that could not be faked.
@@ -2277,13 +2276,31 @@ that actually killed the process.
 and names both the app's footprint at kill time and the limit it crossed. That single file
 turns this from an inference into a measurement, and it needs no change to the app.
 
+#### ⚠️ Half the work was moved off the main thread, not all of it — fixed 2026-09-02
+
+The first cut moved `FlightPathGeometry.build` to a background queue and left the more
+expensive half behind: turning ~17 000 quads into `MLNPolygon`s, grouping them by height and
+attaching a per-feature attribute dictionary all ran on the main thread, in
+`applyPathGeometry`, at every rebuild. That is work proportional to the quad count sharing a
+runloop with touch handling.
+
+**The simulator cannot see this.** Startup measured 2.8 s with and without a 2000-point
+track; a Mac is fast enough that the difference disappears. It was reported from a phone as
+slow startup and reduced responsiveness, which is exactly the shape of main-thread work that
+a desktop hides — the same trap as the memory measurements above, in the other direction.
+
+Shapes are plain model objects, so they are built on `pathQueue` now and the main thread
+only hands finished ones to the style: `shapes(for:)` produces a `PathShapes`,
+`applyPathShapes` uploads it. Only `MLNStyle` mutation was ever required to be on main, and
+that is all that remains there.
+
 **Still open.** 371 MB for a large archived record, on a 222 MB baseline, is not comfortable
 for an app whose deployment target is iOS 16 and which is flown on older hardware. The
 remaining lever is the quad count itself — `curtainTargetRiserM` at 0.25 m produces ~17 000
 quads for a 450 m flight — and moving it changes how the wall looks, which is a fidelity
 decision for fschroer rather than an optimisation to take unilaterally.
 
-### The archived flight path on the map — ported 2026-09-01
+### The archived flight path on the map — ported 2026-09-01, confirmed 2026-09-02
 
 Reported as a question: does the record loaded through the charting screen get drawn on the
 map, as Android's does? It did not — the download and the chart worked, and nothing carried
@@ -2318,10 +2335,50 @@ empty buffer — reintroducing the trap one layer down. Android is safe by way o
 `samples.isNotEmpty()` guard at the call site; iOS now guards inside `publishArchivedPath`,
 which is the more robust place given it has one caller and Android has two.
 
-**Verification.** 15 unit cases, plus the simulator: with no record the control is absent;
+**Verification.** 19 unit cases, plus the simulator: with no record the control is absent;
 with one seeded, it appears dimmed, turns cyan on tap, and the drawn track visibly switches
-to the archived geometry. The seeding hook was temporary and is not in the tree. Not on
-hardware — that needs a real transfer from a locator.
+to the archived geometry. The seeding hook was temporary and is not in the tree.
+
+**✅ Confirmed on hardware 2026-09-02** (fschroer): the control appears once a record is
+downloaded, and toggling it draws the archived track as expected.
+
+**It was reported as missing first, and the report was correct about what was on screen.**
+The control is **dimmed and off by default** — on both platforms, by design — so the map
+goes on drawing the *live* track, and where no flight had been recorded that session the
+live track is empty. "No history button, and no flight path" is what a working build looks
+like from that state: a dim control among six others, over an empty map.
+
+Nothing needed fixing in the feature. Two real defects surfaced while proving that, both
+recorded below and neither the cause: the shape construction left on the main thread, and
+an SF Symbol that reached the map without passing `SFSymbolAvailabilityTests`.
+
+#### ⚠️ The port dropped Android's diagnostic — restored 2026-09-02
+
+Independently of the false alarm, the omission was real and worth closing on its own.
+
+Android's `publishArchivedPath` logs when a record arrives and yields no drawable point,
+with a comment naming it *"the one failure this feature can suffer silently: the control
+simply never appears, and 'the record has no position' is indistinguishable from 'the
+plumbing is broken' without it."* That warning was not carried across, and the first
+hardware run landed in precisely the confusion it exists to prevent — which is a better
+argument for porting diagnostics than any amount of reasoning about them.
+
+**Divergence, deliberate:** Android writes it to logcat. iOS has no log an operator can
+reach on a phone, so `LinkViewModel.archivedPathNote` carries it and the **diagnostics
+sheet** renders it — the same information, on the surface this platform already uses for
+"what is the link actually doing". Cleared when a good record replaces a bad one, so a stale
+explanation cannot sit under a path that is now on screen, and by `resetTrack` with the
+track it explains. Four cases in `ArchivedPathSourceTests`.
+
+*Closes when* — nothing to close: Android's logcat and this sheet are the same intent
+expressed through what each platform gives an operator in the field.
+
+**Reading the diagnostics line.** `N of M samples drew a path` is a snapshot from publish
+time; `held now` is the live array the map reads, and `source` says which track is being
+drawn. `source: live` with a healthy `held now` is the ordinary state — the control is off —
+and is what the 2026-09-02 report turned out to be. A record written without a GPS fix is
+the other benign case: it also has `timestampS == 0`, so it lists in Flight Profiles with an
+apogee and **no date**, and yields no path at all.
 
 ### The 3D flight path — ported 2026-09-01, against `MapLibreCompat.kt`
 
