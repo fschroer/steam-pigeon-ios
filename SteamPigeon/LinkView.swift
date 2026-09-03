@@ -295,6 +295,19 @@ struct LinkView: View {
                 // A downloaded record that yielded nothing to draw. Without this the map
                 // control just never appears, and there is no way to tell a record with no
                 // position from a broken transfer.
+                // What the map is actually being asked to draw. The quad count is the
+                // number that matters: the Swift halves are ~22 ms at 17 600 quads, so
+                // anything slow past that is MapLibre ingesting the polygons, and only
+                // this figure predicts it.
+                if !model.track.isEmpty || !model.archivedTrack.isEmpty {
+                    // Point counts only. An earlier cut rebuilt both curtains here purely
+                    // to count their quads, which put the whole geometry pass on the main
+                    // thread every time this sheet redrew — the same mistake this screen
+                    // was being used to diagnose.
+                    grid([("Curtain", "live \(model.track.count) pts"),
+                          ("", "archived \(model.archivedTrack.count) pts")])
+                }
+
                 if let c = model.archivedPathCounts {
                     // Two numbers, not one, and the difference is the point. The first
                     // pair is a SNAPSHOT taken when the record was published; `held` is
