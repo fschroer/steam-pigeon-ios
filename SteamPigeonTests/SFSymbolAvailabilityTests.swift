@@ -48,6 +48,12 @@ final class SFSymbolAvailabilityTests: XCTestCase {
         "trash":                             "13.0",   // Android Icons.Filled.Delete
         "info.circle":                       "13.0",   // Android Icons.Default.Info
         "chevron.down":                      "13.0",   // Android ExposedDropdownMenu chevron
+        // Added 2026-09-02 with the archived-path control, and it should have been added
+        // with it: the map's history button shipped without passing through this list,
+        // which is the one check that stands between a mistyped name and a button that
+        // renders nothing and says nothing. Verified 14.0 against the availability plist
+        // named above, so it is safe at the 16.0 floor.
+        "clock.arrow.circlepath":            "14.0",   // Android Icons.Default.History
     ]
 
     func testEverySymbolResolves() {
