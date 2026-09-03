@@ -516,7 +516,14 @@ struct FlightMapView: UIViewRepresentable {
             pathGeneration += 1
             let generation = pathGeneration
             pathQueue.async { [weak self] in
+                // **Both halves off the main thread, which the first cut got half right.**
+                // Moving only `build` left the expensive half behind: turning ~17 000 quads
+                // into `MLNPolygon`s, grouping them and attaching an attribute dictionary
+                // per feature is work proportional to the quad count, and it was running on
+                // the same runloop as touch handling — invisible on a Mac's simulator, and
+                // not on a phone.
                 let geometry = FlightPathGeometry.build(track)
+                let shapes = Self.shapes(for: geometry)
                 DispatchQueue.main.async {
                     guard let self,
                           // A newer track superseded this one while it was building.
@@ -525,24 +532,9 @@ struct FlightMapView: UIViewRepresentable {
                           // or reloaded, while the geometry was being built.
                           let style = self.mapView?.style
                     else { return }
-                    self.applyPathGeometry(style, geometry)
+                    self.applyPathShapes(style, shapes)
                 }
             }
-        }
-
-        /// Uploads prebuilt geometry to its three sources.
-        ///
-        /// **Order matters and is Android's.** The curtain sits above the ground track so
-        /// the wall reads as rising from it, and the markers are added after the curtain so
-        /// they sort in front where the two overlap — they are the reference marks the wall
-        /// is read against, so they must not pick up its colour.
-        private func applyPathGeometry(_ style: MLNStyle, _ geometry: PathGeometry) {
-            upsertLine(style, id: "track", coords: geometry.track.map(\.coordinate),
-                       colour: Self.pathColour, width: 8)
-            upsertExtrusions(style, id: "track-curtain", quads: geometry.curtain,
-                             colour: Self.pathColour, opacity: 0.75)
-            upsertExtrusions(style, id: "track-ticks", quads: geometry.ticks,
-                             colour: Self.pathTickColour, opacity: 1.0)
         }
 
         /// Android's `COLOR_PATH` — orange, and **not** the marker's green. The track was
@@ -555,35 +547,40 @@ struct FlightMapView: UIViewRepresentable {
         /// satellite imagery alike.
         static let pathTickColour = UIColor(red: 0, green: 0xE5 / 255.0, blue: 1.0, alpha: 1)
 
-        /// A wall of extruded prisms, each raised to its own `height` attribute.
+        /// Everything the map needs, built and ready to hand to the style.
         ///
-        /// Height comes from the feature rather than a layer constant, which is what lets
-        /// one layer draw the whole altitude profile — the same reason Android reads
-        /// `Expression.get("height")`.
-        ///
-        /// Opacity is not decoration either: the curtain is a chain of *separate* prisms,
-        /// so each segment carries end-cap faces where it meets its neighbour. At low
-        /// opacity those internal faces all show through and the wall reads as a ladder.
-        private func upsertExtrusions(_ style: MLNStyle, id: String,
-                                      quads: [ExtrudedQuad],
-                                      colour: UIColor, opacity: Double) {
-            guard !quads.isEmpty else { removeLayer(style, id: id); return }
+        /// Nothing here touches `MLNStyle` or the map view, which is what makes it safe to
+        /// construct off the main thread.
+        struct PathShapes {
+            let track: [CLLocationCoordinate2D]
+            let curtain: MLNShape?
+            let ticks: MLNShape?
+        }
 
-            // **One feature per distinct height, not one per quad.** Measured on the
-            // simulator in Release: a 2000-point archived record (~17 000 quads) cost
-            // +230 MB of resident memory as one feature each — about 11 KB per quad for
-            // 80 bytes of coordinates, because the cost is `MLNPolygonFeature` plus its
-            // per-feature attribute dictionary plus MapLibre's own per-feature bookkeeping,
-            // none of which scales with the geometry inside it.
-            //
-            // Grouping is free of visual consequence because the wall's top edge is
-            // ALREADY a staircase quantised to the riser: `fill-extrusion-height` is
-            // constant per feature, so quads sharing a rounded height were going to draw at
-            // the same height anyway. Rounding to `curtainTargetRiserM` is the conservative
-            // choice — it is never coarser than the step the curtain already took.
-            //
-            // This is a divergence from Android, which emits one feature per quad; the
-            // rendered result is identical and it is recorded in `docs/UI_PARITY.md`.
+        /// Turns pure geometry into MapLibre shapes. Runs on `pathQueue`.
+        static func shapes(for geometry: PathGeometry) -> PathShapes {
+            PathShapes(track: geometry.track.map(\.coordinate),
+                       curtain: extrusionShape(geometry.curtain),
+                       ticks: extrusionShape(geometry.ticks))
+        }
+
+        /// **One feature per distinct height, not one per quad.**
+        ///
+        /// Measured on the simulator in Release: a 2000-point archived record (~17 000
+        /// quads) cost +230 MB resident as one feature each — about 11 KB per quad for
+        /// 80 bytes of coordinates, because the cost is `MLNPolygonFeature` plus its
+        /// per-feature attribute dictionary plus MapLibre's own bookkeeping, none of which
+        /// scales with the geometry inside it. Grouping took that to +149 MB.
+        ///
+        /// Free of visual consequence because the wall's top edge is ALREADY a staircase
+        /// quantised to the riser: `fill-extrusion-height` is constant per feature, so
+        /// quads sharing a rounded height were going to draw at the same height anyway.
+        /// Rounding to `curtainTargetRiserM` is never coarser than the step already taken.
+        ///
+        /// A divergence from Android, which emits one feature per quad; the rendered
+        /// result is identical and it is recorded in `docs/UI_PARITY.md`.
+        private static func extrusionShape(_ quads: [ExtrudedQuad]) -> MLNShape? {
+            guard !quads.isEmpty else { return nil }
             let quantum = Double(FlightPathGeometry.curtainTargetRiserM)
             var byHeight: [Int: [MLNPolygon]] = [:]
             for quad in quads {
@@ -597,13 +594,39 @@ struct FlightMapView: UIViewRepresentable {
                 feature.attributes = ["height": Double(bucket) * quantum]
                 return feature
             }
-            let collection = MLNShapeCollectionFeature(shapes: features)
-            let source = upsertSource(style, id: id, shape: collection)
+            return MLNShapeCollectionFeature(shapes: features)
+        }
+
+        /// Hands prebuilt shapes to the style. **Main thread, and deliberately trivial** —
+        /// everything proportional to the quad count happened before the hop.
+        ///
+        /// Order matters and is Android's: the curtain sits above the ground track so the
+        /// wall reads as rising from it, and the markers are added after the curtain so
+        /// they sort in front where the two overlap — they are the reference marks the
+        /// wall is read against, so they must not pick up its colour.
+        private func applyPathShapes(_ style: MLNStyle, _ shapes: PathShapes) {
+            upsertLine(style, id: "track", coords: shapes.track,
+                       colour: Self.pathColour, width: 8)
+            upsertExtrusionLayer(style, id: "track-curtain", shape: shapes.curtain,
+                                 colour: Self.pathColour, opacity: 0.75)
+            upsertExtrusionLayer(style, id: "track-ticks", shape: shapes.ticks,
+                                 colour: Self.pathTickColour, opacity: 1.0)
+        }
+
+        private func upsertExtrusionLayer(_ style: MLNStyle, id: String, shape: MLNShape?,
+                                          colour: UIColor, opacity: Double) {
+            guard let shape else { removeLayer(style, id: id); return }
+            let source = upsertSource(style, id: id, shape: shape)
             if style.layer(withIdentifier: id) == nil {
                 let layer = MLNFillExtrusionStyleLayer(identifier: id, source: source)
                 layer.fillExtrusionColor = NSExpression(forConstantValue: colour)
+                // Height comes from the feature rather than a layer constant, which is
+                // what lets one layer draw the whole altitude profile.
                 layer.fillExtrusionHeight = NSExpression(forKeyPath: "height")
                 layer.fillExtrusionBase = NSExpression(forConstantValue: 0)
+                // The curtain is a chain of SEPARATE prisms, so each carries end-cap faces
+                // where it meets its neighbour; at low opacity those show through and the
+                // wall reads as a ladder.
                 layer.fillExtrusionOpacity = NSExpression(forConstantValue: opacity)
                 style.addLayer(layer)
             }
