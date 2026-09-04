@@ -33,9 +33,9 @@ twice.
 
 - **A changed password no longer bricks the connection.** Reproduced first: the app went
   permanently deaf to the locator, could not prompt, and showed a conflict banner calling
-  the connected locator "another locator". **Android still has this** — fixed on iOS first
-  as an authorised exception, since there was no way out inside the app. See
-  `UI_PARITY.md` → "Android notes".
+  the connected locator "another locator". ~~**Android still has this**~~ — fixed on iOS
+  first as an authorised exception, since there was no way out inside the app, and
+  **closed on Android 2026-08-30 (`cbb3cd3`)**. See `UI_PARITY.md` → "Android notes".
 - **Distance row colour** now follows the locator's GPS health, and the **coordinate map
   link** is gated on a position the app stands behind, with the underline present only
   when the tap is offered — both Android's logic.
@@ -45,12 +45,22 @@ twice.
 - **The released locator's configuration is cleared** when the connection is released, so
   the Locator channel field stops describing a locator the app has let go of.
 
-**Android owes four fixes** made here first — changed-password recovery, the in-flight
-button gating and stage-on-success, clearing the released locator's config, and
-deterministic candidate ordering. The canonical list, with the Android file and line for
-each and the iOS fix beside it, is in `UI_PARITY.md` → "ANDROID OWES THESE". One further
-defect (`ChannelOccupancy` rendering `00000000`) is known on both and deliberately fixed
-on neither, pending an Android-first change.
+~~**Android owes four fixes**~~ **Android owed four fixes and closed all four on
+2026-08-30 in `cbb3cd3`** — changed-password recovery, the in-flight button gating and
+stage-on-success, clearing the released locator's config, and deterministic candidate
+ordering. The list, struck through with where each landed, is in `UI_PARITY.md` →
+"ANDROID OWES THIS". The further defect (`ChannelOccupancy` rendering `00000000`), then
+known on both and deliberately fixed on neither, was fixed on Android 2026-08-29 and
+ported here 2026-09-01.
+
+**What Android still owes is row 5 alone** — the charge callouts consulting deployment
+channels 1 and 2 only, added to the table 2026-09-02, after Android last moved. It has
+not been touched there.
+
+Noted 2026-09-04, when rows 1–4 were checked against the Android source rather than
+against the list: they had read "still open" for five days after they were closed. A
+list of what another repo owes cannot signal its own staleness — it reads "open"
+indefinitely, and only the other repo's source can contradict it.
 
 ## Flight testing spans several iOS versions
 

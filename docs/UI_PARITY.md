@@ -42,7 +42,12 @@ affordance, the scan notice on the status panel, the survey section's gate,
 channel-move port (`ChannelMove` + `ChannelMoveRunner` + three test suites, replacing the
 revert-on-silence cut). Then the Firmware rows, and the App Flight Logs port. 730 tests pass. **None of it has been on hardware** — and the
 channel-move path in particular cannot be exercised without a receiver, so it is pinned by
-tests and by nothing else. The "ANDROID OWES THESE" list below is untouched and still open.
+tests and by nothing else. ~~The "ANDROID OWES THESE" list below is untouched and still
+open.~~ **Wrong when written.** Android closed rows 1–4 in `cbb3cd3` on **2026-08-30** —
+the day *after* the list was recorded and re-verified, and two days before this line
+claimed otherwise. Caught 2026-09-04 by checking the list against the Android source
+rather than against itself. **Row 5 — the charge callouts — is genuinely open**: it was
+added 2026-09-02, after Android last moved.
 
 **Also 2026-09-01: the Firmware row on Locator Settings and Receiver Settings was never
 populated** — both rows, the message type and the parser were all in place, and nothing
@@ -1803,7 +1808,9 @@ frame carried no id", exactly as the survey's is.
 **Mirrored rather than fixed here**, per "Android is the reference implementation": the
 iOS `ChannelOccupancy` has the same asymmetry, so the two apps still say the same thing.
 It should be fixed on Android first — the survey branch's `takeIf { it != 0 }` applied to
-the search branch too — and ported back.
+the search branch too — and ported back. **Done: Android 2026-08-29, here 2026-09-01**;
+the fix was not the naive one, and the section below says why it falls through rather
+than returning.
 
 **2. The candidate list's middle is order-unstable across runs.**
 `RocketViewModel.searchCandidates` builds `knownChannels` from
@@ -1823,20 +1830,46 @@ neither channel offered. Swift has no reference identity for a struct, so the po
 compares `channel` instead — which is equivalent given the firmware reports each channel
 at most once per run, and that assumption is now written at the call site.
 
-#### ⚠️ ANDROID OWES THESE — iOS-first fixes not yet on Android
+#### ⚠️ ANDROID OWES THIS — rows 1–4 closed 2026-08-30, row 5 still open
 
 **The canonical list.** Recorded at fschroer's instruction (2026-08-29). Each is an
 explicit, authorised exception to "Android is the reference implementation", taken because
-the defect was reached from the phone during flight-test prep. Every claim below was
-re-verified against the Android source on 2026-08-29 at the line cited.
+the defect was reached from the phone during flight-test prep. Rows 1–4 were re-verified
+against the Android source on 2026-08-29 at the line cited; row 5 was added 2026-09-02.
+
+**Rows 1–4 closed on Android 2026-08-30 in `cbb3cd3`, "fix(comm): nine defects from two
+days at the bench, and the rule they share" — one commit carrying all four.** Struck
+through and left in as the record. Their **Android evidence** cells still cite the
+2026-08-29 lines, because that is what the column is for; those numbers have since
+drifted and should not be followed. Where each fix lives today:
+
+| # | Now in Android |
+|---|---|
+| 1 | `RocketViewModel.evaluateRecognition` — an unauthorized frame whose `locator_id` **is the connection holder's** releases the connection and prompts, checked *before* the `!challengeable` return so an armed locator releases silently. A stranger still falls through to the conflict banner |
+| 2 | `pointReceiverAtChannel` returns `Boolean`; `CommunicationScreen` stages `stagedReceiverChannel` only inside `if (viewModel.pointReceiverAtChannel(…))`, at both the search-hit and survey-pick call sites, and passes `canConnect` / `canPick` from `receiverConfigMessageState == Idle` |
+| 3 | `beginChannelChangeRecognition` — `_remoteLocatorConfig.value = LocatorConfig()`. The same commit added `releaseLocatorOnLinkLoss`, which does it for a **dropped BLE link** too |
+| 4 | `RocketViewModel.searchCandidates` — `.toSortedMap()` on the known-locator map before `mapNotNull` |
+
+**Row 5 is the only one outstanding**, and it is the newest — recorded 2026-09-02 while
+porting `FlightSpeechAnnouncer`, after Android last moved. Nothing has been done about it
+on Android.
+
+**A stale comment corrected on Android 2026-09-04 (`ad90181`), found from row 3.** The
+comment beside row 3's fix read *"iOS clears this on a BLE link drop too, in
+`clearLiveReadouts`. This app has no equivalent — a disconnect leaves the whole readout
+standing."* `releaseLocatorOnLinkLoss` **is** that equivalent and landed in the very same
+commit, so the comment was false the moment it was written — and it contradicts the
+divergence table above, which correctly records that the locator half matches and only
+the receiver half diverges. Left standing, it invites the link-drop release to be written
+a second time.
 
 | # | Defect | Android evidence | iOS fix |
 |---|---|---|---|
-| 1 | **A changed password permanently bricks the connection.** Once connected, a locator whose password is changed on the device can never be re-authenticated: its frames stop authenticating so nothing is admitted, `connectedLocatorId` goes on naming it because nothing releases a connection on an auth failure, and the passive challenge refuses to prompt while anything is connected. The only things on screen are a conflict banner calling the connected locator "another locator" and a panel reading "No Locator" over the last good RSSI. **No recovery inside the app** short of dropping the BLE link | `RocketViewModel.kt:1232` — `_connectedLocatorId.value == null` gates the passive challenge | `ChallengePolicy.Trigger.credentialsChanged`: an unauthorized frame **from the holder itself** releases the connection (a stale belief, not something to protect) and prompts, asking even though something was connected and even if that locator was declined before. A *stranger* still cannot knock out a standing connection |
-| 2 | **Connect / pick buttons stay live while a change is in flight, and the channel is staged before the send is accepted.** The second tap is refused by the in-flight guard and does nothing at all; meanwhile the Receiver channel field shows a channel the app never visited, with an enabled Update button offering to apply it | `CommunicationScreen.kt:1043` — hit-row `Button` with no `enabled`; `:307-309` and `:352-354` — `stagedReceiverChannel` written *before* the guarded `pointReceiverAtChannel` | `pointReceiverAtChannel` returns whether the change was **accepted for sending** — i.e. whether the in-flight guard passed, not whether the write reached the receiver (see the iOS gap below); callers stage only on success. Search Connect and survey pick are disabled while the change they would make is in flight |
-| 3 | **The released locator's configuration is left on screen.** After a receiver-only channel change the Locator channel field goes on showing the *previous* locator's channel, and corrects only when a `PreLaunchData` from the new one is admitted — so a locator that is never admitted leaves it wrong indefinitely. Reported 2026-08-29: receiver reading 48, locator field reading 34, two real locators on two real channels | `RocketViewModel.kt:1245-1263` — `beginChannelChangeRecognition` clears ten fields and **not** `_remoteLocatorConfig` | `remoteLocatorConfig = LocatorConfig()` on release, matching what `clearLiveReadouts` already does when the link drops |
+| 1 | ~~**A changed password permanently bricks the connection.**~~ **CLOSED on Android 2026-08-30 (`cbb3cd3`).** Original text: Once connected, a locator whose password is changed on the device can never be re-authenticated: its frames stop authenticating so nothing is admitted, `connectedLocatorId` goes on naming it because nothing releases a connection on an auth failure, and the passive challenge refuses to prompt while anything is connected. The only things on screen are a conflict banner calling the connected locator "another locator" and a panel reading "No Locator" over the last good RSSI. **No recovery inside the app** short of dropping the BLE link | `RocketViewModel.kt:1232` — `_connectedLocatorId.value == null` gates the passive challenge | `ChallengePolicy.Trigger.credentialsChanged`: an unauthorized frame **from the holder itself** releases the connection (a stale belief, not something to protect) and prompts, asking even though something was connected and even if that locator was declined before. A *stranger* still cannot knock out a standing connection |
+| 2 | ~~**Connect / pick buttons stay live while a change is in flight, and the channel is staged before the send is accepted.**~~ **CLOSED on Android 2026-08-30 (`cbb3cd3`).** Original text: The second tap is refused by the in-flight guard and does nothing at all; meanwhile the Receiver channel field shows a channel the app never visited, with an enabled Update button offering to apply it | `CommunicationScreen.kt:1043` — hit-row `Button` with no `enabled`; `:307-309` and `:352-354` — `stagedReceiverChannel` written *before* the guarded `pointReceiverAtChannel` | `pointReceiverAtChannel` returns whether the change was **accepted for sending** — i.e. whether the in-flight guard passed, not whether the write reached the receiver (see the iOS gap below); callers stage only on success. Search Connect and survey pick are disabled while the change they would make is in flight |
+| 3 | ~~**The released locator's configuration is left on screen.**~~ **CLOSED on Android 2026-08-30 (`cbb3cd3`).** Original text: After a receiver-only channel change the Locator channel field goes on showing the *previous* locator's channel, and corrects only when a `PreLaunchData` from the new one is admitted — so a locator that is never admitted leaves it wrong indefinitely. Reported 2026-08-29: receiver reading 48, locator field reading 34, two real locators on two real channels | `RocketViewModel.kt:1245-1263` — `beginChannelChangeRecognition` clears ten fields and **not** `_remoteLocatorConfig` | `remoteLocatorConfig = LocatorConfig()` on release, matching what `clearLiveReadouts` already does when the link drops |
 | 5 | **The charge callouts only ever consult deployment channels 1 and 2**, while the locator has four and the stock wiring puts MainPrimary on **channel 3** — so with the default configuration Android's "Main charge." and "Main backup charge." callouts are unreachable, and a rocket wired on 3 or 4 flies in silence through the events it did announce the state transitions for. Found 2026-09-02 while porting `FlightSpeechAnnouncer` | `FlightMapScreen.kt:924-953` — each of the four blocks tests `deploymentChannel1Mode`/`channel1Fired` and `deploymentChannel2Mode`/`channel2Fired` only, against a `LocatorConfig` carrying `deploymentChannel1Mode`…`4Mode` (`RocketState.kt:135-138`) and a `RocketState` carrying `channel1Fired`…`channel4Fired` (`:109-112`); the default wiring is ch1 DroguePrimary, ch2 DrogueBackup, **ch3 MainPrimary**, ch4 MainBackup (`LocatorConfigWire.kt:51-54`) | `FlightAnnouncer.fired(_:_:)` zips modes against fired flags across **every** channel. Covered by `FlightAnnouncerTests.testTheMainChargeOnChannelThreeIsAnnounced` |
-| 4 | **The candidate list's middle is order-unstable between runs.** `knownChannels` comes from a protobuf map whose iteration order is unspecified, so which remembered channels survive the 16-channel cap — and in what order — can differ between two runs with identical stored state. With more than 14 remembered locators it changes which channels are actually searched | `RocketViewModel.kt:903` — `.values.mapNotNull { … }` over `knownLocatorsMap` | `searchCandidates` sorts the other locators' channels by id, so the list is reproducible |
+| 4 | ~~**The candidate list's middle is order-unstable between runs.**~~ **CLOSED on Android 2026-08-30 (`cbb3cd3`).** Original text: `knownChannels` comes from a protobuf map whose iteration order is unspecified, so which remembered channels survive the 16-channel cap — and in what order — can differ between two runs with identical stored state. With more than 14 remembered locators it changes which channels are actually searched | `RocketViewModel.kt:903` — `.values.mapNotNull { … }` over `knownLocatorsMap` | `searchCandidates` sorts the other locators' channels by id, so the list is reproducible |
 
 #### ✅ Known on both platforms — fixed on Android 2026-08-29, **ported to iOS 2026-09-01**
 
@@ -2294,7 +2327,8 @@ in-flight guard passed — and the callers stage only on success; the search's C
 change they would make is in flight. **Android has the same defect** — its
 `LocatorSearchSection` hit row is a bare `Button` with no `enabled`, and its `onPick`
 stages `stagedReceiverChannel` before calling a `pointReceiverAtChannel` with the same
-guard. Worth fixing there.
+guard. ~~Worth fixing there.~~ **Fixed there 2026-08-30 (`cbb3cd3`)** — the hit row and
+the survey pick both take an `enabled`, and both call sites stage only on success.
 
 **2. The Locator channel section disappeared when the prompt appeared.** Expected, and
 **identical on Android**: `beginChannelChangeRecognition` releases the connection, and
