@@ -1871,6 +1871,53 @@ is inside a `LaunchedEffect` and cannot be driven from a unit test on this platf
 **Not heard on hardware.** It needs a flight, or a deployment test on a locator wired
 to the defaults; the suite proves the channel arithmetic and nothing about the voice.
 
+#### ✅ FIXED ON BOTH 2026-09-04 — a charge that fires late was never announced
+
+Found the same day, from a question about a specific configuration rather than from the
+code: ch1 DrogueBackup on a 1.0 s delay with an e-match fitted, ch2 MainPrimary at 130 m
+with none, noseover at 110 m. **Both apps announced the charge that did nothing and stayed
+silent on the one that fired.**
+
+The locator is not at fault and neither app was reading it wrong. `AdvanceFlightState` is
+monotonic and the four deployment blocks are latched *independently* — issue #10, which
+`FlightManager.cpp` states outright: a drogue backup "must still fire after its delay even
+if a main event has already advanced `flight_state_` past it". And main primary's condition
+is `deploy_agl <= main_primary_deploy_altitude`, a **test, not a downward crossing**, so
+with apogee at 110 m and main set to 130 m it is already true at noseover. Sequence:
+
+| Time | Locator | `flight_state_` |
+|---|---|---|
+| noseover, 110 m | drogue-primary block latches, nothing wired for it | → `DroguePrimaryEvent` (4) |
+| same sample | **ch2 commanded** — no e-match, nothing fires | → `MainPrimaryEvent` (6) |
+| +1.0 s | **ch1 commanded — the drogue fires** | `AdvanceFlightState(DrogueBackupEvent)` is a no-op, 5 < 6 |
+
+Both apps gated each callout on `flightState >= <event>` **and latched on that gate**. At
+the first broadcast after noseover the state was already 6, so the drogue-backup block
+evaluated, found `channel1Fired` still false, latched, and never looked again. The charge
+that fired a second later was never spoken. It was also a **race**: broadcasts are 1 Hz and
+the delay was 1.0 s, so a broadcast landing after the delay would have caught it — the
+callout came and went between flights, which is worse than being reliably wrong.
+
+`DeployIfClear` is clear of *other active deployments*, not of continuity, so ch2's missing
+e-match never stopped the fired bit being set. Announcing it was correct; the app reports
+the command, and continuity rides in its own bit.
+
+**The fix on both: the flight state is a floor, not a trigger.** Each callout stays pending
+until its own charge actually reports fired, and latches on the **announcement**. A charge
+that never fires is never announced, which is what silence should mean.
+
+- Android: `DeploymentCharges.Latch` — lifted out of `FlightMapScreen` beside `fired`,
+  since the four booleans it replaces lived in a composable the suite cannot reach, which
+  is why this went unnoticed. 6 new cases in `DeploymentChargesTest` (15 total).
+- iOS: `FlightAnnouncer.spokenCharges` plus `chargeLadder`, replacing the four `Bool`s.
+  4 new cases in `FlightAnnouncerTests`.
+
+Both walk the ladder in order, so two charges landing in one sample come out in the order
+the locator walked them rather than in channel or set order.
+
+**Neither has been heard on hardware.** The tests pin the sequencing; the voice is
+unproven on both platforms.
+
 **A stale comment corrected on Android 2026-09-04 (`ad90181`), found from row 3.** The
 comment beside row 3's fix read *"iOS clears this on a BLE link drop too, in
 `clearLiveReadouts`. This app has no equivalent — a disconnect leaves the whole readout

@@ -113,10 +113,30 @@ struct FlightAnnouncer {
     private var previousAGL = 0
     private var apogeeSpoken = false
     private var launchedState = false
-    private var droguePrimaryState = false
-    private var drogueBackupState = false
-    private var mainPrimaryState = false
-    private var mainBackupState = false
+    /// One entry per charge already announced, replacing four booleans.
+    ///
+    /// **The flight state is a floor, not a trigger**, and the booleans got that
+    /// wrong on both platforms. `flight_state_` is monotonic in the locator
+    /// (`AdvanceFlightState` only moves forward) and the four deployment blocks are
+    /// latched *independently* — issue #10, which the firmware states outright: a
+    /// drogue backup "must still fire after its delay even if a main event has
+    /// already advanced flight_state_ past it". So a charge can fire seconds after
+    /// the state gating its callout has gone by.
+    ///
+    /// Bench case: ch1 DrogueBackup on a 1.0 s delay with an e-match fitted, ch2
+    /// MainPrimary at 130 m with none, noseover at 110 m. Main's condition is
+    /// `agl <= 130` — a test, not a downward crossing — so it is true at apogee:
+    /// ch2 is commanded at once and the state jumps to `mainPrimaryEvent`, past
+    /// `drogueBackupEvent` entirely. The drogue fires a second later. Latching on
+    /// the state meant the drogue callout was evaluated at apogee, found the
+    /// channel not yet fired, latched, and never looked again — announcing the
+    /// charge that did nothing and staying silent on the one that fired. It was
+    /// also a race: at 1 Hz a broadcast landing after the delay would have caught
+    /// it, so the callout came and went between flights.
+    ///
+    /// Latching on the **announcement** leaves each pending until its charge
+    /// actually fires. A charge that never fires is never announced.
+    private var spokenCharges: Set<DeployMode> = []
     private var drogueDeploySpoken = false
     private var mainDeploySpoken = false
     private var landingSpoken = false
@@ -181,21 +201,17 @@ struct FlightAnnouncer {
                 lines.append(.routine("Apogee, \(Int(s.altitudeAglM)) meters."))
             }
         }
-        if s.flightState.rawValue >= FlightStates.droguePrimaryEvent.rawValue, !droguePrimaryState {
-            droguePrimaryState = true
-            if fired(.droguePrimary, s) { lines.append(.routine("Drogue charge.")) }
-        }
-        if s.flightState.rawValue >= FlightStates.drogueBackupEvent.rawValue, !drogueBackupState {
-            drogueBackupState = true
-            if fired(.drogueBackup, s) { lines.append(.routine("Drogue backup charge.")) }
-        }
-        if s.flightState.rawValue >= FlightStates.mainPrimaryEvent.rawValue, !mainPrimaryState {
-            mainPrimaryState = true
-            if fired(.mainPrimary, s) { lines.append(.routine("Main charge.")) }
-        }
-        if s.flightState.rawValue >= FlightStates.mainBackupEvent.rawValue, !mainBackupState {
-            mainBackupState = true
-            if fired(.mainBackup, s) { lines.append(.routine("Main backup charge.")) }
+        // Each stays pending until its charge actually fires, so one that fires
+        // after the flight state has moved past it is still announced. Ladder
+        // order, so two charges landing in one sample come out in the order the
+        // locator walked them.
+        for step in Self.chargeLadder {
+            guard !spokenCharges.contains(step.mode),
+                  s.flightState.rawValue >= step.floor.rawValue,
+                  fired(step.mode, s)
+            else { continue }
+            spokenCharges.insert(step.mode)
+            lines.append(.routine(step.phrase))
         }
         return lines
     }
@@ -338,15 +354,23 @@ struct FlightAnnouncer {
         zip(s.channelModes, s.channelFired).contains { $0 == mode && $1 }
     }
 
+    /// The ladder, in the order the locator walks it, each floored by the flight
+    /// state that can first produce it. See `spokenCharges` for why the floor is
+    /// not the trigger.
+    private static let chargeLadder:
+        [(mode: DeployMode, floor: FlightStates, phrase: String)] = [
+        (.droguePrimary, .droguePrimaryEvent, "Drogue charge."),
+        (.drogueBackup, .drogueBackupEvent, "Drogue backup charge."),
+        (.mainPrimary, .mainPrimaryEvent, "Main charge."),
+        (.mainBackup, .mainBackupEvent, "Main backup charge."),
+    ]
+
     /// Android's landing branch resets exactly these, and not the poll loop's own guards.
     private mutating func resetForNextFlight() {
         previousAGL = 0
         launchedState = false
         apogeeSpoken = false
-        droguePrimaryState = false
-        drogueBackupState = false
-        mainPrimaryState = false
-        mainBackupState = false
+        spokenCharges.removeAll()
         drogueDeploySpoken = false
         mainDeploySpoken = false
         landingSpoken = false

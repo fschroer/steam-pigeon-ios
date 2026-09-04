@@ -76,6 +76,72 @@ final class FlightAnnouncerTests: XCTestCase {
         XCTAssertTrue(texts(lines).contains("Main charge."))
     }
 
+    // MARK: - A charge that fires after its flight state has gone by
+
+    /// The bench case that exposed the latch defect, from the locator's own
+    /// behaviour: ch1 DrogueBackup on a 1.0 s delay with an e-match fitted, ch2
+    /// MainPrimary at 130 m with none, noseover at 110 m.
+    ///
+    /// Main's firmware condition is `agl <= 130` — a test, not a downward
+    /// crossing — so it is already true at apogee: ch2 is commanded immediately
+    /// and the state jumps to `mainPrimaryEvent`, skipping `drogueBackupEvent`
+    /// entirely since `AdvanceFlightState` only moves forward. The drogue fires
+    /// a second later, into a state that has already passed it.
+    ///
+    /// Latching on the state threshold announced the charge that did nothing and
+    /// stayed silent on the one that fired.
+    func testADrogueThatFiresAfterTheStateHasPassedItIsStillAnnounced() {
+        var a = FlightAnnouncer()
+        let wiring: [DeployMode] = [.drogueBackup, .mainPrimary, .unused, .unused]
+        _ = a.flightStateChanged(sample(.noseover, position: pad, modes: wiring))
+
+        // First broadcast after noseover: ch2 commanded, ch1 not yet.
+        let atApogee = a.flightStateChanged(sample(.mainPrimaryEvent, modes: wiring,
+                                                   fired: [false, true, false, false]))
+        XCTAssertTrue(texts(atApogee).contains("Main charge."))
+        XCTAssertFalse(texts(atApogee).contains("Drogue backup charge."))
+
+        // A second later the drogue fires. The flight state has not moved.
+        let aSecondLater = a.flightStateChanged(sample(.mainPrimaryEvent, modes: wiring,
+                                                       fired: [true, true, false, false]))
+        XCTAssertTrue(texts(aSecondLater).contains("Drogue backup charge."))
+    }
+
+    func testEachChargeIsSpokenOnceHoweverManyBroadcastsCarryIt() {
+        var a = FlightAnnouncer()
+        _ = a.flightStateChanged(sample(.noseover, position: pad))
+        let first = a.flightStateChanged(sample(.mainPrimaryEvent,
+                                                fired: [false, false, true, false]))
+        XCTAssertTrue(texts(first).contains("Main charge."))
+        let second = a.flightStateChanged(sample(.mainPrimaryEvent,
+                                                 fired: [false, false, true, false]))
+        XCTAssertFalse(texts(second).contains("Main charge."))
+    }
+
+    /// A charge that never fires is never announced. Silence means the charge did
+    /// not go, not that the app stopped listening.
+    func testPassingTheStateAloneAnnouncesNoCharge() {
+        var a = FlightAnnouncer()
+        _ = a.flightStateChanged(sample(.noseover, position: pad))
+        let lines = a.flightStateChanged(sample(.mainBackupEvent))
+        XCTAssertFalse(texts(lines).contains("Main charge."))
+        XCTAssertFalse(texts(lines).contains("Main backup charge."))
+    }
+
+    /// Two charges landing in one sample come out in ladder order, not channel
+    /// order.
+    func testSimultaneousChargesAreAnnouncedInLadderOrder() {
+        var a = FlightAnnouncer()
+        _ = a.flightStateChanged(sample(.noseover, position: pad))
+        let lines = texts(a.flightStateChanged(sample(.mainPrimaryEvent,
+                                                      fired: [true, false, true, false])))
+        let drogue = lines.firstIndex(of: "Drogue charge.")
+        let main = lines.firstIndex(of: "Main charge.")
+        XCTAssertNotNil(drogue)
+        XCTAssertNotNil(main)
+        XCTAssertLessThan(drogue!, main!)
+    }
+
     // MARK: - The quiet rules
 
     /// A link that returns after the rocket is down delivers the whole flight in one step.
