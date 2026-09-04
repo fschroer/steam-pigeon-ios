@@ -46,8 +46,9 @@ tests and by nothing else. ~~The "ANDROID OWES THESE" list below is untouched an
 open.~~ **Wrong when written.** Android closed rows 1–4 in `cbb3cd3` on **2026-08-30** —
 the day *after* the list was recorded and re-verified, and two days before this line
 claimed otherwise. Caught 2026-09-04 by checking the list against the Android source
-rather than against itself. **Row 5 — the charge callouts — is genuinely open**: it was
-added 2026-09-02, after Android last moved.
+rather than against itself. Row 5 — the charge callouts, added 2026-09-02 after Android
+last moved — was genuinely open, and **closed on Android 2026-09-04**. The list is now
+empty on both sides.
 
 **Also 2026-09-01: the Firmware row on Locator Settings and Receiver Settings was never
 populated** — both rows, the message type and the parser were all in place, and nothing
@@ -1830,7 +1831,7 @@ neither channel offered. Swift has no reference identity for a struct, so the po
 compares `channel` instead — which is equivalent given the firmware reports each channel
 at most once per run, and that assumption is now written at the call site.
 
-#### ⚠️ ANDROID OWES THIS — rows 1–4 closed 2026-08-30, row 5 still open
+#### ✅ ANDROID OWED THESE — all five closed, rows 1–4 on 2026-08-30 and row 5 on 2026-09-04
 
 **The canonical list.** Recorded at fschroer's instruction (2026-08-29). Each is an
 explicit, authorised exception to "Android is the reference implementation", taken because
@@ -1850,9 +1851,25 @@ drifted and should not be followed. Where each fix lives today:
 | 3 | `beginChannelChangeRecognition` — `_remoteLocatorConfig.value = LocatorConfig()`. The same commit added `releaseLocatorOnLinkLoss`, which does it for a **dropped BLE link** too |
 | 4 | `RocketViewModel.searchCandidates` — `.toSortedMap()` on the known-locator map before `mapNotNull` |
 
-**Row 5 is the only one outstanding**, and it is the newest — recorded 2026-09-02 while
-porting `FlightSpeechAnnouncer`, after Android last moved. Nothing has been done about it
-on Android.
+**Row 5 closed on Android 2026-09-04.** `DeploymentCharges.fired(config, state, mode)` —
+a new pure object in `data/` — zips the four configured modes against the four fired
+flags and matches **per channel**, so a fired drogue cannot announce main and a channel
+wired for a mode that did not fire stays silent. All four callout sites in
+`FlightMapScreen` call it; the two-channel condition is gone from each.
+
+Matched on **mode, not channel number**, as iOS does: a rocket wired main on 1 and
+drogue on 3 reads correctly without the app knowing anything about convention. A null
+mode — a config the locator has not broadcast yet — matches nothing, deliberately:
+defaulting it to the stock wiring would announce a charge on the strength of a
+convention rather than on what the locator actually said.
+
+Pinned by `DeploymentChargesTest` (9 cases), including Android's copy of the iOS case
+`testTheMainChargeOnChannelThreeIsAnnounced`, under that name. The helper was lifted
+out of the composable precisely so the suite could reach it — the callout site itself
+is inside a `LaunchedEffect` and cannot be driven from a unit test on this platform.
+
+**Not heard on hardware.** It needs a flight, or a deployment test on a locator wired
+to the defaults; the suite proves the channel arithmetic and nothing about the voice.
 
 **A stale comment corrected on Android 2026-09-04 (`ad90181`), found from row 3.** The
 comment beside row 3's fix read *"iOS clears this on a BLE link drop too, in
@@ -1868,7 +1885,7 @@ a second time.
 | 1 | ~~**A changed password permanently bricks the connection.**~~ **CLOSED on Android 2026-08-30 (`cbb3cd3`).** Original text: Once connected, a locator whose password is changed on the device can never be re-authenticated: its frames stop authenticating so nothing is admitted, `connectedLocatorId` goes on naming it because nothing releases a connection on an auth failure, and the passive challenge refuses to prompt while anything is connected. The only things on screen are a conflict banner calling the connected locator "another locator" and a panel reading "No Locator" over the last good RSSI. **No recovery inside the app** short of dropping the BLE link | `RocketViewModel.kt:1232` — `_connectedLocatorId.value == null` gates the passive challenge | `ChallengePolicy.Trigger.credentialsChanged`: an unauthorized frame **from the holder itself** releases the connection (a stale belief, not something to protect) and prompts, asking even though something was connected and even if that locator was declined before. A *stranger* still cannot knock out a standing connection |
 | 2 | ~~**Connect / pick buttons stay live while a change is in flight, and the channel is staged before the send is accepted.**~~ **CLOSED on Android 2026-08-30 (`cbb3cd3`).** Original text: The second tap is refused by the in-flight guard and does nothing at all; meanwhile the Receiver channel field shows a channel the app never visited, with an enabled Update button offering to apply it | `CommunicationScreen.kt:1043` — hit-row `Button` with no `enabled`; `:307-309` and `:352-354` — `stagedReceiverChannel` written *before* the guarded `pointReceiverAtChannel` | `pointReceiverAtChannel` returns whether the change was **accepted for sending** — i.e. whether the in-flight guard passed, not whether the write reached the receiver (see the iOS gap below); callers stage only on success. Search Connect and survey pick are disabled while the change they would make is in flight |
 | 3 | ~~**The released locator's configuration is left on screen.**~~ **CLOSED on Android 2026-08-30 (`cbb3cd3`).** Original text: After a receiver-only channel change the Locator channel field goes on showing the *previous* locator's channel, and corrects only when a `PreLaunchData` from the new one is admitted — so a locator that is never admitted leaves it wrong indefinitely. Reported 2026-08-29: receiver reading 48, locator field reading 34, two real locators on two real channels | `RocketViewModel.kt:1245-1263` — `beginChannelChangeRecognition` clears ten fields and **not** `_remoteLocatorConfig` | `remoteLocatorConfig = LocatorConfig()` on release, matching what `clearLiveReadouts` already does when the link drops |
-| 5 | **The charge callouts only ever consult deployment channels 1 and 2**, while the locator has four and the stock wiring puts MainPrimary on **channel 3** — so with the default configuration Android's "Main charge." and "Main backup charge." callouts are unreachable, and a rocket wired on 3 or 4 flies in silence through the events it did announce the state transitions for. Found 2026-09-02 while porting `FlightSpeechAnnouncer` | `FlightMapScreen.kt:924-953` — each of the four blocks tests `deploymentChannel1Mode`/`channel1Fired` and `deploymentChannel2Mode`/`channel2Fired` only, against a `LocatorConfig` carrying `deploymentChannel1Mode`…`4Mode` (`RocketState.kt:135-138`) and a `RocketState` carrying `channel1Fired`…`channel4Fired` (`:109-112`); the default wiring is ch1 DroguePrimary, ch2 DrogueBackup, **ch3 MainPrimary**, ch4 MainBackup (`LocatorConfigWire.kt:51-54`) | `FlightAnnouncer.fired(_:_:)` zips modes against fired flags across **every** channel. Covered by `FlightAnnouncerTests.testTheMainChargeOnChannelThreeIsAnnounced` |
+| 5 | ~~**The charge callouts only ever consult deployment channels 1 and 2**~~ **CLOSED on Android 2026-09-04.** Original text:, while the locator has four and the stock wiring puts MainPrimary on **channel 3** — so with the default configuration Android's "Main charge." and "Main backup charge." callouts are unreachable, and a rocket wired on 3 or 4 flies in silence through the events it did announce the state transitions for. Found 2026-09-02 while porting `FlightSpeechAnnouncer` | `FlightMapScreen.kt:924-953` — each of the four blocks tests `deploymentChannel1Mode`/`channel1Fired` and `deploymentChannel2Mode`/`channel2Fired` only, against a `LocatorConfig` carrying `deploymentChannel1Mode`…`4Mode` (`RocketState.kt:135-138`) and a `RocketState` carrying `channel1Fired`…`channel4Fired` (`:109-112`); the default wiring is ch1 DroguePrimary, ch2 DrogueBackup, **ch3 MainPrimary**, ch4 MainBackup (`LocatorConfigWire.kt:51-54`) | `FlightAnnouncer.fired(_:_:)` zips modes against fired flags across **every** channel. Covered by `FlightAnnouncerTests.testTheMainChargeOnChannelThreeIsAnnounced` |
 | 4 | ~~**The candidate list's middle is order-unstable between runs.**~~ **CLOSED on Android 2026-08-30 (`cbb3cd3`).** Original text: `knownChannels` comes from a protobuf map whose iteration order is unspecified, so which remembered channels survive the 16-channel cap — and in what order — can differ between two runs with identical stored state. With more than 14 remembered locators it changes which channels are actually searched | `RocketViewModel.kt:903` — `.values.mapNotNull { … }` over `knownLocatorsMap` | `searchCandidates` sorts the other locators' channels by id, so the list is reproducible |
 
 #### ✅ Known on both platforms — fixed on Android 2026-08-29, **ported to iOS 2026-09-01**

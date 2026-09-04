@@ -53,9 +53,12 @@ ordering. The list, struck through with where each landed, is in `UI_PARITY.md` 
 known on both and deliberately fixed on neither, was fixed on Android 2026-08-29 and
 ported here 2026-09-01.
 
-**What Android still owes is row 5 alone** — the charge callouts consulting deployment
-channels 1 and 2 only, added to the table 2026-09-02, after Android last moved. It has
-not been touched there.
+~~**What Android still owes is row 5 alone**~~ — the charge callouts consulting
+deployment channels 1 and 2 only, added to the table 2026-09-02. **Closed on Android
+2026-09-04** by `DeploymentCharges`, which zips all four modes against all four fired
+flags, with `DeploymentChargesTest` carrying Android's copy of
+`testTheMainChargeOnChannelThreeIsAnnounced`. **Both owed lists are now empty.** Not
+heard on hardware on either platform.
 
 Noted 2026-09-04, when rows 1–4 were checked against the Android source rather than
 against the list: they had read "still open" for five days after they were closed. A
@@ -358,10 +361,11 @@ both are pre-existing:
   `LandingCalloutTest` is ported case for case; 27 new tests in all. **Android's `Announcer`
   facade has no counterpart here on purpose**: `FlightSpeech.say` was already the single
   funnel it was introduced to create, and ADR-0030's log hook already sits inside it.
-- **A defect on the Android side came out of it**, now #5 in the "ANDROID OWES THESE"
+- **A defect on the Android side came out of it**, #5 in the "ANDROID OWED THESE"
   table: the charge callouts consult deployment channels 1 and 2 only, while the locator
-  has four and the stock wiring puts MainPrimary on **channel 3** — so "Main charge." is
+  has four and the stock wiring puts MainPrimary on **channel 3** — so "Main charge." was
   unreachable there with the default configuration. iOS checks every channel.
+  **Fixed on Android 2026-09-04**; the port earned its keep.
 
 **Round two on the phone, same day: no stuck rotation in 15–20 tries.** Three follow-ups,
 all recorded in `UI_PARITY.md` → "Heads-up sight (landscape)":
