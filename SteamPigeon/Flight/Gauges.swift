@@ -74,7 +74,7 @@ struct VelocityGauge: View {
                         .foregroundColor(.white),
                      at: CGPoint(x: c.x, y: c.y + radius * 0.35))
         }
-        .accessibilityLabel("Speed \(Int(speedMs)) metres per second")
+        .accessibilityLabel("Speed \(Int(speedMs)) meters per second")
     }
 }
 

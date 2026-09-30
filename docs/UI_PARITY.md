@@ -77,19 +77,19 @@ gets read before someone concludes a missing screen is a defect:
 | ~~No archived-path map control~~ **CLOSED 2026-09-01** — ported once the 3D path landed, since it draws through the same layers. Left in as the record. The control appears only once a record is downloaded, on both platforms | — | — |
 | Flight-profile chart constants converted at a 3.0 display density | Android draws the chart in raw **pixels** (`CHART_MARGIN_X = 64f`, `textSize = 32f`), so its apparent size changes with the phone; SwiftUI's Canvas works in points | never exactly — see the chart audit below. A side-by-side screenshot would settle whether 3.0 is the right divisor |
 | Download maps uses SwiftUI's `Menu` and `Slider` where Android uses `DropdownMenu` and a Material `Slider`, and an SF Symbol for the delete icon | ADR-0016's sanctioned list covers pickers and sliders outright; the delete glyph is a Compose `Icons.Filled.Delete`, a library with nothing to convert, so `trash` stands in as the map-column icons do | never — `trash` is pinned in `SFSymbolAvailabilityTests` like the rest |
-| Chart legend checkboxes are SF Symbols, not a Material `Checkbox` | ADR-0016 sanctioned departure: a Material checkbox clone next to iOS type reads as broken, and `checkmark.square.fill` / `square` carry the same two states in the same two colours | never |
+| Chart legend checkboxes are SF Symbols, not a Material `Checkbox` | ADR-0016 sanctioned departure: a Material checkbox clone next to iOS type reads as broken, and `checkmark.square.fill` / `square` carry the same two states in the same two colors | never |
 | ~~Section help opens as an **alert**, where Android uses a `Popup` card anchored under the **i**~~ **CLOSED 2026-08-29 on iOS 16.4+**, which is where it matters: `SectionHelp` now branches at runtime and gives 16.4-and-up Android's anchored card (`.popover` + `presentationCompactAdaptation(.popover)` + `presentationBackground`), keeping the alert only for 16.0–16.3, where the API does not exist. Split by **capability, not device**, because flight testing spans several iOS versions | — | — |
 | The password prompt refuses interactive (swipe) dismissal, where Compose's `AlertDialog` dismisses on an outside tap | Its two buttons mean different things — one connects, the other reverts the receiver to the channel it came from — and a swipe expresses neither. On iOS a swipe is far easier to trigger by accident than a scrim tap, and the consequence here is a channel revert the user did not ask for | never — the asymmetry is in the gesture, not the design |
 | The search's **Looking for** picker is a SwiftUI `Menu` styled as a field, where Android uses `ExposedDropdownMenuBox` | ADR-0016's sanctioned list covers pickers outright, and Download maps already uses `Menu` for the same reason. The part that was **not** treated as sanctioned is the *appearance*: Android deliberately moved this control from a bare `TextButton` to a field showing its current value, because the value is what a user must check before starting a search that behaves differently depending on it — so the iOS label is a value plus a chevron in a 200 pt filled field, not a text button | never — but the field shape is the requirement, not the menu mechanism |
 | **A dropped BLE link clears the receiver readout on iOS; Android keeps it.** `clearLiveReadouts` sets `receiverInfo = nil` with the rest; Android's link-loss release ([ADR-0011](../../steam-pigeon-locator/docs/adr/0011-locator-lora-channel-from-app.md), 2026-08-30) deliberately leaves `_remoteReceiverConfig` standing | The **locator** half matches — both platforms release the connection and blank the locator's configuration, because a section left reading channel 0 is a plausible-looking value where the truth is "nothing is connected". The receiver half cannot: Android seeds `_remoteReceiverConfig` from user preferences and saves it back, so clearing it would blank the Receiver channel field on every drop and raise that same hazard on the other field. iOS's `receiverInfo` is not persisted and has no such role | never — the difference is in where the value is stored, not in what either app wants to show |
 | ~~**App Flight Logs is Android-only.**~~ **CLOSED 2026-09-01** — ported once the Android side had been exercised with simulated flight data, which is exactly what this row's *closes when* asked for. Left in as the record. Original text: A per-flight CSV of what the *phone* received and announced — the frame plus the receiver's RSSI/SNR/noise floor plus the app's own verdicts and spoken callouts, none of which exist in the locator's archive because they are measured or decided on this side of the radio | Not a divergence of taste — the feature is four days old and has never flown. Porting a recording feature before its first hardware run would mean debugging two implementations against one unknown. The **portable half is already shaped for the port**: `FlightLogRecorder` holds no clock, no Android types and no flows, exactly as `ChannelMoveRunner` does, and its 23 tests drive it through a `Sink` protocol that Swift has verbatim | when the Android side has flown at least once and the CSV has been read on a PC. Then port `FlightLogRecorder` + `FlightLog` + `FlightLogRecorderTest` **as a unit** rather than re-deriving the close-signal set — landing deliberately does NOT close a log, and a BLE dropout deliberately does not either, and both are the kind of rule that gets "simplified" back out by a reimplementation. Storage and export are genuinely platform-specific: `UIActivityViewController` for the share sheet, and app-private storage plus `LSSupportsOpeningDocumentsInPlace` / `UIFileSharingEnabled` is the Files-app question Android answers with a `FileProvider` |
-| **Android’s Communication screen has ONE manual channel field with a chain toggle; iOS still has two fields and two Update buttons.** Android 2026-09-04: the receiver-channel field kept its Update button and gained a chain icon to its right — grey (open) points the receiver only, tapped closed it moves the connected locator instead and the receiver follows (ADR-0011 invariant 1, so still exactly ONE message, never both). The separate Locator channel field and its Update button are gone | The two fields hold the same number in every case where nothing is broken, so "change the channel" began by choosing between two identical numbers. The difference the two buttons existed to show — two devices, two acknowledgment paths — is still shown: the chain’s state selects the label, the help paragraph, the occupancy note’s severity, and which message state drives the button. Chained, the comparison that enables Update is against the **locator’s** channel, not the receiver’s, so a failed move that split the two can still be resynced | when the iOS field pair is replaced the same way. Port as a unit: the toggle, the label swap (`channels_both_channels`), the two help paragraphs, and the one-message rule. Splitting it — e.g. a toggle that sends both messages — recreates the receiver/locator race ADR-0011 exists to prevent |
+| **Android’s Communication screen has ONE manual channel field with a chain toggle; iOS still has two fields and two Update buttons.** Android 2026-09-04: the receiver-channel field kept its Update button and gained a chain icon to its right — gray (open) points the receiver only, tapped closed it moves the connected locator instead and the receiver follows (ADR-0011 invariant 1, so still exactly ONE message, never both). The separate Locator channel field and its Update button are gone | The two fields hold the same number in every case where nothing is broken, so "change the channel" began by choosing between two identical numbers. The difference the two buttons existed to show — two devices, two acknowledgment paths — is still shown: the chain’s state selects the label, the help paragraph, the occupancy note’s severity, and which message state drives the button. Chained, the comparison that enables Update is against the **locator’s** channel, not the receiver’s, so a failed move that split the two can still be resynced | when the iOS field pair is replaced the same way. Port as a unit: the toggle, the label swap (`channels_both_channels`), the two help paragraphs, and the one-message rule. Splitting it — e.g. a toggle that sends both messages — recreates the receiver/locator race ADR-0011 exists to prevent |
 | **Acting on Android’s Communication screen clears what the other controls left behind; iOS leaves it standing.** Android 2026-09-04: starting a scan or a search, picking a result, or pressing Update drops the *other* sections’ residue — the other scan’s results, a resolved channel-move banner, and the conflict prompt (through `dismissConflict`, since the conflicting locator is still broadcasting) | Every one of those is an answer that was true when it appeared and expires on nobody’s clock, so they piled up above the control being used and were indistinguishable from fresh results. Three rules are load-bearing and are the reason this is a port and not a re-derivation: never the acting control’s **own** residue (the search hit you just pressed Connect on is the point, and flips to "Connected") and never the conflict prompt on that same tap, because `dismissConflict` REMEMBERS the id and the prompt is that action’s documented recovery path (ADR-0011, "The channel being left keeps broadcasting into the slot the move just opened"); never a scan still **running** (`onLocatorSearchResult` drops messages while the run is null, so wiping one orphans a receiver that sweeps on, deaf); never a channel move still **in flight** (the ADR-0011 cycle runs seconds with the link legitimately down and the banner is the only thing saying so) | when `RocketViewModel.clearResidue` is ported. Its KDoc carries all three exclusions |
 | **Android offers the whole-band search from the start; iOS reveals it only after a short run finishes.** Android 2026-09-04 ungated the "Search all 64 channels" button; `Run.canWiden` still governs the *note* explaining a miss | Widening is also the right first move when the user already knows the locator is on no channel the app would try — a borrowed one, or one reconfigured elsewhere — and gating it made them run a search they knew would fail to unlock the one they wanted. It became untenable once acting on the screen started clearing finished runs: the button would have come and gone with the results it was derived from | when iOS ungates its own widen button. Do **not** also ungate the miss note — that one is a statement about a run that happened |
 | **Android’s Communication screen carries a channel-agreement indicator; iOS has none.** Android 2026-09-04: a green or red dot with one sentence, above the scans. Green whenever a broadcast from the connected locator is arriving; red **only** when `ChannelMove.Verdict` is `NoEvidence` or `NotChecked`; nothing while a move is in flight, and nothing when the locator is merely unheard | It replaces something that never worked. The pair of channel fields was assumed to reveal a receiver/locator split and structurally could not: `remoteLocatorConfig.loraChannel` is assigned from `PreLaunchData.receiverChannel`, the receiver’s own stamp on the relayed frame, so the two fields were equal by construction whenever both held live values — and the state where they differ is the state where one of them is being blanked by ADR-0011’s release rule. iOS’s `LinkViewModel` derives its locator channel the same way, so **the same non-detection is present there**, silently | when iOS grows the indicator. Port the verdict mapping exactly — `LocatorStayed` must NOT be red (the receiver was put back and both devices are on the old channel, so silence after it is a range problem) and an unheard locator with no move behind it must show nothing at all |
 | **The pad alert and the arm/disarm callout keep speaking while a sheet is up.** Android's announcer stops when you leave the map screen | Not a decision so much as the shape of the two navigations: Android's destinations *replace* `HomeScreen`, which disposes the announcer with it; every iOS destination is a sheet presented **over** a root that stays alive. `RootView` already draws that equivalence for the wake lock, where it gates on "no sheet is up" — the same gate could be applied here and would match Android exactly. It is not, because the two cases argue differently: a screen held awake while the user reads settings is waste, whereas a pad alert silenced while the user reads settings is the one channel of four that was telling them a live rocket is unarmed | on a decision, not a discovery — fschroer's call. Gating it is a two-line change; the argument for leaving it is that this alert is the safety channel and its whole design (ADR-0021) is anti-habituation |
 | **The heads-up sight samples the attitude at 60 Hz**, where Android registers its rotation vector at `SENSOR_DELAY_UI` (~60 ms) | Android's rate comment states its own reason: every sample there recomposes the whole map screen, so it deliberately did not ask for more. In landscape on iOS the map is not mounted and one `Canvas` redraws, so the constraint that set Android's number does not exist — and 10 Hz was reported from the phone as visibly stepped against Android's overlay. The **map** keeps 10 Hz | **Confirmed on the phone 2026-09-02: 60 Hz cures the stepping.** What a side-by-side would still settle is deflection per degree, which is a different number on the same screen |
-| **The camera is asked for on the first rotation into the heads-up view, not at launch.** Android lists `CAMERA` in `requiredPermissions` beside location and Bluetooth and asks for all of them as the app opens | *When* a permission is requested is a platform convention, not app behaviour: an iOS prompt at first launch arrives with nothing on screen to explain it, and iOS users read an unexplained camera request as a reason to say no. Asking on the rotation puts the request where the feature is, and the string names the feature | never — the prompt text is the parity surface, not its timing |
+| **The camera is asked for on the first rotation into the heads-up view, not at launch.** Android lists `CAMERA` in `requiredPermissions` beside location and Bluetooth and asks for all of them as the app opens | *When* a permission is requested is a platform convention, not app behavior: an iOS prompt at first launch arrives with nothing on screen to explain it, and iOS users read an unexplained camera request as a reason to say no. Asking on the rotation puts the request where the feature is, and the string names the feature | never — the prompt text is the parity surface, not its timing |
 | **The AR overlay keeps drawing when there is no picture behind it**, with one line saying why. Android's `CameraPreviewScreen` draws nothing at all — overlay included — while the camera provider is null | On Android that state is barely reachable: the app asks for the camera at launch and the screen is written as if it always has one. On iOS a refusal is a state the user can sit in indefinitely, and the crosshair, the scales and the angles are worth having without a picture. The alternative is a black screen with no explanation, which reads as the crash this report started as | when Android grows a no-camera state of its own; the drawing rule would then be worth matching in whichever direction it lands |
 | ~~iOS remembers the name of **every** locator it accepts a broadcast from; Android remembers one only for locators whose password it holds~~ **CLOSED 2026-08-21** by Android `b209671`, which stores the name from every accepted broadcast exactly as described below. The one asymmetry left — Android noted the name **before** its `mayConnect` check and iOS only on `.accepted` — was closed here 2026-08-23: `noteName` now runs on the conflict path too, so a second authorized locator heard while ours holds the link is remembered | — | — |
 | **Android finishes a record download in the background and resumes it; iOS cancels it on leaving the chart.** Android 2026-09-29 ([#49](https://github.com/fschroer/steam-pigeon-locator/issues/49), ADR-0009 invariants 12–13): leaving the chart keeps the held packets; `RocketViewModel.runDownloadController` finishes the record while the user is on the map, pauses it while a link-using screen is open or an arm is in progress, and resumes it — ACKing the held packets under the locator's new transfer id — once the same locator is heard disarmed and broadcasting. The map shows **Downloading N%** in the status panel, a gray (not red) marker, and a progress ring with an ✕ that discards. The chart also warns in red when a pre-#49 locator sent only the first ~102 s (`progress.truncated`) | The locator firmware now sends every record whole in ≤ 256 packets, decimating the long descent (ADR-0009 invariant 10). **iOS needs no change to chart those records** — `FlightProfilesView` already places samples by timestamp — so the gap is the lifecycle and the truncation warning, not the data | when iOS ports `FlightDataRepository.requestRecord` / `verifyResume` / retired-id filtering **as a unit with `FlightDataResumeTest`** — the resume identity check is the load-bearing part: two flights in one slot can share `packet_count` and `total_samples`, so geometry alone must never confirm a resume — plus the controller and the three map affordances. Until then an iOS user must stay on the chart |
@@ -149,13 +149,13 @@ From `FlightMapScreen.kt`: navigation drawer; `MapControlsColumn`; `LocatorStats
 `LinkQualityNote` with `rssiColor`/`snrColor` bands; `PulsingText` / `BlinkingText` alert
 treatments;
 `FlightSpeechAnnouncer`; `ExitAppButton`; heading-up map rotation with smoothing;
-auto-zoom and auto-centre with deadbands; tilt from device pitch; keep-screen-on.
+auto-zoom and auto-center with deadbands; tilt from device pitch; keep-screen-on.
 
 ### Theme and type
 
 | | Android | iOS today |
 |---|---|---|
-| Colour | Material 3 scheme, dark `#141312` bg, `#E6E2DF` fg, primary `#CCC6B7`, secondary `#B4C6F2`, tertiary `#DCC48D`, error `#FFB4AB` | SwiftUI defaults, forced dark |
+| Color | Material 3 scheme, dark `#141312` bg, `#E6E2DF` fg, primary `#CCC6B7`, secondary `#B4C6F2`, tertiary `#DCC48D`, error `#FFB4AB` | SwiftUI defaults, forced dark |
 | Body font | **Poppins** | system |
 | Display font | **Roboto** | system |
 | Telemetry font | **Roboto Mono** | system monospaced |
@@ -167,7 +167,7 @@ unchanged, which is the cheapest large step toward "looks like the same app".
 
 > **2026-09-02, read this first if you are touching the camera:** the per-frame filter was
 > reaching the field **unseeded** whenever the map was built while the locator already had
-> a fix — which took auto-centre, auto-zoom, tilt and heading-up down together, at the pad
+> a fix — which took auto-center, auto-zoom, tilt and heading-up down together, at the pad
 > as well as after a rotation. Fixed in `tickCamera`; the account is in the heads-up
 > sight's audit below, under "Hardware, round two", because that is where it surfaced.
 
@@ -190,7 +190,7 @@ files use the same name for different things.
 | 2 | magnetic-orientation default | `mutableStateOf(true)` | `false` |
 | 3 | record-track control | `FiberManualRecord`/`Stop`, red while recording | absent |
 | 4 | reset-track control | `RestartAlt`, always full white | absent |
-| 5 | auto-centre icon | `MyLocation`, a crosshair | `location.circle`, an arrow |
+| 5 | auto-center icon | `MyLocation`, a crosshair | `location.circle`, an arrow |
 | 6 | gesture backoff | auto-camera returns early while `userGestureRecent` (5 s) | none — every camera write raced the finger |
 | 7 | control tap cancels the backoff | `LaunchedEffect(...) { lastUserGestureTime = 0 }` | n/a |
 | 8 | rotate/zoom/scroll gestures | set explicitly in `uiSettings` | left to SDK defaults (same values, but unstated) |
@@ -209,11 +209,11 @@ Seven were implemented; two needed no code, for reasons Android itself supplies.
 |---|---|---|
 | 1 | No camera filter | `CameraFilter` — Android's per-frame Kalman over target/zoom/tilt, gains .1/.05/.05 unchanged, driven by a `CADisplayLink` |
 | 2 | Auto-zoom did nothing | The toggle now drives the fit, bounded by the App Settings closest-zoom limit **on the filter only**, so pinch stays unbounded |
-| 3 | No anchor/deadband on auto-centre | `recenterDeadbandM` + `viewportLimitedDeadbandM`, latched anchor, re-latched only past the combined GPS error |
-| 4 | Auto-centre targeted the rocket alone | Now a north-up, flat bounds fit over rocket AND phone, falling back to the rocket when the phone has no fix |
+| 3 | No anchor/deadband on auto-center | `recenterDeadbandM` + `viewportLimitedDeadbandM`, latched anchor, re-latched only past the combined GPS error |
+| 4 | Auto-center targeted the rocket alone | Now a north-up, flat bounds fit over rocket AND phone, falling back to the rocket when the phone has no fix |
 | 5 | Track not persisted | `TrackStore` — same `flight_path.csv` name and CSV shape as Android's, legacy three-column rows included |
 | 6 | No landing freeze | `TrackRecording` + `TrackRecorder`: nothing recorded on the pad, the two fixes that end a flight still drawn, then frozen |
-| 8 | No one-shot initial centre | Centres on the phone at z12 once, while the rocket has no fix. **Confirmed on the simulator** — the map used to open on null island |
+| 8 | No one-shot initial center | Centers on the phone at z12 once, while the rocket has no fix. **Confirmed on the simulator** — the map used to open on null island |
 
 **7 — archived-path control: still correctly absent.** Android offers it only when a
 downloaded record exists, and flight-data download is not ported. Building the button
@@ -222,7 +222,7 @@ ADR-0009 lands, and is noted in the outstanding list against that item.
 
 **9 — `showControls`: no action, and none wanted.** It is dead state on Android —
 toggled by a map tap and never read — so the control column is always visible there,
-which is what iOS already does. Recorded so nobody "restores" a behaviour Android does
+which is what iOS already does. Recorded so nobody "restores" a behavior Android does
 not have.
 
 ### Found while implementing, and fixed
@@ -244,8 +244,8 @@ the audit, not the code — **a partial audit reads exactly like a complete one.
 
 | Observation | Cause | Fix |
 |---|---|---|
-| Rotation "very jerky" | Bearing was NOT filtered — my own decision, recorded below as a judgement to revisit | `CameraFilter.gainBearing` = .01, Android's value, with the ±540 shortest-turn wrap |
-| No "Disarmed" banner | The centre banner had never been ported | `FlightBanner` + `PulsingText` |
+| Rotation "very jerky" | Bearing was NOT filtered — my own decision, recorded below as a judgment to revisit | `CameraFilter.gainBearing` = .01, Android's value, with the ±540 shortest-turn wrap |
+| No "Disarmed" banner | The center banner had never been ported | `FlightBanner` + `PulsingText` |
 | No escalated pad warning | Same banner, plus the snooze control | Banner escalation + a snooze button in the status dropdown |
 
 **On the bearing, I was wrong and it is worth saying how.** The previous pass skipped
@@ -281,7 +281,7 @@ for, and neither of us has looked at the two together.
 
 | Observation | Cause | Fix |
 |---|---|---|
-| Compass button greyed out at startup under magnetic interference | iOS disabled the CONTROL on ADR-0023 trust | Control is never disabled; trust still suppresses the bearing |
+| Compass button grayed out at startup under magnetic interference | iOS disabled the CONTROL on ADR-0023 trust | Control is never disabled; trust still suppresses the bearing |
 | Banners in the wrong font | `SPFont.displayLarge` used Roboto-**Bold** | Material's baseline display styles are `FontWeight.Normal` → Roboto-Regular |
 | No choice offered with two receivers | `startScan` reconnected to a remembered peripheral and skipped the scan | Auto-reconnect removed; 3 s scan window then always offer the list |
 
@@ -377,13 +377,13 @@ operator actually heard it.
 
 ### Sixth round, 2026-08-20 — the half-restored receiver, and the voice list
 
-**A receiver that connected itself, greyed out, and would not arm — one cause.**
+**A receiver that connected itself, grayed out, and would not arm — one cause.**
 `willRestoreState` adopted the peripheral iOS handed back and set the state to
 `connected`, and then did nothing else. Restoration returns the CONNECTION, not the
 GATT session on top of it: `didConnect` is not called for a peripheral that is already
 connected, so services were never discovered, the characteristics never resolved and
 notifications never subscribed. `state` therefore stopped at `.connected` and never
-reached `.ready` — which is what the grey icon means, what gates the receiver menu, and
+reached `.ready` — which is what the gray icon means, what gates the receiver menu, and
 what `canSendArmCommand` requires. A manual rescan fixed it because that path runs
 `didConnect` properly.
 
@@ -393,7 +393,7 @@ Everything else in the report follows from the same thing:
   scan, so the receiver the app was actually holding was the one missing. The scan now
   seeds its list from `retrieveConnectedPeripherals(withServices:)`, so an already-held
   receiver is offered alongside the ones still advertising.
-- **"Cancelling connects the one that wasn't listed."** Nothing connected on cancel —
+- **"Canceling connects the one that wasn't listed."** Nothing connected on cancel —
   the restored link had been there all along, invisible and half-alive.
 - **Choosing the other receiver** now cancels the previous connection first. Without
   that the old one stayed connected but un-referenced, holding its `bluetoothd` session
@@ -418,7 +418,7 @@ which is a plausible second contributor to the one-of-two symptom.
    Ralph share it and Apple does not class them as novelty, so that rule would have
    quietly removed four ordinary voices. Both halves are pinned by tests.
 2. **The wheel snapped back.** A `Picker` in a Form presents a wheel, and a wheel always
-   re-centres on the current selection, so anything far from the current choice was hard
+   re-centers on the current selection, so anything far from the current choice was hard
    to reach. Replaced with a pushed checkmark list — the iOS pattern for a long
    single-choice list, and it stays where it is scrolled. **Confirmed on the simulator.**
 
@@ -505,7 +505,7 @@ was built from what the app knows rather than from what Android writes.
 
 | Gap | Android | iOS before |
 |---|---|---|
-| Withheld distance | `dst` is a value **or** the word: `"%15d" + " m"`, else `stringResource(R.string.unknown)` = `Unknown`. No padding, no unit | `Dist:         unknown m` — padded and given a unit, so a refusal to quote a distance read as a distance in metres |
+| Withheld distance | `dst` is a value **or** the word: `"%15d" + " m"`, else `stringResource(R.string.unknown)` = `Unknown`. No padding, no unit | `Dist:         unknown m` — padded and given a unit, so a refusal to quote a distance read as a distance in meters |
 | Flight state | maps every state to display text by hand: `WaitingLaunch -> "Waiting For Launch"`, `DroguePrimaryEvent -> "Drogue Primary"`, `else -> ""` | `"\(flightState)"` — the Swift case name, so the panel said `droguePrimaryEvent` |
 
 The flight state is where the standing note **"enum labels are Android's case names"**
@@ -514,7 +514,7 @@ misleads: that rule comes from the settings dropdowns, where Android renders
 followed instead of the code, which is the same failure mode as assuming a default.
 
 `noSignal` renders as **nothing**, matching Android's `else -> ""`. It is not a state the
-locator reports; it is this app's fallback for a state byte it does not recognise, and
+locator reports; it is this app's fallback for a state byte it does not recognize, and
 naming it would tell the user the rocket is in a condition the rocket never claimed.
 
 Both are pinned by `LocatorStatsRowsTests`, including a case that fails if any label is
@@ -546,7 +546,7 @@ Three things followed:
 - Locator names are remembered per locator id, and that is the **divergence in the table
   above** — see below.
 
-#### ⚠️ iOS-FIRST behaviour: naming a locator heard only while armed
+#### ⚠️ iOS-FIRST behavior: naming a locator heard only while armed
 
 **Asked for by fschroer on 2026-08-21, to be ported to Android.** Written as a
 description so the Android change needs no Swift.
@@ -595,7 +595,7 @@ app is entitled to display. Both halves are pinned in `ReceiverLocatorRecoveryTe
 ### Eleventh round, 2026-08-23 — the rocket icon said nothing about being armed
 
 Reported from the phone. The status panel's rocket glyph is the **only** thing on the map
-that says whether the locator is armed, and it says it in colour alone — so a wrong tint
+that says whether the locator is armed, and it says it in color alone — so a wrong tint
 rule is not cosmetic.
 
 | Gap | Android | iOS before |
@@ -604,10 +604,10 @@ rule is not cosmetic.
 | The green | Compose `Color.Green`, pure `#00FF00` | SwiftUI `.green` in the pending branch — the adaptive system green, `#34C759` |
 | Blink easing | `tween(450, easing = LinearEasing)`, reversing 1f→0.15f | `.easeInOut(duration: 0.45)` |
 | Acknowledgment | `LaunchedEffect(armedState) { armCommandPending = false }` — the locator changing what it broadcasts IS the acknowledgment, so the icon settles at once | nothing cleared it; the icon blinked out the full 2 s timeout every time, so a confirmed arm looked identical to one that was never answered |
-| Satellite superscript | takes the panel's default content colour; **never** follows the rocket's tint | shared `rocketTint`, so the count would have turned green with the glyph |
+| Satellite superscript | takes the panel's default content color; **never** follows the rocket's tint | shared `rocketTint`, so the count would have turned green with the glyph |
 
 The pending branch was already right — while a command is in flight the icon shows the
-colour it is heading **for**, green while arming and white while disarming, so the blink
+color it is heading **for**, green while arming and white while disarming, so the blink
 reads as *taken* rather than as the state being left. Only the three resting cases were
 invented. `gpsStatus` is no longer passed to the panel at all; GPS health is reported by
 `LocatorStats`, where Android reports it.
@@ -669,13 +669,13 @@ Two details worth keeping:
 - The receiver's channel and name are read from `PreLaunchData` **outside** the ADR-0006
   recognition gate. They describe the user's own receiver, not the locator that carried
   them, and gating them would leave this screen blank in the case it is most needed — an
-  unrecognised locator on the channel you are trying to move off.
+  unrecognized locator on the channel you are trying to move off.
 - **A "Revert" button was drafted and removed.** Android pairs Update with "Return to
   main", which on iOS is the sheet's own Done. Adding a second control Android does not
   have is how the two apps stop needing the same manual.
 
 **Channel survey section — landed.** Android's wording verbatim, because most of it
-explains a measurement rather than labelling a control, and an explanation that differs
+explains a measurement rather than labeling a control, and an explanation that differs
 between the two apps is one the manual has to write twice.
 
 The bars are **relative to this sweep** and deliberately carry no dBm: SX126x RSSI near
@@ -700,7 +700,7 @@ strand, and "point receiver" is the legitimate go-look-at-that-channel case.
 **Channel move — landed (ADR-0011).** "Move here" now retunes the whole system. The
 request goes out on the OLD channel, the locator applies it at runtime, its next
 broadcast returns on the NEW one, and the receiver follows only after its forward has
-finished transmitting. There is no acknowledgement message: **confirmation is the
+finished transmitting. There is no acknowledgment message: **confirmation is the
 resumption of broadcasts carrying the new channel** (invariant 3), tested as
 whole-object equality against a config rebuilt from that broadcast.
 
@@ -773,7 +773,7 @@ switch to it, or move to an uncontested channel using the survey directly below.
 
 Two framings, because there are two situations and only one is a problem. Already
 connected to a DIFFERENT locator: genuine conflicting traffic, worded as a warning and
-coloured with the error tone. Not connected at all: simply a new locator to connect to,
+colored with the error tone. Not connected at all: simply a new locator to connect to,
 so the wording invites.
 
 Two rules make it usable rather than merely present, and neither is visible from the
@@ -791,7 +791,7 @@ feature description:
 Connect only acts on a frame from THAT locator. Armed locators raise conflicts too, and
 an armed stranger carries no identity to check a password against — verifying one
 against another locator's tag is meaningless at best and a false accept at worst. It
-switches when the frame authorises, and raises the password challenge when it does not.
+switches when the frame authorizes, and raises the password challenge when it does not.
 
 The single `conflictLocatorId` sits alongside the existing `conflictingLocatorIds` set
 rather than replacing it: the banner offers an ACTION and an action needs one subject,
@@ -846,7 +846,7 @@ back — which is what makes one request fill both rows.
 
 **One divergence found and closed in passing.** Both rows were `bodyMedium` in
 `onSurfaceVariant` — muted, and a size down from Android, which draws a plain `Text` and
-therefore gets the default body style and content colour, the same mapping every other bare
+therefore gets the default body style and content color, the same mapping every other bare
 caption on these two screens already uses. Nothing recorded the difference, so it was drift
 rather than a decision. Now `bodyLarge` with the default foreground.
 
@@ -927,9 +927,9 @@ here would be a second vocabulary.
 
 **On ADR-0016's sanctioned departure.** That ADR permits "SwiftUI switches, pickers and
 steppers rather than Material clones", and this is not an exception to it: the departure
-covers controls that look BROKEN when imitated. A bordered, labelled text box is not one
+covers controls that look BROKEN when imitated. A bordered, labeled text box is not one
 — it is the ordinary way to show an editable value on either platform, and here it was
-also the fix for a real usability defect. The sanctioned list is not a licence to reach
+also the fix for a real usability defect. The sanctioned list is not a license to reach
 for a different control whenever one is handier.
 
 ### Fonts: nothing in this app is bold except one glyph
@@ -960,7 +960,7 @@ RobotoMono-Regular too — every number on the stats panel and gauges included.
 This was a steady drift of "this looks like a heading, headings are bold" rather than a
 single mistake, which is why it needed a rule rather than another patch. **If something
 looks like it wants emphasis, the answer is not weight** — Android reaches for size and
-colour, and the type scale already encodes that.
+color, and the type scale already encodes that.
 
 `LinkView` is exempt and stays on system fonts: it is the bring-up diagnostics screen
 with no Android counterpart.
@@ -1033,21 +1033,21 @@ transfer path has tests Android has none of.
 | Apogee rounding | `setScale(1, RoundingMode.UP)` — away from zero | `.awayFromZero`, so a flight never reads lower than it flew |
 | A slot with no flight | still listed, "No flight data", not tappable | same |
 | Chart defaults | altitude and all three accelerometer axes ON | same — four `mutableStateOf(true)` |
-| No "descent" toggle | removed on Android in favour of pinch-zoom | not reintroduced |
+| No "descent" toggle | removed on Android in favor of pinch-zoom | not reintroduced |
 | Event annotations | packed into free rows, flipped left near the right edge, leader line to a dot that never moves | same algorithm, line for line |
 | Zoom | 1×…25×, `sqrt(zoom)` annotation growth capped at 2×, axis furniture unscaled | same |
 | Gridlines | stepped over the VISIBLE window, so the count stays constant as you zoom | same |
-| Colours | altitude `primary`, X red, Y yellow, Z green, apogee blue, drogue/main 50 %-alpha olive/green, indicators grey | same values |
+| Colors | altitude `primary`, X red, Y yellow, Z green, apogee blue, drogue/main 50 %-alpha olive/green, indicators gray | same values |
 
 **Gestures are UIKit recognizers, and that is a mechanism difference, not a UI one.**
 Compose's `detectTransformGestures` reports centroid, pan delta and zoom delta together.
 SwiftUI's `MagnificationGesture` **does not report where the pinch is**, and the focal
-point is the whole behaviour here — without it a pinch zooms about the middle of the
+point is the whole behavior here — without it a pinch zooms about the middle of the
 plot and the data slides out from under the fingers. A `UIPinchGestureRecognizer` plus a
 `UIPanGestureRecognizer` running simultaneously report the same three quantities, one
 per callback, and the transform composes either way. Verified on the simulator: pinch
 fires in both directions, one-finger pan fires, and zooming back out lands exactly on
-the original fit. **Double-tap-to-reset could not be synthesised** through the
+the original fit. **Double-tap-to-reset could not be synthesized** through the
 simulator's input latency and is unverified.
 
 **The pixels-versus-points conversion, which has no exact answer.** Android's chart
@@ -1079,7 +1079,7 @@ iOS anchors trailing, so the clamp is on the anchor minus the measured width
 (`drawAltitudeLabel`). `ChartViewportTests` measures the real face at the real size and
 fails if a four-digit label stops fitting — or if the gutter goes back to something that
 could not fit three digits. **Still unseen on a device, on either platform, and
-deliberately so:** fschroer is holding the judgement until there is real flight data to
+deliberately so:** fschroer is holding the judgment until there is real flight data to
 draw (2026-08-24). It is a legibility question with 3- and 4-digit altitudes on screen,
 and the gutter is space taken from the plot, so a fixture would not settle it.
 
@@ -1141,12 +1141,12 @@ ported as-is, including re-binding the port a resume's immutable style URL recor
 real 30-tile region downloaded successfully on the simulator, which is the evidence that
 the server, the ATS exemption and the pack creation all line up.
 
-#### ⚠️ iOS-FIRST behaviour: the picker opens on the phone's position, zoomed out
+#### ⚠️ iOS-FIRST behavior: the picker opens on the phone's position, zoomed out
 
 **fschroer's preference, stated 2026-08-21, to be ported to Android.** Recorded here so
 the Android change can be made from a description rather than from reading Swift.
 
-> The download picker should open centred on **the phone's current location**, at a
+> The download picker should open centered on **the phone's current location**, at a
 > **multi-state zoom** — wide enough that a launch site a state or two away is a pan
 > rather than a search, close enough to place yourself.
 
@@ -1157,15 +1157,15 @@ The rules, exactly as implemented here:
 - Applied **once**, the first time a fix is available — including one that arrives after
   the screen is already open, since that is the first useful position rather than a
   position the user chose.
-- **Never re-applied.** The picker reports its centre continuously through a gesture, so
-  re-centring on every update would drag the map back under the user's finger.
+- **Never re-applied.** The picker reports its center continuously through a gesture, so
+  re-centering on every update would drag the map back under the user's finger.
 - **Choosing a preset or typing a coordinate cancels it**, so a fix landing afterwards
   cannot pull the camera off the site the user just picked.
 - **No fix, no move**: the map stays where MapLibre opens it. No invented default
   location — an app that opens on somebody else's launch site is worse than one that
   opens on the world.
 
-This is the **one place in the port where behaviour landed on iOS first**, at the user's
+This is the **one place in the port where behavior landed on iOS first**, at the user's
 explicit request. Until Android follows, the two apps differ here on purpose. Android
 today sets no opening camera at all, so its picker starts at MapLibre's default; the
 change there is `RegionPickerMap`'s factory plus a location source.
@@ -1252,7 +1252,7 @@ believes it took and did not. `startScan` was gated; `stopScan`, `connect` and
 The restore path is the one that mattered. `willRestoreState` runs **before** the central
 reports `.poweredOn`, and it issued the service discovery that rebuilds a restored
 connection's GATT session — so that discovery was liable to be dropped, restoring the
-exact bug it was written to fix (a receiver that connects by itself with a grey icon,
+exact bug it was written to fix (a receiver that connects by itself with a gray icon,
 gates the receiver menu and refuses to arm, cured only by a manual rescan). The discovery
 now happens at `.poweredOn`, the first moment CoreBluetooth accepts it. Every central
 command is gated on one `canCommandCentral` check; where a command is refused, the local
@@ -1288,7 +1288,7 @@ deliberately left alone, because the arithmetic is shared and fixing one side wo
 had the two apps quote different sizes for the same region. Android is the reference
 implementation, so it landed there and then here — unchanged, including the constant.
 
-**Two errors that partly cancelled**, which is why the total read as ~2.7× rather than 4×:
+**Two errors that partly canceled**, which is why the total read as ~2.7× rather than 4×:
 
 1. **The count was one zoom level short.** The style declares `"tileSize": 256` against
    MapLibre's 512-point logical grid, so it fetches source tiles one level deeper than the
@@ -1327,7 +1327,7 @@ reverted — and three existing tests changed, because they asserted the old ari
 
 The smallest screen and the one with the least room for error: it fires a pyro channel.
 **ADR-0027 is the whole design** — the USB-C console path was removed because it put the
-operator's hand a metre from the e-match, so the radio path is the only way to fire a
+operator's hand a meter from the e-match, so the radio path is the only way to fire a
 channel, and everything on this screen follows from being the only path.
 
 **The rule that shapes every line of it: the display follows the LOCATOR, never the app's
@@ -1341,7 +1341,7 @@ pressing cancel used to clear `active` immediately, which gated the countdown ha
 made the app **deaf to the countdown still running**. The button read "start" while the
 locator counted down and fired, and nothing on screen disagreed. Ported deliberately:
 
-| | Behaviour |
+| | Behavior |
 |---|---|
 | Cancel | Marks itself pending and changes **nothing** else. The countdown stands until the locator stops sending one |
 | A countdown arriving after a cancel | Keeps the test live and leaves the pending flag alone — a frame that crossed the cancel in flight is not the cancel being refused |
@@ -1350,7 +1350,7 @@ locator counted down and fired, and nothing on screen disagreed. Ported delibera
 | Silence | 3 s, restarted by every countdown, ends the test whatever the reason |
 | Leaving the screen | Sends a cancel and **does not clear the state** — a cancel lost on the way out would otherwise leave the operator walking off with a live charge and an app that had forgotten about it |
 | Start button | Start **only**. It used to be the cancel too, which is why Android's manual had to warn that a press landing just after the countdown lapsed would start a FRESH test |
-| Stop button | Present from the moment the screen opens, greyed until there is something to stop, so the way out is known BEFORE the countdown starts |
+| Stop button | Present from the moment the screen opens, grayed until there is something to stop, so the way out is known BEFORE the countdown starts |
 | Reachability | Armed only (`MenuGating`), because that is when the outputs are live — ADR-0021 |
 | Channel labels | `Channel1`, not "Channel 1" — Android renders the enum's case names |
 | Wire | **0 is not "nothing selected", it is CANCEL.** Both the stop control and the exit path send a channel byte rather than a different message |
@@ -1377,12 +1377,12 @@ dimension a user can see:
 |---|---|---|
 | Shape | fully rounded — a stadium | rounded rectangle, much tighter radius |
 | Filled label | `onPrimary`, dark brown here | white, whatever the tint |
-| Outlined | transparent with a 1 dp `outline` ring | a filled grey capsule |
+| Outlined | transparent with a 1 dp `outline` ring | a filled gray capsule |
 | Label type | `labelLarge` — Poppins 14 | the system face at ~17 |
 | Disabled | `onSurface` at 12% container / 38% label | the tint, dimmed |
 
 The `Return` button is the clearest of these: Android's is a transparent outlined pill
-and iOS was drawing a solid grey one. Three kinds are covered — `Button`,
+and iOS was drawing a solid gray one. Three kinds are covered — `Button`,
 `OutlinedButton` and `TextButton` — because Android uses all three, and Cancel, Dismiss
 and Resume on the download screen are text buttons rather than the bordered controls they
 had been.
@@ -1448,7 +1448,7 @@ The adaptive foreground cropped to its safe zone and the Play Store square were 
 side by side: same composition, nothing important cut, so the sharper source wins.
 
 **Two things the generator does that copying the file would not.** It composites onto
-`#000000`, the adaptive icon's background colour — the Play Store art carries alpha and
+`#000000`, the adaptive icon's background color — the Play Store art carries alpha and
 an iOS icon must not, since Xcode warns and the App Store refuses one outright — and it
 resamples once, at high interpolation quality.
 
@@ -1497,10 +1497,10 @@ are the *smaller* half of it, and Android draws them only while a flight is unde
 | `scale = 10f` px per degree | `ARSight.pointsPerDegree(screenScale:)` = 10 ÷ display scale | **the one unit conversion.** Every other constant on that screen is dp; this one is applied to a pixel canvas, so taking the 10 as points would swing the marker ~3× too far for the same angle |
 | HUD scales: ±45°, minor 5°, major 15°, 0.65 w × 22 dp and 0.55 h × 22 dp, 16 dp inset | same | including the white zero reference at 1.5× stroke and the pointer triangles at 0.8× the bar |
 | labels at ±45, ±22, 0 with `toInt()` | `Int(degrees)` | truncated, not rounded — 22, not 23 |
-| colours `FF6080` / `C0FFC0` / `FFC040` / 50 % black | same | |
+| colors `FF6080` / `C0FFC0` / `FFC040` / 50 % black | same | |
 | label paint: platform sans, 10 sp, alpha 200 | `SPFont.chartLabel(size: 10)` at 200/255 | the same substitution the flight chart's raw `TextPaint` gets |
-| `drawVelocityGauge` at (100, 100) dp, r 80 | `VelocityGauge`, 160 pt frame centred at (100, 100) | already ported; only its placement and gate were missing |
-| `drawRocket3D` at (w − 100, 100) dp, scale 70 | `AttitudeView`, 156 pt frame centred there | 156 = 2 × 70 ÷ 0.9, the view's own radius factor |
+| `drawVelocityGauge` at (100, 100) dp, r 80 | `VelocityGauge`, 160 pt frame centered at (100, 100) | already ported; only its placement and gate were missing |
+| `drawRocket3D` at (w − 100, 100) dp, scale 70 | `AttitudeView`, 156 pt frame centered there | 156 = 2 × 70 ÷ 0.9, the view's own radius factor |
 | `inFlight && lastMessageAge < messageTimeout` | `model.isInFlight && model.isLocatorFresh` | the same two clocks |
 | `bearingValid = locatorFixUsable && compassUsable` | a non-nil `model.vector`, `compassTrust != .unreliable`, **and** a camera bearing | Three terms, because the first two are genuinely separate here — see the correction below. Suppressed means **nothing drawn**: no ring, and no edge arrow either, which is the more confident of the two |
 
@@ -1603,7 +1603,7 @@ thing as each other:
      rotating with the compass again."* Five seconds is the gesture backoff, and what a
      gesture does besides start that clock is **seed the camera filter** — so the filter
      was reaching the field unseeded, and `CameraFilter.tick` returns nil until it is.
-     Everything the filter drives was dead together: auto-centre, auto-zoom, tilt and
+     Everything the filter drives was dead together: auto-center, auto-zoom, tilt and
      heading-up. It only looked like a compass fault because heading-up is the one a
      stationary map makes visible.
 
@@ -1646,7 +1646,7 @@ thing as each other:
      a dated addition, with the option not taken — `CMCalibratedMagneticField.accuracy` as
      a fourth source — recorded there rather than here.
 
-**Correction, found while summarising (2026-09-02).** The first version of this screen
+**Correction, found while summarizing (2026-09-02).** The first version of this screen
 gated the marker on `model.vector != nil` alone, on the assumption that a suppressed vector
 carried ADR-0023's compass test as well as ADR-0022's distance test. **It does not.**
 `updateVector` publishes the vector under an unreliable compass and records the fact in
@@ -1670,7 +1670,7 @@ has to settle:
 - that the marker lands on the rocket rather than 180° from it, which is the check the
   gravity cross-check above is meant to make impossible but nothing here can prove;
 - that the marker's deflection per degree feels right beside Android's — the pixel/point
-  conversion is arithmetic, not judgement, but only a side-by-side settles the judgement;
+  conversion is arithmetic, not judgment, but only a side-by-side settles the judgment;
 - ~~the flip fix, and tilt-follow after a rotation round trip~~ **confirmed on the phone,
   2026-09-02**;
 - ~~that the marker appears, and lands on the rocket rather than 180° from it~~ **confirmed
@@ -1703,7 +1703,7 @@ owned by `RootView` so it runs in both orientations as Android's does.
 | `rememberUpdatedState(rocketState)` | `FlightAnnouncerRunner.sample` closure | the loop reads the latest telemetry, not the one it started with |
 | `announcer.add` / `announcer.flush` | `.routine` / `.urgent` | `FlightSpeech.say` was already the single funnel `Announcer` was introduced to create on Android, so the facade has no counterpart here — ADR-0030's log hook already sits inside it |
 | apogee, four charges, ascent bands, descent warnings, landing, telemetry lost/restored, GPS lost/restored, drogue/main deployed | same lines, same words, same priorities | the strings are Android's verbatim, including the leading space and full stop in " N meters <ordinal> of launch point." |
-| `landingImminent` / `landedThroughBlackout` / `timeToGroundSeconds` | same, with `LandingCalloutTest` ported case for case as `LandingCalloutTests` | the field case: the link dies in the last few hundred metres and never returns, so a callout that waits to *hear* the touchdown never comes |
+| `landingImminent` / `landedThroughBlackout` / `timeToGroundSeconds` | same, with `LandingCalloutTest` ported case for case as `LandingCalloutTests` | the field case: the link dies in the last few hundred meters and never returns, so a callout that waits to *hear* the touchdown never comes |
 | pad alert + haptic inside the same composable | already ported as `PadAlertAnnouncer` | not re-ported; it moved to `RootView` with the rest of the voice earlier the same day |
 
 **Three things worth knowing before touching it:**
@@ -1758,7 +1758,7 @@ does not re-derive the version that failed:
 - occupancy excludes the connected locator **by identity**, not by channel;
 - a **miss is target-aware** — with a target named, finding somebody else is still a miss;
 - **widening is offered after any *completed* short run**, not only a missed one, and
-  never after a cancelled one;
+  never after a canceled one;
 - a queued command **ends** a sweep rather than waiting behind it, which is why
   `ChannelSurveyStatus.Cancelled` exists and must not be folded into `RefusedBusy`;
 - the version stamp is a **resource**, not a compile-time constant.
@@ -1769,8 +1769,8 @@ does not re-derive the version that failed:
 Android's `WireLayoutTest.kt` does — a total-size assertion cannot catch a field-order
 mistake, and both new messages carry adjacent same-width fields where one could hide.
 The survey change is **breaking in both directions**, because the app frames that message
-by exact length before checking its CRC: an app on 84 desynchronises against new firmware
-and an app on 104 desynchronises against old firmware. A decode test builds the 104-byte
+by exact length before checking its CRC: an app on 84 desynchronizes against new firmware
+and an app on 104 desynchronizes against old firmware. A decode test builds the 104-byte
 frame at the firmware's offsets and a second one truncates it to 84 to prove an older
 receiver still reads, with the ids simply absent.
 
@@ -1827,7 +1827,7 @@ channels survive the 16-channel cap, and in what order, can differ between two r
 identical stored state. With more than 14 remembered locators that changes which channels
 are actually searched. **iOS diverges here**: `searchCandidates` sorts the other locators'
 channels by id, so the list is reproducible. This is a small, deliberate divergence in
-favour of determinism and it is recorded here rather than left silent.
+favor of determinism and it is recorded here rather than left silent.
 
 **3. Not a bug, checked and cleared.** `Run.suspectChannels` filters the non-best hits
 with `!==` (reference identity) rather than `!=`. That reads like a mistake and is not:
@@ -1839,7 +1839,7 @@ at most once per run, and that assumption is now written at the call site.
 #### ✅ ANDROID OWED THESE — all five closed, rows 1–4 on 2026-08-30 and row 5 on 2026-09-04
 
 **The canonical list.** Recorded at fschroer's instruction (2026-08-29). Each is an
-explicit, authorised exception to "Android is the reference implementation", taken because
+explicit, authorized exception to "Android is the reference implementation", taken because
 the defect was reached from the phone during flight-test prep. Rows 1–4 were re-verified
 against the Android source on 2026-08-29 at the line cited; row 5 was added 2026-09-02.
 
@@ -1981,13 +1981,13 @@ Android side: `ChannelOccupancy.kt`, `CommunicationScreen.kt` (both call sites p
 
 #### ✅ CLOSED 2026-09-01 — the armed refusal was only reachable by pressing
 
-Android greys both scan buttons while the locator is armed or flying and shows the reason
+Android grays both scan buttons while the locator is armed or flying and shows the reason
 above them (2026-08-30); iOS offered the buttons and surfaced the refusal only after a
 press. `LinkViewModel.locatorArmedOrFlying` now carries the receiver's condition and sits
 directly beside `isInFlight`, which is the only way the difference between them stays
 visible. Mirror the **receiver's** condition — armed, or a flight state that is neither
 `waitingLaunch` nor `landed` — not the flight panel's "in flight", which counts `landed` as
-flying and would grey out a scan the receiver would have run. The receiver's gate stays the
+flying and would gray out a scan the receiver would have run. The receiver's gate stays the
 real one; this is an affordance.
 
 #### ✅ CLOSED 2026-09-01 — a scan's silence read as a missing locator
@@ -2076,13 +2076,13 @@ condition does not distinguish two opposite failures.** Landed on Android and in
 receiver firmware 2026-08-30 and then **bench-validated across four passes, which changed
 the design four times** — read [ADR-0011](../../Locator/docs/adr/0011-locator-lora-channel-from-app.md)'s
 amendment *"revert on evidence, not on silence"* before writing anything. This is a
-behaviour change, not a transliteration, and every correction below came from hardware
+behavior change, not a transliteration, and every correction below came from hardware
 rather than from review.
 
 **Updated 2026-08-30 after issue #20 closed.** An earlier version of this entry described
 the first cut. Do not port that; port what is here.
 
-The short form. There is no acknowledgement message — a move is confirmed by inference from
+The short form. There is no acknowledgment message — a move is confirmed by inference from
 the next `PreLaunchData` relayed on the new channel. So what goes missing on a "failed" move
 is a *broadcast*, and two states produce the same silence: the locator missed the command
 and stayed behind while the receiver followed (a real split), or everything moved and the
@@ -2158,7 +2158,7 @@ claim the receiver is somewhere the app has not read.**
 - *"the receiver is on channel N"* — must name the channel actually **reported**, not the one
   aimed at. When the forward never transmitted the receiver never left, and the message named
   the wrong one.
-- **"Nothing moved" deserves its own sentence, in ordinary text and not error colour**:
+- **"Nothing moved" deserves its own sentence, in ordinary text and not error color**:
   *"The locator did not respond, so nothing was moved. The receiver is still on channel N —
   power the locator up and the link should resume."* That is a much smaller problem than a
   stranded locator and the user should not have to work out which they have.
@@ -2203,7 +2203,7 @@ live side is `ChannelMoveLiveOps` in `LinkViewModel`, which replaced `recoverLoc
 (`channelMoveReceipt`), the hard deadline in `waitForLocatorConfig`, the separated banner
 channel and the five `ChannelMove.message` sentences all landed with it.
 
-Two mapping notes, neither a behaviour change: times are `Date`/`TimeInterval` where
+Two mapping notes, neither a behavior change: times are `Date`/`TimeInterval` where
 Android uses epoch milliseconds, so "no receipt" is `nil` rather than `0`; and iOS polls
 for the probe's terminator on a 100 ms loop where Android suspends on
 `locatorSearch.first { … }`, because there is no flow to await.
@@ -2306,9 +2306,9 @@ reports the failure rather than `Sent`. The protocol deliberately does **not** m
 `@discardableResult` — the compiler never complained about the 17 discards, and this is the
 one place that can.
 
-**Arm/disarm departs from Android's shape, not its behaviour.** Android sets
+**Arm/disarm departs from Android's shape, not its behavior.** Android sets
 `locatorArmedMessageState = SendFailure`; iOS carries arm state as `armCommandPending`, so
-the equivalent is to not blink for an acknowledgement that cannot come, and to say so via
+the equivalent is to not blink for an acknowledgment that cannot come, and to say so via
 `transientMessage`.
 
 **The deployment-test path was left alone, deliberately.** The list above named it, but
@@ -2333,7 +2333,7 @@ divergences Android should adopt:
 
 Android arms a **channel-change recognition cycle** before a receiver-only channel move
 (`beginChannelChangeRecognition`, ADR-0011): the next `PreLaunchData` on the new channel
-is recognised, challenged for a password, or the channel is reverted. That is what makes
+is recognized, challenged for a password, or the channel is reverted. That is what makes
 applying a pick immediately safe rather than reckless, and it also feeds
 `searchCandidates`'s `attemptedChannel` with `channelChangePreviousChannel`.
 
@@ -2363,7 +2363,7 @@ never showed this:
 - an unauthorized locator on the new channel is challenged with the `.channelChange`
   trigger, which asks even while something is connected and even for a locator declined
   before, and does **not** also raise the conflict banner — the user chose this channel;
-- cancelling that challenge **reverts** the receiver, since it is the only way back;
+- canceling that challenge **reverts** the receiver, since it is the only way back;
   `PasswordChallengeView` labels it "Cancel" rather than "Not now" in that case, mirroring
   Android's `cancel`/`dismiss` split;
 - `searchCandidates` feeds the channel we came from as the attempted channel while the
@@ -2456,23 +2456,23 @@ Two smaller changes went with it, both because a revert is destructive:
 
 #### Flight-map parity closed 2026-08-29, at fschroer's request
 
-**The distance row is coloured by the locator's GPS health**, as Android colours it —
-`gpsStatus == Ok ? default : error`. The colour tracks the **sensor, not the value**,
+**The distance row is colored by the locator's GPS health**, as Android colors it —
+`gpsStatus == Ok ? default : error`. The color tracks the **sensor, not the value**,
 which is why it applies to "Unknown" exactly as to a number: "Unknown" in the normal
-colour is the app declining to quote a figure from a healthy receiver, and "Unknown" in
+color is the app declining to quote a figure from a healthy receiver, and "Unknown" in
 red is the GPS itself being unwell. Nil reads as healthy, matching Android's
 `RocketState.gpsStatus` default of `Ok` before any broadcast.
 
 **The coordinate row's map link is gated the way Android gates it.** It was previously
-always drawn in the secondary colour with a tap that silently no-opped at 0,0. Now it is
+always drawn in the secondary color with a tap that silently no-opped at 0,0. Now it is
 rendered only for a valid coordinate (`validCoordinate`, Android's `validLatLng`:
 finite, in range, not the 0,0 a locator reports before it has a fix), it is tappable only
 when the position is one the app stands behind — ADR-0022/0023, `vector != nil`, Android's
 `locatorDistancePlausible` — and the underline that says so is **absent when the tap is
 not offered**, so it never invites a press that does nothing. Handing an implausible
-position to a navigation app would walk straight past the judgement that refused to quote
-a distance for it, literally. The row is drawn in the panel's normal colour either way,
-as Android leaves it, signalling with the underline alone.
+position to a navigation app would walk straight past the judgment that refused to quote
+a distance for it, literally. The row is drawn in the panel's normal color either way,
+as Android leaves it, signaling with the underline alone.
 
 One deliberate simplification: Android probes `PackageManager` for a `geo:` handler and
 toasts when there is none. On iOS `https://maps.apple.com/…` resolves to Apple Maps when
@@ -2495,12 +2495,12 @@ of screens by the route this app's navigation actually takes.
 
 #### Not reachable from a test, on either platform
 
-The 2026-08-28 UI changes — help popups, the button layout, the centred Connected label,
+The 2026-08-28 UI changes — help popups, the button layout, the centered Connected label,
 the dropdown — are unverified beyond fschroer's own passes on Android, where three layout
 regressions were caught by eye rather than by any test. The iOS screen was driven on the
 simulator against a seeded run (a locator reported on two channels, one flagged, plus a
 second rocket) and the wrapping search row, the aligned Connect column, the RSSI/SNR
-colour scales, the false-hit marker and the help alert all render correctly. **No frame
+color scales, the false-hit marker and the help alert all render correctly. **No frame
 has been exchanged with hardware**, and per `steam-pigeon-ios` practice the simulator
 cannot speak for iOS 16 or for Bluetooth.
 
@@ -2539,7 +2539,7 @@ because a dropout mid-recovery is the case this log exists to capture.
 
 #### ✅ FIXED ON BOTH 2026-09-01 — the log list was not "newest first" with more than one locator
 
-Found on the iOS simulator with two injected logs, and **it was Android's behaviour, not a
+Found on the iOS simulator with two injected logs, and **it was Android's behavior, not a
 port defect**: `FlightLogStore.list` sorted `sortedByDescending { it.name }`, and the name is
 `<locator>_<date>_<time>`, so the sort was locator-major. `Twist_Lock_5` from yesterday
 listed above `Kestrel` from today. The Kotlin doc comment directly above it claimed ordering
@@ -2631,7 +2631,7 @@ one feature per quad, which took the archived case from +230 MB to **+149 MB** (
 
 It is free of visual consequence, and that is checkable rather than hopeful:
 `fill-extrusion-height` is constant per feature, so the wall's top edge is **already** a
-staircase quantised to the riser — quads sharing a rounded height were always going to draw
+staircase quantized to the riser — quads sharing a rounded height were always going to draw
 at the same height. Rounding to `curtainTargetRiserM` is the conservative choice, never
 coarser than the step the curtain already took. Confirmed by eye against the ungrouped
 build: identical.
@@ -2726,7 +2726,7 @@ control-column button that appears only once a record exists — cyan when engag
 Android's `COLOR_ARCHIVED_ACTIVE`, which is the same cyan the one-second markers use because
 both mean "this came off the archive". The archived track **substitutes** for the live one
 rather than overlaying it: they are the same quantity measured two ways (EKF vs raw GPS), so
-drawing both in one colour would read as a single noisy path rather than two estimates.
+drawing both in one color would read as a single noisy path rather than two estimates.
 
 **The conversion is the part that fails silently.** The archive stores position in radians
 and the live path is in degrees; treating one as the other puts a Seattle-area flight at
@@ -2797,10 +2797,10 @@ apogee and **no date**, and yields no path at all.
 
 Reported from the phone: *"iOS only draws a flat green line instead of orange stacked
 columns, and there are no 1s lines."* All three observations were one gap — iOS drew the
-ground track and nothing else — plus a colour that was wrong on its own.
+ground track and nothing else — plus a color that was wrong on its own.
 
 **What was actually there.** `upsertLine(… colour: RocketMarkerState.live.color, width: 2)`.
-That is the *marker's* green, so the track was drawn in the colour that means "the fix is
+That is the *marker's* green, so the track was drawn in the color that means "the fix is
 live" — Android's path is `COLOR_PATH`, orange `#FF6600`, at width 8 with round caps and
 joins. Neither the altitude curtain nor the one-second markers existed at all.
 
@@ -2818,7 +2818,7 @@ need a file-format change when they landed; that turned out to be right.
   a plain Catmull-Rom overshoots at a sharp extremum, and the sharpest feature in a flight
   profile is apogee: it would draw the rocket higher than it ever flew, and a reader
   measuring apogee off the curtain would get a number no sensor produced. Position uses
-  ordinary Catmull-Rom, where overshoot is sub-metre and monotone limiting would flatten
+  ordinary Catmull-Rom, where overshoot is sub-meter and monotone limiting would flatten
   genuine curvature in a turn.
 - `altitudeCurtain` — one extruded quad per sub-segment, split by **altitude change** rather
   than a fixed count, with Android's 0.25 m target riser and its deliberately-high 20 000
@@ -2839,7 +2839,7 @@ three-column row it came from.
 **Verification.** Android's three geometry suites ported case for case — `PathSplineTests`
 (10), `AltitudeCurtainTests` (15), `SecondMarkersTests` (15) — including the two that hold
 the important lines: the curve never rises above recorded apogee, and the wall is
-perpendicular to its segment in metres rather than degrees. Then exercised on the simulator
+perpendicular to its segment in meters rather than degrees. Then exercised on the simulator
 against an injected 450 m flight: the orange curtain, the orange ground line and the cyan
 posts all render, tilted. **✅ Confirmed on hardware 2026-09-02 (fschroer)** — the path
 draws on a device from a real track.
@@ -2855,7 +2855,7 @@ Ordered so each step is verifiable and the highest-value gaps close first.
 
 1. **Theme + fonts.** Bundle Poppins/Roboto/Roboto Mono, port the Material 3 dark
    palette to SwiftUI tokens. Cheap, and everything after inherits it.
-2. **Main-screen instrumentation.** `LocatorStats`, link-quality colour bands, scale
+2. **Main-screen instrumentation.** `LocatorStats`, link-quality color bands, scale
    bar, velocity gauge. This is what the user looks at during a flight.
 3. **Heading-up map rotation** with the smoothing Android applies, suppressed while
    compass trust is `unreliable`.

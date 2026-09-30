@@ -56,7 +56,7 @@ The **Android source to port from** is `../rocket-flight-manager` (Kotlin/Compos
   2026-08-20)** and the source of every defect reported off the phone in this port.
 
   Three failure modes, named because they do not look alike from the inside:
-  - **Assuming behaviour.** Defaults, ordering, tint rules, thresholds and gesture
+  - **Assuming behavior.** Defaults, ordering, tint rules, thresholds and gesture
     handling are requirements to port, not incidental detail. A `mutableStateOf(true)` is
     a requirement. A control on Android and not here is a defect, not a simplification.
   - **Building to iOS idiom.** Walk the composable top to bottom and mirror its
@@ -67,7 +67,7 @@ The **Android source to port from** is `../rocket-flight-manager` (Kotlin/Compos
     bold". Nothing in the Android app is bold except one glyph. When a change feels like
     taste rather than a port, it is a divergence.
 
-  **ADR-0016's sanctioned departures are not a general licence.** That list covers
+  **ADR-0016's sanctioned departures are not a general license.** That list covers
   controls that look *broken* when imitated (a Material clone of an iOS switch). It does
   not cover reaching for a different control because it is more idiomatic. If a departure
   is not on that list, it needs a reason from the ADR — and it goes in
@@ -103,3 +103,9 @@ The **Android source to port from** is `../rocket-flight-manager` (Kotlin/Compos
 - The map is MapLibre (same style JSON as Android); tile-provider licensing for release is
   an open blocker (issue #26) — applies to both platforms.
 - Never commit secret tokens; scan `git diff --cached` for `sk.`/`pk.`/`AIza`.
+
+## Spelling
+
+US English in docs, UI strings, spoken and accessibility text, comments and commit messages
+(meter, color, center, gray, canceled, initialize). Never respell an identifier. The full rule
+is in `C:\STM32_Projects\Locator\CLAUDE.md` ("Spelling: US English").

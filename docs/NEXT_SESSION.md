@@ -34,9 +34,9 @@ twice.
 - **A changed password no longer bricks the connection.** Reproduced first: the app went
   permanently deaf to the locator, could not prompt, and showed a conflict banner calling
   the connected locator "another locator". ~~**Android still has this**~~ — fixed on iOS
-  first as an authorised exception, since there was no way out inside the app, and
+  first as an authorized exception, since there was no way out inside the app, and
   **closed on Android 2026-08-30 (`cbb3cd3`)**. See `UI_PARITY.md` → "Android notes".
-- **Distance row colour** now follows the locator's GPS health, and the **coordinate map
+- **Distance row color** now follows the locator's GPS health, and the **coordinate map
   link** is gated on a position the app stands behind, with the underline present only
   when the tap is offered — both Android's logic.
 - **The screen is held awake on the main screen**, scoped to "no sheet is up", which is
@@ -205,7 +205,7 @@ merely closer to hand.
 Every defect fschroer reported in this session came from breaking that, and they came in
 three flavours worth naming because they do not look alike from the inside:
 
-1. **Assuming behaviour.** Three map controls shipped defaulting off because four lines
+1. **Assuming behavior.** Three map controls shipped defaulting off because four lines
    of `mutableStateOf(true)` went unread. The gesture backoff that makes Android's map
    usable was absent and reached the user as three unrelated-looking bugs.
 2. **Building to iOS idiom.** The settings screens were written as a SwiftUI `Form` of
@@ -219,8 +219,8 @@ three flavours worth naming because they do not look alike from the inside:
 
 **On ADR-0016's sanctioned departures.** That list permits "SwiftUI switches, pickers and
 steppers rather than Material clones", and I leaned on it wrongly. It covers controls
-that look *broken* when imitated. A bordered, labelled text box is not one. The list is
-not a licence to reach for a different control whenever one is handier.
+that look *broken* when imitated. A bordered, labeled text box is not one. The list is
+not a license to reach for a different control whenever one is handier.
 
 **Order matters too.** Locator Settings puts the four deployment channels first and the
 identity fields last — odd for a form, correct for a screen whose channels change between
@@ -235,7 +235,7 @@ structure before writing anything.
   only the family, so weights come from the M3 scale — Regular or Medium, never Bold. Each
   family registers only Regular and Bold, so a Medium (W500) request resolves to W400.
   The only bold text in the app is the "∞" compass-calibration glyph. If something wants
-  emphasis, the answer is size or colour.
+  emphasis, the answer is size or color.
 - **Two broadcasts, three categories of field.** The locator stops sending `PreLaunchData`
   the moment it is armed. Before adding any field read off a broadcast, decide which it
   is: carried by BOTH (newest wins — `LinkViewModel.newest`), telemetry-only (keeps its
@@ -244,7 +244,7 @@ structure before writing anything.
   `UI_PARITY.md`.
 - **Enum labels are Android's case names** — `DroguePrimary`, not "Drogue Primary".
   Android renders `enumValue.name`.
-- **Colour on the status panel is a rule, not a palette choice.** The rocket glyph is
+- **Color on the status panel is a rule, not a palette choice.** The rocket glyph is
   green when armed and white when not (`MapStatusPanel.rocketTint`), and it is the only
   thing on the map that says so. Tinting it by GPS health looked reasonable and said
   nothing — reported off the phone 2026-08-23.
@@ -269,9 +269,9 @@ labels under the same icon. iOS needs no change. Details in `docs/UI_PARITY.md` 
 
 **The download picker's opening camera.** fschroer asked for it on iOS first
 (2026-08-21): open on the **phone's current position at a multi-state zoom (z5)**,
-applied once when a fix first arrives, cancelled by picking a preset or typing a
+applied once when a fix first arrives, canceled by picking a preset or typing a
 coordinate, and no invented fallback when there is no fix. Android sets no opening camera
-at all today. The full rule set is in `docs/UI_PARITY.md` under "iOS-FIRST behaviour" —
+at all today. The full rule set is in `docs/UI_PARITY.md` under "iOS-FIRST behavior" —
 written as a description precisely so the Android change does not require reading Swift.
 
 **Naming a locator that is armed at cold start.** An armed locator broadcasts
@@ -284,7 +284,7 @@ this on 2026-08-21 after seeing the blank row on the phone. Written up in
 `docs/UI_PARITY.md` under "Naming a locator heard only while armed"; the Android change
 is one call beside `rememberLocator`.
 
-The download camera and this are the only behaviours in the port that landed here first,
+The download camera and this are the only behaviors in the port that landed here first,
 and both were asked for. The standing rule is still Android-first.
 
 ## Where the port stands
@@ -385,14 +385,14 @@ all recorded in `UI_PARITY.md` → "Heads-up sight (landscape)":
   this round.** The clue was that a two-finger rotate plus the five-second timeout cured
   it: seeding the filter is what a gesture does, and `CameraFilter.tick` returns nil until
   it is seeded. All three seed sites were conditional — a gesture, a recentre tap, and the
-  initial centre, which fires **only while the rocket has no fix** — so a map built while a
-  locator is already reporting was never seeded, and auto-centre, auto-zoom, tilt and
+  initial center, which fires **only while the rocket has no fix** — so a map built while a
+  locator is already reporting was never seeded, and auto-center, auto-zoom, tilt and
   heading-up were dead together. **That also means opening the app at the pad with the
   locator already broadcasting**, which is nothing to do with the camera work and is the
   more serious half. `tickCamera` now seeds from the live camera on its first frame;
   Android needs no equivalent because its filter starts at concrete values and always
   ticks.
-- **Corrected while summarising: the AR marker's gate was missing the compass term.** It
+- **Corrected while summarizing: the AR marker's gate was missing the compass term.** It
   read `vector != nil` alone, on the assumption that a suppressed vector carried ADR-0023's
   compass test too; it does not — the vector is published under an unreliable compass
   because the map only quotes a distance from it. Now `vector != nil && compassTrust !=
@@ -422,7 +422,7 @@ all recorded in `UI_PARITY.md` → "Heads-up sight (landscape)":
   stepped motion**. The ∞ mark clearing follows from the marker drawing at all, since the
   gate refuses to draw at `.unreliable`, but nobody has said so directly.
 - **What the sight still owes a phone:** deflection per degree beside Android. Aiming at
-  the rocket tests the zero point; the scale only shows itself with the rocket off-centre,
+  the rocket tests the zero point; the scale only shows itself with the rocket off-center,
   so it wants a side-by-side rather than another solo run.
 
 **Features remaining:**
@@ -518,7 +518,7 @@ decision.
    **Fixed on Android 2026-08-21 (`5d52383`) and ported here 2026-08-23.** The gutter,
    not the text size: `CHART_MARGIN_X` 64 → 112 px, plus a clamp so a label too wide for
    it butts against the plot instead of losing a character. Still **unseen on a device on
-   either platform** — it is a legibility judgement, and the gutter is space taken from
+   either platform** — it is a legibility judgment, and the gutter is space taken from
    the plot, so it wants fschroer's eye on a flight with 3- and 4-digit altitudes.
 
 4. **The escalated pad-alert banner** wraps to five lines at 57 pt and runs under the
