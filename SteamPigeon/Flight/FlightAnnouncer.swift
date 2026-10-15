@@ -316,13 +316,14 @@ struct FlightAnnouncer {
             if s.flightState.rawValue >= FlightStates.droguePrimaryEvent.rawValue,
                !drogueDeploySpoken, s.drogueDeployDetected {
                 drogueDeploySpoken = true
-                lines.append(.routine("Drogue deployed."))
+                // "Opening detected", not "deployed" (#54) — see Android FlightMapScreen.
+                lines.append(.routine("Drogue opening detected."))
             }
             if s.flightState.rawValue >= FlightStates.mainPrimaryEvent.rawValue,
                !mainDeploySpoken, s.mainDeployDetected {
                 mainDeploySpoken = true
                 drogueDeploySpoken = true
-                lines.append(.routine("Main deployed."))
+                lines.append(.routine("Main opening detected."))
             }
         }
         return lines

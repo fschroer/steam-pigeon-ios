@@ -290,7 +290,7 @@ final class FlightAnnouncerTests: XCTestCase {
         var a = FlightAnnouncer()
         a.pollingStarted()
         _ = a.flightStateChanged(sample(.launched, position: pad))
-        XCTAssertEqual(["Main deployed."],
+        XCTAssertEqual(["Main opening detected."],
                        texts(a.poll(sample(.mainPrimaryEvent, aglM: 500, mainDetected: true))))
         _ = a.flightStateChanged(sample(.landed, position: downrange))
         XCTAssertEqual([], texts(a.poll(sample(.landed, aglM: 0, mainDetected: true))))
