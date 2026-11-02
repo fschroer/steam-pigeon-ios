@@ -35,6 +35,23 @@ listed the missing background as outstanding rather than as a defect. The whole 
 scales and tap-to-zoom. See the audit below. **None of it has been on hardware**, and the
 simulator can show almost none of it: it has neither a camera nor a compass.
 
+#### ⏳ iOS OWES THIS — open (2026-11-02)
+
+Recorded at fschroer's instruction (2026-11-02): step 4 of locator ADR "The radio
+download becomes the primary data path" (ADR-0040) is **parked here as owed work**, not
+under way. Android landed steps 2 and 3 on branch `claude/project-thread-308ix0`
+(`rocket-flight-manager` `b3b3b4e`, `0341831`, `725e74f`); none of it has been compiled or
+run on hardware there yet, which is a reason to let Android settle on the Pixel first.
+
+| # | iOS owes | Android source to port | What closes it |
+|---|---|---|---|
+| 1 | **The background full-record transfer over the radio**, and its UI: the Transfer/Stop button, the status line, the partial view, "waiting its turn", phone → cloud → locator history, the two trigger checkboxes | `data/fullrecord/` (codec, assembler, store, CSV, controller), `FullRecordHub`, the rows in `FlightProfilesScreen` and `AppSettingsScreen` | The pure-Kotlin package ported with `FullRecordCodecTest`, `FullRecordTransferTest` and `SerialFramesTest`'s non-cable vectors, against the same `sender_fixture.bin`; then the UI rows listed in "Full-record transfer and cloud backup" below; background via CoreBluetooth restoration, as the iOS-port ADR allows |
+| 2 | **Cloud backup**: Firebase Auth and Storage upload, under the same `users/{uid}/locators/…` paths | `FirebaseCloud.kt`, `CloudAccountSection.kt` | Same storage layout and rules; sign-in adds Sign in with Apple (ADR-0040 decision 8) |
+
+Not owed: the USB-cable path (decision 6c). iOS allows no generic USB serial device
+without MFi, so that row below is a permanent difference. Each row is struck through here
+when it lands, the way the lists below were.
+
 **Update, 2026-09-01. The "iOS OWES THIS" list is empty.** All seven items closed in one
 pass against the Android source: the two `ChannelOccupancy` fixes, the armed-scan
 affordance, the scan notice on the status panel, the survey section's gate,

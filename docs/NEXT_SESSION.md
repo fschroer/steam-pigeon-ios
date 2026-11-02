@@ -3,6 +3,12 @@
 Updated 2026-09-02. **850 tests passing**, clean build with no warnings from our own
 sources.
 
+## 2026-11-02 — ADR-0040 step 4 is on the "iOS OWES THIS" list, not started
+
+fschroer parked the iOS port of the full-record transfer and cloud backup as owed parity
+work. The list, with the Android source for each row and what closes it, is at the top of
+`docs/UI_PARITY.md`. The USB-cable transfer is Android-only for good and is not on it.
+
 ## 2026-08-31 — Android gained a screen: App Flight Logs (NOT ported)
 
 The first new Android screen since 2026-08-21, so the standing "every Android screen is
