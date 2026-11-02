@@ -134,6 +134,9 @@ enum WireProtocol {
     /// `sizeof(FullRecordPacketHeader)`; the payload follows, `payload_len` bytes.
     static let fullRecordPacketHeaderSize = 25
     static let fullRecordPayloadCapacity = 230
+    /// A parity frame always carries the whole payload buffer (its payload_len is
+    /// an XOR of its members' lengths), so it is a fixed 25 + 230 = 255 B.
+    static let fullRecordParitySize = fullRecordPacketHeaderSize + fullRecordPayloadCapacity
     static let fullRecordOffsetRecordCrc = 6
     static let fullRecordOffsetTotalSamples = 10
     static let fullRecordOffsetPage = 14

@@ -166,6 +166,28 @@ auto-zoom and auto-center with deadbands; tilt from device pitch; keep-screen-on
 The three font families ship as `.ttf` in `res/font/` and can be bundled on iOS
 unchanged, which is the cheapest large step toward "looks like the same app".
 
+## Full-record transfer and cloud backup — Android only (2026-11-02)
+
+Locator ADR "The radio download becomes the primary data path" step 2 landed on
+Android (`rocket-flight-manager`, branch `claude/project-thread-308ix0`). **None of it
+is on iOS yet**; the port is step 4 of that ADR's build order. Recorded here because
+every item below is UI the two apps now differ by.
+
+| Android | Where | iOS today |
+|---|---|---|
+| **Transfer new flight data** / **Stop transfer** button, beside **Return** under the record list | `FlightProfilesScreen` | absent |
+| One status line above it: waiting, reading the list, "Transferring flight N of M: P%", finished | `FlightProfilesScreen` | absent |
+| A record selected while the transfer works on another shows "waiting its turn"; the one being transferred charts what has arrived and grows | `FlightProfilesScreen` | absent; iOS always starts the quick-look download |
+| A record already on the phone, or in the cloud when signed in, charts without touching the locator | `FlightProfilesScreen` | absent |
+| Two checkbox rows, **Transfer when the signal is strong** and **Transfer when the rocket is picked up**, each with a one-line summary, after **Enable Speech** | `AppSettingsScreen` | absent |
+| **Cloud backup of flight data**: email + password fields, Sign in / Create account / Sign in with Google, or "Signed in as …" with the upload count and Sign out | `AppSettingsScreen` (`CloudAccountSection`) | absent; iOS will add Sign in with Apple (ADR decision 8) |
+| Progress in the foreground-service notification | `BluetoothService` | no equivalent surface; iOS background BLE has no persistent notification |
+
+What closes it: the iOS port of the pure-Kotlin `data/fullrecord/` package (codec,
+assembler, store, controller — port `FullRecordCodecTest` and `FullRecordTransferTest`
+with the same `sender_fixture.bin`), then the same three screens' rows. USB serial
+(ADR decision 6c) will stay Android-only for good; record it here when it lands.
+
 ## Flight map — line-by-line audit against `FlightMapScreen.kt` (2026-08-20)
 
 > **2026-09-02, read this first if you are touching the camera:** the per-frame filter was

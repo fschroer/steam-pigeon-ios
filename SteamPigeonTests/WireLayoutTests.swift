@@ -416,9 +416,12 @@ final class WireLayoutTests: XCTestCase {
         header[1] = MsgType.fullRecordData.rawValue
         header[WireProtocol.fullRecordOffsetPayloadLen] = 200
         XCTAssertEqual(.known(225), PacketFramer.expectedPacketLength(header))
-        header[1] = MsgType.fullRecordParity.rawValue
-        XCTAssertEqual(.known(225), PacketFramer.expectedPacketLength(header))
         XCTAssertEqual(.needMoreBytes, PacketFramer.expectedPacketLength(Array(header.prefix(20))))
+        // Parity's payload_len is an XOR of its members' lengths, so it is never
+        // read: the frame is always the full 255 B.
+        header[1] = MsgType.fullRecordParity.rawValue
+        XCTAssertEqual(.known(255), PacketFramer.expectedPacketLength(header))
+        XCTAssertEqual(255, WireProtocol.fullRecordParitySize)
     }
 
     func testFullRecordRequestAndAckAreNotFramed() {
