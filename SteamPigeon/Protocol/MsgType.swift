@@ -16,6 +16,7 @@ import Foundation
 /// |---|---|---|---|
 /// | `startup` (0)            | yes | yes | **absent** |
 /// | 1–14, 17–22              | yes | yes | yes |
+/// | 26–29 (full record)      | yes | yes | yes |
 /// | `receiverInfo*` (15, 16) | **absent** | yes | yes |
 ///
 /// Both gaps are defensible: 15/16 are app↔receiver only, so the locator has no use
@@ -107,4 +108,18 @@ enum MsgType: UInt8, CaseIterable {
     /// a cancel. A new type leaves that path untouched: old firmware fails this frame's
     /// CRC, resets, and keeps sweeping.
     case channelSurveyCancelRequest = 25
+
+    // Paged, bit-exact full-record transfer (locator ADR "The radio download becomes
+    // the primary data path"). Layouts in `WireProtocol.fullRecord*`. The two
+    // locator→app types are framed now; the background transfer that sends the
+    // requests and handles the packets is not ported yet (Android lands it first).
+
+    /// App→locator: send page N of a record (`0xFFFF` stops). Addressed.
+    case fullRecordRequest = 26
+    /// Locator→app: one packet of a page; 25-byte header, then `payload_len` bytes.
+    case fullRecordData = 27
+    /// Locator→app: XOR of up to four data packets of the page, same layout.
+    case fullRecordParity = 28
+    /// App→locator: bitmap of the page's packets received. Addressed.
+    case fullRecordAck = 29
 }

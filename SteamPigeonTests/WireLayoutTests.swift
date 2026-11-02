@@ -366,6 +366,75 @@ final class WireLayoutTests: XCTestCase {
         XCTAssertEqual(256, WireProtocol.maxPacketSize)
     }
 
+    // MARK: - Paged full-record transfer
+    //
+    // Firmware: static_assert(sizeof(FullRecordRequest) == 14), (FullRecordPacketHeader
+    // == 25), (kFullRecordPayloadSize == 230), (FullRecordAck == 50), plus offsetof for
+    // every header field. Android's WireLayoutTest.kt pins the same values.
+
+    func testFullRecordMessageTypeValues() {
+        XCTAssertEqual(26, MsgType.fullRecordRequest.rawValue)
+        XCTAssertEqual(27, MsgType.fullRecordData.rawValue)
+        XCTAssertEqual(28, MsgType.fullRecordParity.rawValue)
+        XCTAssertEqual(29, MsgType.fullRecordAck.rawValue)
+    }
+
+    func testFullRecordRequestAndAckSizes() {
+        XCTAssertEqual(14, WireProtocol.fullRecordRequestSize)
+        XCTAssertEqual(WireProtocol.fullRecordRequestSize,
+                       WireProtocol.headerSize + WireProtocol.targetLocatorIdSize + 2 + 1 + 1)
+        XCTAssertEqual(50, WireProtocol.fullRecordAckSize)
+        XCTAssertEqual(WireProtocol.fullRecordAckSize,
+                       WireProtocol.headerSize + WireProtocol.targetLocatorIdSize + 4 + 2 + 2 + 32)
+    }
+
+    func testFullRecordPacketFillsOneLoRaFrame() {
+        XCTAssertEqual(25, WireProtocol.fullRecordPacketHeaderSize)
+        XCTAssertEqual(255, WireProtocol.fullRecordPacketHeaderSize + WireProtocol.fullRecordPayloadCapacity)
+    }
+
+    func testFullRecordHeaderOffsets() {
+        XCTAssertEqual(6, WireProtocol.fullRecordOffsetRecordCrc)
+        XCTAssertEqual(10, WireProtocol.fullRecordOffsetTotalSamples)
+        XCTAssertEqual(14, WireProtocol.fullRecordOffsetPage)
+        XCTAssertEqual(16, WireProtocol.fullRecordOffsetPacketCount)
+        XCTAssertEqual(18, WireProtocol.fullRecordOffsetPacketIndex)
+        XCTAssertEqual(19, WireProtocol.fullRecordOffsetParityMask)
+        XCTAssertEqual(20, WireProtocol.fullRecordOffsetFirstInPage)
+        XCTAssertEqual(22, WireProtocol.fullRecordOffsetSampleCount)
+        XCTAssertEqual(23, WireProtocol.fullRecordOffsetPayloadLen)
+        XCTAssertEqual(24, WireProtocol.fullRecordOffsetRecord)
+        XCTAssertEqual(512, WireProtocol.fullRecordSamplesPerPage)
+        XCTAssertEqual(0xFFFF, WireProtocol.fullRecordStopPage)
+    }
+
+    /// Framed from its own header before the CRC is checked, so a drift here would
+    /// desynchronize the stream, not fail a check.
+    func testFullRecordDataIsFramedFromItsPayloadLength() {
+        var header = [UInt8](repeating: 0, count: WireProtocol.fullRecordPacketHeaderSize)
+        header[0] = WireProtocol.systemId
+        header[1] = MsgType.fullRecordData.rawValue
+        header[WireProtocol.fullRecordOffsetPayloadLen] = 200
+        XCTAssertEqual(.known(225), PacketFramer.expectedPacketLength(header))
+        header[1] = MsgType.fullRecordParity.rawValue
+        XCTAssertEqual(.known(225), PacketFramer.expectedPacketLength(header))
+        XCTAssertEqual(.needMoreBytes, PacketFramer.expectedPacketLength(Array(header.prefix(20))))
+    }
+
+    func testFullRecordRequestAndAckAreNotFramed() {
+        var header = [UInt8](repeating: 0, count: WireProtocol.headerSize)
+        header[0] = WireProtocol.systemId
+        for t in [MsgType.fullRecordRequest, .fullRecordAck] {
+            header[1] = t.rawValue
+            XCTAssertEqual(.unframeable, PacketFramer.expectedPacketLength(header))
+        }
+    }
+
+    /// A spare bit, so `TelemetryData` keeps its size and every parser keeps working.
+    func testPickedUpBitIsSpare() {
+        XCTAssertEqual(0x80, WireProtocol.telemetryPickedUpBit)
+    }
+
     // ---------------------------------------------------------------------
     //  LocatorCfgChgRequest body — the one message the app builds byte by byte
     // ---------------------------------------------------------------------

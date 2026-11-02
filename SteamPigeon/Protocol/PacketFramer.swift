@@ -250,6 +250,13 @@ struct PacketFramer {
             // Parity frames always carry the full payload buffer → fixed size.
             return .known(FlightDataSizes.flightDataParitySize)
 
+        case .fullRecordData, .fullRecordParity:
+            // Variable-length, data and parity alike: the 25-byte header says how
+            // many payload bytes follow. Same rule as Android's framer.
+            guard bytes.count > WireProtocol.fullRecordOffsetPayloadLen else { return .needMoreBytes }
+            return .known(WireProtocol.fullRecordPacketHeaderSize
+                          + Int(bytes[WireProtocol.fullRecordOffsetPayloadLen]))
+
         // Types the app sends but never receives, plus `startup`, which the locator
         // does send. Android frames none of them and resyncs past them instead; the
         // CRC gate makes that correct, only slightly wasteful. Framing `startup`
@@ -258,7 +265,7 @@ struct PacketFramer {
              .disarmRequest, .flightMetadataRequest, .flightDataRequest, .flightDataAck,
              .deploymentTestRequest, .receiverInfoRequest, .versionRequest,
              .channelSurveyRequest, .channelSurveyCancelRequest, .padAlertSnoozeRequest,
-             .locatorSearchRequest:
+             .locatorSearchRequest, .fullRecordRequest, .fullRecordAck:
             return .unframeable
         }
     }
