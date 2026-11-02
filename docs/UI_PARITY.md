@@ -182,11 +182,13 @@ every item below is UI the two apps now differ by.
 | Two checkbox rows, **Transfer when the signal is strong** and **Transfer when the rocket is picked up**, each with a one-line summary, after **Enable Speech** | `AppSettingsScreen` | absent |
 | **Cloud backup of flight data**: email + password fields, Sign in / Create account / Sign in with Google, or "Signed in as …" with the upload count and Sign out | `AppSettingsScreen` (`CloudAccountSection`) | absent; iOS will add Sign in with Apple (ADR decision 8) |
 | Progress in the foreground-service notification | `BluetoothService` | no equivalent surface; iOS background BLE has no persistent notification |
+| **The same transfer over the locator's USB-C cable** (decision 6c, 2026-11-02): plugging in starts or takes over a run, and the status line says "over the USB cable" | `UsbLocatorLink`, `FullRecordHub`, `FlightProfilesScreen` | **absent for good**: iOS allows no generic USB serial device without Apple MFi certification. Nothing closes this one |
 
 What closes it: the iOS port of the pure-Kotlin `data/fullrecord/` package (codec,
 assembler, store, controller — port `FullRecordCodecTest` and `FullRecordTransferTest`
-with the same `sender_fixture.bin`), then the same three screens' rows. USB serial
-(ADR decision 6c) will stay Android-only for good; record it here when it lands.
+with the same `sender_fixture.bin`), then the same three screens' rows. The USB-cable
+row is the exception: it stays Android-only for good (ADR decision 6c), and an iOS
+port of the controller simply never calls `onCable`.
 
 ## Flight map — line-by-line audit against `FlightMapScreen.kt` (2026-08-20)
 
