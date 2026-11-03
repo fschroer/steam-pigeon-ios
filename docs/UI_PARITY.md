@@ -53,6 +53,17 @@ run on hardware there yet, which is a reason to let Android settle on the Pixel 
 | 3 | **The SimFlightRequest wire copy** (MsgType 30, 30 B), `kTelemetrySimulatedBit` 0x40 in `physical_deployment_stats`, and FlightEvents `flags` bit 0 (the byte at offset 7, formerly `reserved`), from locator ADR "An app-started simulated flight computed on the locator" (ADR-0041) | `data/SimFlightWire.kt`, the constants in `data/RocketState.kt`, `WireLayoutTest.kt`, `SimFlightWireTest.kt` | `WireLayoutTests.swift` pins the type, size and offsets; a ported `SimFlightWireTests` matches the same 20-byte hex vector. Until then iOS decodes everything correctly and just never labels a simulated flight, so a simulated flight reads as a real one there |
 | 4 | **The Simulated Flight screen**, in the drawer under the Flight Profiles / Locator Settings gate (heard and disarmed); Start behind a confirmation that waits for the simulated bit, an always-shown Stop; the SIMULATED line on the map banner, "Simulated." before every callout, and the "Simulated" label on the Flight Profiles chart | `ui/SimulatedFlightScreen.kt`, `AppNavigation.kt`, the drawer in `FlightMapScreen.kt`, `Announcer.kt`, `FlightProfilesScreen.kt`, the `sim_flight_*` strings | Port after the Android screen has run on the Pixel (`rocket-flight-manager` `c1d1333`, not compiled when written) |
 
+**Amended 2026-11-03 (ADR-0041 amendment: the flight is computed from the rocket).** Row 3
+now also owes **SimFlightStart** (MsgType 31, 196 B, every offset in the ADR's command
+table), `temp_c = -128` meaning "use the locator's barometer", and the 186-byte hex vector
+in `SimFlightWireTest.kt`; SimFlightRequest (30) is cancel-only. Row 4's screen is now the
+whole rocket. Row 5 is new. Sources: locator `72a022f`, `ddcea29`, `3f7e7dc`; receiver
+`2441f6f`; Android `d291019` (not compiled when written).
+
+| # | iOS owes | Android source to port | What closes it |
+|---|---|---|---|
+| 5 | **The rocket model behind the screen**: .eng/.rse parsing, 32-point thinning that keeps the impulse, Cd on the 8-point Mach grid (typed and spread, per point, or fitted from an OpenRocket CSV), the canopy calculator, the locator's range checks, saved rockets and the motor cache, the thrustcurve.org search and download, and the Tron Short 2.6 default | `data/simflight/` (`SimRocket.kt`, `SimFlightStore.kt`, `DefaultRocket.kt`), `SimRocketTest.kt` | The pure part ported with `SimRocketTest`'s vectors; storage in app-private files as Android does; the file pickers via `UIDocumentPickerViewController`. Port after the Android screen has run on the Pixel |
+
 Not owed: the USB-cable path (decision 6c). iOS allows no generic USB serial device
 without MFi, so that row below is a permanent difference. Each row is struck through here
 when it lands, the way the lists below were.
