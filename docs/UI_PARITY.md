@@ -54,7 +54,7 @@ run on hardware there yet, which is a reason to let Android settle on the Pixel 
 | 4 | **The Simulated Flight screen**, in the drawer under the Flight Profiles / Locator Settings gate (heard and disarmed); Start behind a confirmation that waits for the simulated bit, an always-shown Stop; the SIMULATED line on the map banner, "Simulated." before the first callout and the landing callout (`CalloutQueue.kt`, which also drops an altitude callout that would be spoken 2 s late, on every flight; port `CalloutQueueTest` with it), and the "Simulated" label on the Flight Profiles chart | `ui/SimulatedFlightScreen.kt`, `AppNavigation.kt`, the drawer in `FlightMapScreen.kt`, `Announcer.kt`, `FlightProfilesScreen.kt`, the `sim_flight_*` strings | Port after the Android screen has run on the Pixel (`rocket-flight-manager` `c1d1333`, not compiled when written) |
 
 **Amended 2026-11-03 (ADR-0041 amendment: the flight is computed from the rocket).** Row 3
-now also owes **SimFlightStart** (MsgType 31, 196 B, every offset in the ADR's command
+now also owes **SimFlightStart** (MsgType 31, 199 B since the stability-margin amendment: `length_mm` at 196, `stability_dcal` at 198, every offset in the ADR's command
 table), `temp_c = -128` meaning "use the locator's barometer", and the 186-byte hex vector
 in `SimFlightWireTest.kt`; SimFlightRequest (30) is cancel-only. Row 4's screen is now the
 whole rocket. Row 5 is new. Sources: locator `72a022f`, `ddcea29`, `3f7e7dc`; receiver
