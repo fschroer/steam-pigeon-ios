@@ -35,6 +35,41 @@ listed the missing background as outstanding rather than as a defect. The whole 
 scales and tap-to-zoom. See the audit below. **None of it has been on hardware**, and the
 simulator can show almost none of it: it has neither a camera nor a compass.
 
+#### ⏳ iOS OWES THIS — open (2026-11-02)
+
+Rows 3 and 4 were added the same day for the simulated flight (locator ADR-0041, locator
+`f7f8baf`, receiver `1ba84cf`, Android `c1d1333`).
+
+Recorded at fschroer's instruction (2026-11-02): step 4 of locator ADR "The radio
+download becomes the primary data path" (ADR-0040) is **parked here as owed work**, not
+under way. Android landed steps 2 and 3 on branch `claude/project-thread-308ix0`
+(`rocket-flight-manager` `b3b3b4e`, `0341831`, `725e74f`); none of it has been compiled or
+run on hardware there yet, which is a reason to let Android settle on the Pixel first.
+
+| # | iOS owes | Android source to port | What closes it |
+|---|---|---|---|
+| 1 | **The background full-record transfer over the radio**, and its UI: the Transfer/Stop button, the status line, the partial view, "waiting its turn", phone → cloud → locator history, the two trigger checkboxes | `data/fullrecord/` (codec, assembler, store, CSV, controller), `FullRecordHub`, the rows in `FlightProfilesScreen` and `AppSettingsScreen` | The pure-Kotlin package ported with `FullRecordCodecTest`, `FullRecordTransferTest` and `SerialFramesTest`'s non-cable vectors, against the same `sender_fixture.bin`; then the UI rows listed in "Full-record transfer and cloud backup" below; background via CoreBluetooth restoration, as the iOS-port ADR allows |
+| 2 | **Cloud backup**: Firebase Auth and Storage upload, under the same `users/{uid}/locators/…` paths | `FirebaseCloud.kt`, `CloudAccountSection.kt` | Same storage layout and rules; sign-in adds Sign in with Apple (ADR-0040 decision 8) |
+| 3 | **The SimFlightRequest wire copy** (MsgType 30, 30 B), `kTelemetrySimulatedBit` 0x40 in `physical_deployment_stats`, and FlightEvents `flags` bit 0 (the byte at offset 7, formerly `reserved`), from locator ADR "An app-started simulated flight computed on the locator" (ADR-0041) | `data/SimFlightWire.kt`, the constants in `data/RocketState.kt`, `WireLayoutTest.kt`, `SimFlightWireTest.kt` | `WireLayoutTests.swift` pins the type, size and offsets; a ported `SimFlightWireTests` matches the same 20-byte hex vector. Until then iOS decodes everything correctly and just never labels a simulated flight, so a simulated flight reads as a real one there |
+| 4 | **The Simulated Flight screen**, in the drawer under the Flight Profiles / Locator Settings gate (heard and disarmed); Start behind a confirmation that waits for the simulated bit, an always-shown Stop; the SIMULATED line on the map banner, "Simulated." before the first callout and the landing callout (`CalloutQueue.kt`, which also drops an altitude callout that would be spoken 2 s late, on every flight; port `CalloutQueueTest` with it), and the "Simulated" label on the Flight Profiles chart | `ui/SimulatedFlightScreen.kt`, `AppNavigation.kt`, the drawer in `FlightMapScreen.kt`, `Announcer.kt`, `FlightProfilesScreen.kt`, the `sim_flight_*` strings | Port after the Android screen has run on the Pixel (`rocket-flight-manager` `c1d1333`, not compiled when written) |
+
+**Amended 2026-11-03 (ADR-0041 amendment: the flight is computed from the rocket).** Row 3
+now also owes **SimFlightStart** (MsgType 31, 199 B since the stability-margin amendment: `length_mm` at 196, `stability_dcal` at 198, every offset in the ADR's command
+table), `temp_c = -128` meaning "use the locator's barometer", and the 186-byte hex vector
+in `SimFlightWireTest.kt`; SimFlightRequest (30) is cancel-only. Row 4's screen is now the
+whole rocket. Row 5 is new. Sources: locator `72a022f`, `ddcea29`, `3f7e7dc`; receiver
+`2441f6f`; Android `d291019` (not compiled when written).
+
+| # | iOS owes | Android source to port | What closes it |
+|---|---|---|---|
+| 5 | **The rocket model behind the screen** (and, since rocket-flight-manager b237a38, a Delete Rocket button beside Save, behind a confirmation): .eng/.rse parsing, 32-point thinning that keeps the impulse, Cd on the 8-point Mach grid (typed and spread, per point, or fitted from an OpenRocket CSV), the canopy calculator, the locator's range checks, saved rockets and the motor cache, the thrustcurve.org search and download, and the Tron Short 2.6 default | `data/simflight/` (`SimRocket.kt`, `SimFlightStore.kt`, `DefaultRocket.kt`), `SimRocketTest.kt` | The pure part ported with `SimRocketTest`'s vectors; storage in app-private files as Android does; the file pickers via `UIDocumentPickerViewController`. Port after the Android screen has run on the Pixel |
+| 6 | **A launch erases every trace** (2026-11-03, Frank): a PreLaunchData frame counts as the pad seen, so an app restarted on the pad still clears at launch; the launch also clears a displayed archived track and turns a paused recording back on; the one-second marks keep the NEWEST 600 rather than the first | `RocketViewModel.kt` (the PreLaunch branch and the `startsNewFlight` block), `secondMarkers` in `MapLibreCompat.kt`, `SecondMarkersTest.theCapKeepsTheNewestMarks` | `TrackRecording.swift` / `PathGeometry.swift` (`tickMaxCount`) changed the same way, with the test ported |
+| 7 | **A simulated landing turns trace recording off** (2026-11-04, Frank): a telemetry frame reporting Landed with the simulated bit sets recording off, and that Landed fix is NOT drawn (it carries the real GPS position; corrected 2026-11-04); real flights unchanged | `endsSimulatedTrace` and its call in `RocketViewModel.kt`, `SimulatedTraceEndTest.kt` | The same rule in `TrackRecording.swift`, with the test ported |
+
+Not owed: the USB-cable path (decision 6c). iOS allows no generic USB serial device
+without MFi, so that row below is a permanent difference. Each row is struck through here
+when it lands, the way the lists below were.
+
 **Update, 2026-09-01. The "iOS OWES THIS" list is empty.** All seven items closed in one
 pass against the Android source: the two `ChannelOccupancy` fixes, the armed-scan
 affordance, the scan notice on the status panel, the survey section's gate,
@@ -165,6 +200,30 @@ auto-zoom and auto-center with deadbands; tilt from device pitch; keep-screen-on
 
 The three font families ship as `.ttf` in `res/font/` and can be bundled on iOS
 unchanged, which is the cheapest large step toward "looks like the same app".
+
+## Full-record transfer and cloud backup — Android only (2026-11-02)
+
+Locator ADR "The radio download becomes the primary data path" step 2 landed on
+Android (`rocket-flight-manager`, branch `claude/project-thread-308ix0`). **None of it
+is on iOS yet**; the port is step 4 of that ADR's build order. Recorded here because
+every item below is UI the two apps now differ by.
+
+| Android | Where | iOS today |
+|---|---|---|
+| **Transfer new flight data** / **Stop transfer** button, beside **Return** under the record list | `FlightProfilesScreen` | absent |
+| One status line above it: waiting, reading the list, "Transferring flight N of M: P%", finished | `FlightProfilesScreen` | absent |
+| A record selected while the transfer works on another shows "waiting its turn"; the one being transferred charts what has arrived and grows | `FlightProfilesScreen` | absent; iOS always starts the quick-look download |
+| A record already on the phone, or in the cloud when signed in, charts without touching the locator | `FlightProfilesScreen` | absent |
+| Two checkbox rows, **Transfer when the signal is strong** and **Transfer when the rocket is picked up**, each with a one-line summary, after **Enable Speech** | `AppSettingsScreen` | absent |
+| **Cloud backup of flight data**: email + password fields, Sign in / Create account / Sign in with Google, or "Signed in as …" with the upload count and Sign out | `AppSettingsScreen` (`CloudAccountSection`) | absent; iOS will add Sign in with Apple (ADR decision 8) |
+| Progress in the foreground-service notification | `BluetoothService` | no equivalent surface; iOS background BLE has no persistent notification |
+| **The same transfer over the locator's USB-C cable** (decision 6c, 2026-11-02): plugging in starts or takes over a run, and the status line says "over the USB cable" | `UsbLocatorLink`, `FullRecordHub`, `FlightProfilesScreen` | **absent for good**: iOS allows no generic USB serial device without Apple MFi certification. Nothing closes this one |
+
+What closes it: the iOS port of the pure-Kotlin `data/fullrecord/` package (codec,
+assembler, store, controller — port `FullRecordCodecTest` and `FullRecordTransferTest`
+with the same `sender_fixture.bin`), then the same three screens' rows. The USB-cable
+row is the exception: it stays Android-only for good (ADR decision 6c), and an iOS
+port of the controller simply never calls `onCable`.
 
 ## Flight map — line-by-line audit against `FlightMapScreen.kt` (2026-08-20)
 

@@ -122,4 +122,35 @@ enum WireProtocol {
     /// locator discards anything not matching its UID **before any state change**,
     /// and 0 matches nothing, so an older app fails closed.
     static let targetLocatorIdSize = 4
+
+    // MARK: Paged full-record transfer
+    //
+    // Firmware: `MessageProtocol.hpp` FullRecord*, pinned by static_assert and
+    // offsetof; Android: `Protocol.FULL_RECORD_*`, pinned by WireLayoutTest.kt.
+
+    /// `sizeof(FullRecordRequest)`: header 6 + target 4 + page 2 + record 1 + reserved 1.
+    static let fullRecordRequestSize = 14
+    static let fullRecordStopPage = 0xFFFF
+    /// `sizeof(FullRecordPacketHeader)`; the payload follows, `payload_len` bytes.
+    static let fullRecordPacketHeaderSize = 25
+    static let fullRecordPayloadCapacity = 230
+    /// A parity frame always carries the whole payload buffer (its payload_len is
+    /// an XOR of its members' lengths), so it is a fixed 25 + 230 = 255 B.
+    static let fullRecordParitySize = fullRecordPacketHeaderSize + fullRecordPayloadCapacity
+    static let fullRecordOffsetRecordCrc = 6
+    static let fullRecordOffsetTotalSamples = 10
+    static let fullRecordOffsetPage = 14
+    static let fullRecordOffsetPacketCount = 16
+    static let fullRecordOffsetPacketIndex = 18
+    static let fullRecordOffsetParityMask = 19
+    static let fullRecordOffsetFirstInPage = 20
+    static let fullRecordOffsetSampleCount = 22
+    static let fullRecordOffsetPayloadLen = 23
+    static let fullRecordOffsetRecord = 24
+    /// `sizeof(FullRecordAck)`: header 6 + target 4 + record_crc 4 + page 2 + packet_count 2 + bitmap 32.
+    static let fullRecordAckSize = 50
+    static let fullRecordSamplesPerPage = 512
+    /// `TelemetryData.physical_deployment_stats` bit 7: picked up after landing. Bits 0
+    /// and 1 stay drogue / main detected, so the message keeps its size.
+    static let telemetryPickedUpBit: UInt8 = 0x80
 }
