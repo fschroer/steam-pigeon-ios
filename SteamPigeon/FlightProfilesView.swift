@@ -117,10 +117,12 @@ struct FlightProfilesView: View {
         }
     }
 
-    /// Android formats the archive date as `yyyy-MM-dd HH:mm:ss`, in the phone's zone.
+    /// Android formats the archive date as `yyyy-MM-dd HH:mm:ss xxx`, in the phone's zone
+    /// and with its offset, e.g. "2026-11-05 23:36:49 -08:00" (locator ADR-0043).
     private static let recordDateFormatter: DateFormatter = {
         let f = DateFormatter()
-        f.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyy-MM-dd HH:mm:ss xxx"
         return f
     }()
 

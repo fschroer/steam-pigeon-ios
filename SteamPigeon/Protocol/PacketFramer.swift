@@ -270,7 +270,7 @@ struct PacketFramer {
              .disarmRequest, .flightMetadataRequest, .flightDataRequest, .flightDataAck,
              .deploymentTestRequest, .receiverInfoRequest, .versionRequest,
              .channelSurveyRequest, .channelSurveyCancelRequest, .padAlertSnoozeRequest,
-             .locatorSearchRequest, .fullRecordRequest, .fullRecordAck:
+             .locatorSearchRequest, .fullRecordRequest, .fullRecordAck, .timeZoneSet:
             return .unframeable
         }
     }
