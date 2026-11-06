@@ -149,6 +149,8 @@ enum WireProtocol {
     static let fullRecordOffsetRecord = 24
     /// `sizeof(FullRecordAck)`: header 6 + target 4 + record_crc 4 + page 2 + packet_count 2 + bitmap 32.
     static let fullRecordAckSize = 50
+    /// TimeZoneSet: header 6 + target 4 + int16 `utc_offset_min` (locator ADR-0043).
+    static let timeZoneSetSize = 12
     static let fullRecordSamplesPerPage = 512
     /// `TelemetryData.physical_deployment_stats` bit 7: picked up after landing. Bits 0
     /// and 1 stay drogue / main detected, so the message keeps its size.

@@ -388,6 +388,15 @@ final class WireLayoutTests: XCTestCase {
                        WireProtocol.headerSize + WireProtocol.targetLocatorIdSize + 4 + 2 + 2 + 32)
     }
 
+    // Firmware: static_assert(sizeof(TimeZoneSet) == 12), offsetof(utc_offset_min) == 10,
+    // MsgType 32 (locator ADR-0043). Android's WireLayoutTest.kt pins the same values.
+    func testTimeZoneSetLayout() {
+        XCTAssertEqual(32, MsgType.timeZoneSet.rawValue)
+        XCTAssertEqual(12, WireProtocol.timeZoneSetSize)
+        XCTAssertEqual(WireProtocol.timeZoneSetSize,
+                       WireProtocol.headerSize + WireProtocol.targetLocatorIdSize + 2)
+    }
+
     func testFullRecordPacketFillsOneLoRaFrame() {
         XCTAssertEqual(25, WireProtocol.fullRecordPacketHeaderSize)
         XCTAssertEqual(255, WireProtocol.fullRecordPacketHeaderSize + WireProtocol.fullRecordPayloadCapacity)

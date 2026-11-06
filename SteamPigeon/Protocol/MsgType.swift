@@ -122,4 +122,11 @@ enum MsgType: UInt8, CaseIterable {
     case fullRecordParity = 28
     /// App→locator: bitmap of the page's packets received. Addressed.
     case fullRecordAck = 29
+    // 30 and 31 (the simulated flight) are owed: docs/UI_PARITY.md, row 3.
+
+    /// App→locator: the phone's current UTC offset in minutes (int16 LE), so the
+    /// locator's console and USB export print local times with their offset
+    /// (locator ADR "Times are stored in UTC and shown with their offset", 0043).
+    /// Addressed. Not sent yet: docs/UI_PARITY.md, row 8.
+    case timeZoneSet = 32
 }
