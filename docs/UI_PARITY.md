@@ -66,6 +66,15 @@ whole rocket. Row 5 is new. Sources: locator `72a022f`, `ddcea29`, `3f7e7dc`; re
 | 6 | **A launch erases every trace** (2026-11-03, Frank): a PreLaunchData frame counts as the pad seen, so an app restarted on the pad still clears at launch; the launch also clears a displayed archived track and turns a paused recording back on; the one-second marks keep the NEWEST 600 rather than the first | `RocketViewModel.kt` (the PreLaunch branch and the `startsNewFlight` block), `secondMarkers` in `MapLibreCompat.kt`, `SecondMarkersTest.theCapKeepsTheNewestMarks` | `TrackRecording.swift` / `PathGeometry.swift` (`tickMaxCount`) changed the same way, with the test ported |
 | 7 | **A simulated landing turns trace recording off** (2026-11-04, Frank): a telemetry frame reporting Landed with the simulated bit sets recording off, and that Landed fix is NOT drawn (it carries the real GPS position; corrected 2026-11-04); real flights unchanged | `endsSimulatedTrace` and its call in `RocketViewModel.kt`, `SimulatedTraceEndTest.kt` | The same rule in `TrackRecording.swift`, with the test ported |
 
+**Added 2026-11-06 (locator ADR "Units are SI underneath; English is a display choice").**
+Row 8 is the time-zone row on iOS PR #2; this is numbered 9 so the two do not collide.
+Until it lands, iOS shows and speaks metric only, which is correct but differs from an
+Android phone set to English.
+
+| # | iOS owes | Android source to port | What closes it |
+|---|---|---|---|
+| 9 | **The Metric / English units setting**: the App Settings choice and its first-run default (an install already in use stays metric; a fresh one follows the region, US → English) written once; feet, ft/s and ft-then-miles on the map readouts, heads-up gauge (0–1,600 ft/s) and scale bar; callouts in feet (apogee to the nearest 10 ft, ascent every 500 ft, descent in ft/s, distances in feet or miles); the Flight Profiles axis and apogee; deployment altitudes typed and arrowed in **10 ft steps** with "N m on the locator" under each field, limits 10–1,640 ft primary and 0–1,630 ft backup, refused never clamped, and a held off-grid value (the 130 m default reads 427 ft) never refused just for how it reads | `data/Units.kt`, the English half of `data/LocatorSettingsBounds.kt`, `UnitsTest.kt`; the `units` field in `user_prefs.proto`; `AppSettingsScreen.kt`, `LocatorSettingsScreen.kt`, `FlightMapScreen.kt`, `FlightProfilesScreen.kt`; the `units_*` and `settings_feet_step` / `settings_on_locator` strings | A Swift `Units` with `UnitsTest`'s vectors, the 10 ft round-trip test above all; then the screens. Port after Android has run on the Pixel (not compiled when written) |
+
 Not owed: the USB-cable path (decision 6c). iOS allows no generic USB serial device
 without MFi, so that row below is a permanent difference. Each row is struck through here
 when it lands, the way the lists below were.
