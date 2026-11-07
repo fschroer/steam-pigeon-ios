@@ -75,6 +75,15 @@ Android phone set to English.
 |---|---|---|---|
 | 9 | **The Metric / English units setting**: the App Settings choice and its first-run default (an install already in use stays metric; a fresh one follows the region, US → English) written once; feet, ft/s and ft-then-miles on the map readouts, heads-up gauge (0–1,600 ft/s) and scale bar; callouts in feet (apogee to the nearest 10 ft, ascent every 500 ft, descent in ft/s, distances in feet or miles); the Flight Profiles axis and apogee; deployment altitudes typed and arrowed in **10 ft steps** with "N m on the locator" under each field, limits 10–1,640 ft primary and 0–1,630 ft backup, refused never clamped, and a held off-grid value (the 130 m default reads 427 ft) never refused just for how it reads; the distance readout padded by its number; map-download sizes in mi; the Simulated Flight page in oz, in, ft, ft/s, mph and °F, with the main rate held to a tenth of a m/s and drogue, wind and temperature snapped with "Locator uses …" under them (Android `15c9174`) | `data/Units.kt`, the English half of `data/LocatorSettingsBounds.kt`, `UnitsTest.kt`; the `units` field in `user_prefs.proto`; `AppSettingsScreen.kt`, `LocatorSettingsScreen.kt`, `FlightMapScreen.kt`, `FlightProfilesScreen.kt`; the `units_*` and `settings_feet_step` / `settings_on_locator` strings | A Swift `Units` with `UnitsTest`'s vectors, the 10 ft round-trip test above all; then the screens. Port after Android has run on the Pixel (not compiled when written) |
 
+
+**Added 2026-11-07 (Frank: "display the flight statistics panel even when the locator
+signal is lost, but with an indicator that the data is stale").** Until it lands, the iOS
+stats panel still disappears with the link, which differs from Android.
+
+| # | iOS owes | Android source to port | What closes it |
+|---|---|---|---|
+| 10 | **The stats panel stays up when the locator goes quiet**: shown once the locator has been heard this run and never hidden by silence after that; past 2 s with no message the value rows dim (alpha 0.55) under a header, red "Signal lost · 12 s ago", or neutral "Last heard 12 s ago" while a record download is why the locator is quiet; the age ticks once a second (`12 s`, `4 min`, `1 h 5 min`); the pad layout's channel rows are hidden while stale (a BLE drop resets the locator config, so they could describe a configuration the locator never had); the tap-to-speak readout says "last heard 12 seconds ago" when stale; the coordinate row stays tappable | `ui/StaleTelemetry.kt`, `StaleTelemetryTest.kt`, `LocatorStats` and its call site in `FlightMapScreen.kt`, the `stats_signal_lost` / `stats_last_heard` strings | `LocatorStatsPanel` kept on the same rule, with `StaleTelemetryTest`'s vectors ported. Port after Android has run on the Pixel (not compiled when written) |
+
 Not owed: the USB-cable path (decision 6c). iOS allows no generic USB serial device
 without MFi, so that row below is a permanent difference. Each row is struck through here
 when it lands, the way the lists below were.
