@@ -34,6 +34,9 @@ struct LocatorStatsPanel: View {
     /// Whether the app stands behind the reported position — ADR-0022/0023. Android
     /// calls this `locatorDistancePlausible` and uses it to gate the map link.
     var positionTrusted: Bool = false
+    /// Set while the map marker is the coasted estimate, not a fix (ADR-0022
+    /// amendment 2026-11-08, #72): the time since the last real fix.
+    var markerEstimatedSinceFixMs: Int64? = nil
     let deployChannelText: [String]
     /// Continuity per channel. A channel without it is drawn in the error colour.
     let deployChannelContinuity: [Bool]
@@ -74,6 +77,10 @@ struct LocatorStatsPanel: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 1) {
             row(Self.distanceRow(distanceM), colour: Self.distanceColour(gpsStatus))
+            // The marker is an estimate, not a fix: say so where the numbers are read.
+            if let ms = markerEstimatedSinceFixMs {
+                row(Self.markerEstimatedRow(ms), colour: SPColor.error)
+            }
             row(String(format: "AGL : %15.1f m", altitudeAglM))
             // In flight: speed and attitude. On the pad: what the IMU is reading.
             // Android switches between the two rather than showing both.
@@ -142,6 +149,16 @@ struct LocatorStatsPanel: View {
     static func distanceRow(_ distanceM: Int?) -> String {
         guard let distanceM else { return "Dist: Unknown" }
         return String(format: "Dist: %15d m", distanceM)
+    }
+
+    /// Android's `stats_marker_estimated`, with `StaleTelemetry.shortAge`'s steps.
+    static func markerEstimatedRow(_ sinceFixMs: Int64) -> String {
+        let sec = max(sinceFixMs, 0) / 1000
+        let age: String
+        if sec < 60 { age = "\(sec) s" }
+        else if sec < 3600 { age = "\(sec / 60) min" }
+        else { let m = (sec % 3600) / 60; age = m == 0 ? "\(sec / 3600) h" : "\(sec / 3600) h \(m) min" }
+        return "Marker est. · fix \(age) ago"
     }
 
     /// Android: `if (rocketState.gpsStatus == SensorHealth.Ok) Color.Unspecified else error`.

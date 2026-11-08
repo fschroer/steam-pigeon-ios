@@ -44,9 +44,12 @@ struct MapScreen: View {
         GeometryReader { proxy in
             ZStack(alignment: .topLeading) {
                 FlightMapView(
-                    rocket: model.rocketCoordinate,
+                    // Under canopy with the fix lost, the marker and ring follow the
+                    // coasted point (ADR-0022 amendment 2026-11-08, #72). The camera
+                    // and every number keep the real fix, as on Android.
+                    rocket: model.markerCoordinate,
                     phone: model.phone.coordinate,
-                    rocketAccuracyM: model.rocketAccuracyM,
+                    rocketAccuracyM: model.markerAccuracyM,
                     phoneAccuracyM: model.phone.horizontalAccuracyM,
                     // The archived record substitutes for the live track when engaged —
                     // see `LinkViewModel.mapTrack`.
@@ -240,6 +243,7 @@ struct MapScreen: View {
                     // behind the position, which is Android's `locatorDistancePlausible`
                     // — and the same judgement that put "Unknown" in the row above.
                     positionTrusted: model.vector != nil,
+                    markerEstimatedSinceFixMs: model.coastedMarker?.sinceFixMs,
                     deployChannelText: p.map { cfg in
                         cfg.deployChannelModes.enumerated().map { i, mode in
                             DeployChannelText.line(channel: i + 1, mode: mode, config: cfg)

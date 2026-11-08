@@ -2189,6 +2189,22 @@ final class LinkViewModel: ObservableObject {
         newest(\.horizontalAccuracy, \.horizontalAccuracy).map(Double.init)
     }
 
+    /// Where to draw the marker under canopy while the fix is lost: the last fix
+    /// carried forward on the wind (locator ADR-0022 amendment 2026-11-08, #72;
+    /// Android `coastedMarker`). Nil whenever the map should draw the locator's own
+    /// position. Drawn only: distance, bearing and callouts keep the real fix.
+    @Published private(set) var coastedMarker: WindCoast.Coasted?
+    private var windCoast = WindCoast()
+
+    /// The marker's position: the coasted point when there is one.
+    var markerCoordinate: CLLocationCoordinate2D? {
+        if let c = coastedMarker { return CLLocationCoordinate2D(latitude: c.latitude, longitude: c.longitude) }
+        return rocketCoordinate
+    }
+
+    /// The marker's ring: the coast's growing radius when there is one.
+    var markerAccuracyM: Double? { coastedMarker?.radiusM ?? rocketAccuracyM }
+
     /// Per-channel deployment continuity.
     ///
     /// Reported from the phone as channels showing no continuity when one of them had
@@ -2356,6 +2372,9 @@ final class LinkViewModel: ObservableObject {
                     remoteLocatorConfig = LocatorConfig.from(m)
                     armed = m.armed                     // newest broadcast wins
                     flightState = .waitingLaunch        // ...and so does flight state
+                    // On the pad nothing coasts (Android resets here too).
+                    windCoast.reset()
+                    coastedMarker = nil
                     updateVector(lat: m.latitude, lon: m.longitude,
                                  satellites: m.satellites, gpsStatus: m.gpsStatus,
                                  state: .waitingLaunch, altitudeAglM: m.altitudeAgl)
@@ -2388,6 +2407,17 @@ final class LinkViewModel: ObservableObject {
                     padAlertSnoozeMinutes = 0
                     armed = m.armed                     // newest broadcast wins
                     flightState = m.flightState         // ...and so does flight state
+                    // A new flight starts clean, as Android's startsNewFlight resets it.
+                    if m.flightState == .waitingLaunch { windCoast.reset() }
+                    coastedMarker = windCoast.update(
+                        nowMs: Int64(Date().timeIntervalSince1970 * 1000),
+                        hasFix: DistancePlausibility.hasFix(satellites: m.satellites,
+                                                            gpsStatus: m.gpsStatus),
+                        inDescent: WindCoast.isDescent(m.flightState),
+                        landed: m.flightState == .landed,
+                        latitude: m.latitude, longitude: m.longitude,
+                        velNorthMps: m.velocityNed.x, velEastMps: m.velocityNed.y,
+                        haccM: m.horizontalAccuracy)
                     updateVector(lat: m.latitude, lon: m.longitude,
                                  satellites: m.satellites, gpsStatus: m.gpsStatus,
                                  state: m.flightState, altitudeAglM: m.altitudeAgl,
