@@ -84,6 +84,15 @@ stats panel still disappears with the link, which differs from Android.
 |---|---|---|---|
 | 10 | **The stats panel stays up when the locator goes quiet**: shown once the locator has been heard this run and never hidden by silence after that; past 2 s with no message the value rows dim (alpha 0.55) under a header, red "Signal lost · 12 s ago", or neutral "Last heard 12 s ago" while a record download is why the locator is quiet; the age ticks once a second (`12 s`, `4 min`, `1 h 5 min`); the pad layout's channel rows are hidden while stale (a BLE drop resets the locator config, so they could describe a configuration the locator never had); the tap-to-speak readout says "last heard 12 seconds ago" when stale; the coordinate row stays tappable | `ui/StaleTelemetry.kt`, `StaleTelemetryTest.kt`, `LocatorStats` and its call site in `FlightMapScreen.kt`, the `stats_signal_lost` / `stats_last_heard` strings | `LocatorStatsPanel` kept on the same rule, with `StaleTelemetryTest`'s vectors ported. Port after Android has run on the Pixel (not compiled when written) |
 
+**Added 2026-11-08 (locator ADR-0022 amendment, "under canopy the marker coasts on the
+wind", #72; Frank approved the design with distance kept on the real fix).** Android
+`f82cd34` (rocket-flight-manager #10, built and run by Frank 2026-11-08). Ported in the
+same session, so this row is here to be struck through once iOS has been built.
+
+| # | iOS owes | Android source to port | What closes it |
+|---|---|---|---|
+| 11 | **The canopy wind coast**: in states 4–7 with no fix, the marker and its ring follow the last fix carried forward at the mean N/E GPS velocity of the fixed descent packets heard in the 5 s before the fix was lost (at least 2), for at most 30 s; ring = h_acc + 4 m/s × time since the fix; both freeze on Landed; the first fix replaces it; the stats panel adds red "Marker est. · fix 12 s ago"; distance, bearing, AR, callouts and the jump test stay on the real fix; the camera stays on the real fix | `ui/WindCoast.kt`, `WindCoastTest.kt`, `coastedMarker` in `RocketViewModel.kt`, the marker/ring and `stats_marker_estimated` in `FlightMapScreen.kt` | **Ported, NOT compiled** (no Xcode): `Flight/WindCoast.swift` + `WindCoastTests` (same vectors), `coastedMarker` / `markerCoordinate` / `markerAccuracyM` in `LinkViewModel`, `MapScreen`, `LocatorStatsPanel.markerEstimatedRow`. Closes on a green Xcode build and test run |
+
 Not owed: the USB-cable path (decision 6c). iOS allows no generic USB serial device
 without MFi, so that row below is a permanent difference. Each row is struck through here
 when it lands, the way the lists below were.
