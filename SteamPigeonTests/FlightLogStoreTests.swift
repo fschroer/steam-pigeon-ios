@@ -163,11 +163,38 @@ final class FlightLogStoreTests: XCTestCase {
     // MARK: - Name parsing
 
     func testTheLocatorNameAndLaunchTimeAreRecoveredFromTheFilename() {
-        let f = FlightLogFile(name: "Kestrel_2025-08-24_014640.csv",
+        let f = FlightLogFile(name: "Kestrel_App_2025-08-24_014640.csv",
                               sizeBytes: 10, modified: .distantPast)
         XCTAssertEqual("Kestrel", f.locatorName)
         XCTAssertEqual("2025-08-24 01:46:40", f.capturedAt)
         XCTAssertEqual("2025-08-24_014640", f.captureKey)
+    }
+
+    /// Logs recorded before the `App` field existed are still sitting on phones, and the
+    /// screen that lists them has no other source for the airframe's name — so the old
+    /// shape parses exactly as it always did.
+    func testALogNamedBeforeTheAppFieldStillReadsAsItsOwnLocator() {
+        let f = FlightLogFile(name: "Kestrel_2025-08-24_014640.csv",
+                              sizeBytes: 10, modified: .distantPast)
+        XCTAssertEqual("Kestrel", f.locatorName)
+        XCTAssertEqual("2025-08-24 01:46:40", f.capturedAt)
+    }
+
+    /// The field is stripped as a field, not as three letters: the marker is removed only
+    /// with the separator in front of it.
+    func testALocatorWhoseNameEndsInThoseLettersKeepsThem() {
+        XCTAssertEqual("Snapp", locatorName(of: "Snapp_App_2025-08-24_014640.csv"))
+        XCTAssertEqual("Snapp", locatorName(of: "Snapp_2025-08-24_014640.csv"))
+    }
+
+    /// A locator named for the marker itself is not mistaken for the marker.
+    func testALocatorActuallyNamedAppSurvives() {
+        XCTAssertEqual("App", locatorName(of: "App_App_2025-08-24_014640.csv"))
+        XCTAssertEqual("App", locatorName(of: "App_2025-08-24_014640.csv"))
+    }
+
+    private func locatorName(of name: String) -> String {
+        FlightLogFile(name: name, sizeBytes: 1, modified: .distantPast).locatorName
     }
 
     /// A locator name may contain underscores — the sanitiser turns every unusable

@@ -87,9 +87,22 @@ enum FlightLog {
     /// Fallback when a locator name is empty or entirely unusable.
     static let unnamedLocator = "locator"
 
+    /// Marks a file as this app's recording rather than a locator full-record export.
+    ///
+    /// Read back by ``FlightLogFile/locatorName``, which has to strip it again: logs
+    /// recorded before this marker existed carry no `App` field, so the parse has to accept
+    /// both shapes for as long as a phone can still be holding one.
+    static let appLogMarker = "App"
+
     private static let maxNameChars = 24
 
-    /// `<locator>_YYYY-MM-DD_HHmmss.csv`, in the phone's own zone.
+    /// `<locator>_App_YYYY-MM-DD_HHmmss.csv`, in the phone's own zone.
+    ///
+    /// ``appLogMarker`` sits between the two because a shared log lands in an inbox or a
+    /// Downloads folder next to the locator's own full-record export of the same flight,
+    /// and the two files are not the same data: this one is the app's view of the telemetry
+    /// it received, gaps and all. A name that says which is which is the only thing the
+    /// recipient has to go on.
     ///
     /// Local time rather than UTC because the name is read by a person deciding which of
     /// six logs was the flight after lunch, and a launch at 14:20 local filed under 21:20
@@ -107,7 +120,7 @@ enum FlightLog {
         while safe.hasPrefix("_") { safe.removeFirst() }
         while safe.hasSuffix("_") { safe.removeLast() }
         if safe.isEmpty { safe = unnamedLocator }
-        return "\(safe)_\(fileNameFormatter(zone).string(from: date))\(fileExtension)"
+        return "\(safe)_\(appLogMarker)_\(fileNameFormatter(zone).string(from: date))\(fileExtension)"
     }
 
     // MARK: - Rendering

@@ -242,22 +242,34 @@ final class FlightLogRecorderTests: XCTestCase {
 
     // MARK: - Naming
 
-    func testTheFileIsNamedForTheLocatorAndTheLocalLaunchTime() {
+    func testTheFileIsNamedForTheLocatorTheAppAndTheLocalLaunchTime() {
         let sink = FakeSink()
         recorder(sink).onLaunch(at: t(1_756_000_000_000), locatorName: "Kestrel",
                                 header: "header")
-        XCTAssertEqual("Kestrel_2025-08-24_014640.csv", sink.opened.first)
+        XCTAssertEqual("Kestrel_App_2025-08-24_014640.csv", sink.opened.first)
         XCTAssertEqual(1, sink.opened.count)
     }
 
+    /// The `App` field sits BETWEEN the locator and the stamp, so a shared log is
+    /// distinguishable from the locator's own full-record export of the same flight
+    /// without opening it — and so the stamp stays the last two fields, which is where
+    /// ``FlightLogFile/captureKey`` reads it from.
+    func testTheAppMarkerSeparatesTheLocatorNameFromTheDatestamp() {
+        let name = FlightLog.fileName(locatorName: "Kestrel", at: t(1_756_000_000_000),
+                                      zone: zone)
+        let stem = String(name.dropLast(FlightLog.fileExtension.count))
+        XCTAssertEqual(["Kestrel", "App", "2025-08-24", "014640"],
+                       stem.components(separatedBy: "_"))
+    }
+
     func testALocatorNameThatWouldEscapeTheDirectoryIsMadeSafe() {
-        XCTAssertEqual(".._etc_passwd_2025-08-24_014640.csv",
+        XCTAssertEqual(".._etc_passwd_App_2025-08-24_014640.csv",
                        FlightLog.fileName(locatorName: "../etc/passwd",
                                           at: t(1_756_000_000_000), zone: zone))
     }
 
     func testAnUnnamedLocatorStillProducesAUsableFilename() {
-        XCTAssertEqual("locator_2025-08-24_014640.csv",
+        XCTAssertEqual("locator_App_2025-08-24_014640.csv",
                        FlightLog.fileName(locatorName: "", at: t(1_756_000_000_000),
                                           zone: zone))
     }

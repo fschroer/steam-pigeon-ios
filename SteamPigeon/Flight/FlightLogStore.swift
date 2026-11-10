@@ -207,8 +207,13 @@ struct FlightLogFile: Identifiable, Equatable {
         guard parts.count > 2 else { return FlightLog.unnamedLocator }
         parts.removeLast()
         parts.removeLast()
-        let name = parts.joined(separator: "_")
-        return name.isEmpty ? FlightLog.unnamedLocator : name
+        var head = parts.joined(separator: "_")
+        // Stripped as a whole `_App` FIELD, not as the letters: a locator named "Snapp"
+        // keeps its last three characters, a locator actually named "App" still reads as
+        // itself, and a log recorded before the marker existed has no such field to lose.
+        let marker = "_" + FlightLog.appLogMarker
+        if head.hasSuffix(marker) { head.removeLast(marker.count) }
+        return head.isEmpty ? FlightLog.unnamedLocator : head
     }
 
     /// The `YYYY-MM-DD_HHmmss` half of the name, or nil when it does not parse.
